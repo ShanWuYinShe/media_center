@@ -1,0 +1,47 @@
+# =========================================================
+# Media Center 根目录 .gitignore
+# =========================================================
+
+# ----- Node.js / TypeScript -----
+**/node_modules/
+**/dist/
+**/coverage/
+**/.vite/
+**/*.tsbuildinfo
+
+# ----- Gradle / Android -----
+**/.gradle/
+**/build/
+**/local.properties
+**/captures/
+**/.cxx/
+**/*.apk
+**/*.aab
+**/*.iml
+
+# ----- IDE / 编辑器 -----
+**/.idea/
+**/.vscode/
+**/.fleet/
+**/*.swp
+**/*.swo
+*~
+
+# ----- 操作系统 -----
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ----- 日志与临时文件 -----
+**/*.log
+**/tmp/
+**/.tmp/
+**/.cache/
+.env
+.env.local
+.env.*.local
+
+# ----- vitest 缓存 -----
+**/node_modules/.vite/
+**/vitest-results.json
