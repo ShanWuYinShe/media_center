@@ -8,6 +8,7 @@ const categoryConfigSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
   description: z.string().min(1),
+  searchQuery: z.string().trim().min(1).optional(),
   keywords: z.array(z.string().min(1)).min(1),
   excludes: z.array(z.string().min(1)).optional(),
 });
@@ -31,15 +32,22 @@ test("默认配置中所有 id 唯一,没有重复", () => {
   expect(new Set(ids).size).toBe(ids.length);
 });
 
-test("query 字段由 keywords 用空格拼接,顺序与配置一致", () => {
-  const urban = findContentCategory("life-urban");
-  expect(urban).toBeDefined();
-  const tokens = urban!.query.split(" ");
-  // 配置里第一个关键词必须是 query 的第一个 token
-  expect(tokens[0]).toBe("城市");
-  // 关键词都出现
-  expect(tokens).toContain("家庭");
-  expect(tokens).toContain("职场");
+test("默认配置只包含产品指定的五个一级分类", () => {
+  expect(contentCategories.map((category) => category.id)).toEqual([
+    "movies",
+    "tv-series",
+    "documentaries",
+    "red-classic",
+    "dota-zone",
+  ]);
+});
+
+test("query 字段使用短搜索词,内部关键词只用于相关性评分", () => {
+  const documentaries = findContentCategory("documentaries");
+  expect(documentaries).toBeDefined();
+  expect(documentaries!.query).toBe("纪录片 完整版");
+  expect(documentaries!.keywords).toContain("历史");
+  expect(documentaries!.query).not.toContain("历史");
 });
 
 test("findContentCategory 对未传或未定义的 id 返回 undefined", () => {
@@ -53,30 +61,32 @@ test("findContentCategory 对已存在的 id 返回对应分类", () => {
   expect(dota?.title).toBe("Dota 专区");
 });
 
-test("Dota 专区不再使用 NOT 排除词,query 是纯关键词拼接", () => {
+test("Dota 专区偏向 Dota1 且不使用 NOT 排除词", () => {
   const dota = findContentCategory("dota-zone");
   expect(dota?.query).not.toContain("NOT");
-  expect(dota?.query).toContain("Dota 2");
+  expect(dota?.query).toContain("Dota1");
+  expect(dota?.keywords).toContain("魔兽争霸3");
+  expect(dota?.keywords).toContain("Dota2");
+  expect(dota!.keywords.indexOf("Dota1 完整比赛")).toBeLessThan(
+    dota!.keywords.indexOf("Dota2"),
+  );
 });
 
-test("excludes 配置会通过 NOT 拼到 query 末尾", () => {
+test("excludes 配置保留为内部过滤规则,不会污染搜索 query", () => {
   const config = categoriesConfigSchema.parse({
     categories: [
       {
         id: "sample",
         title: "示例",
         description: "演示 excludes 拼接",
+        searchQuery: "foo",
         keywords: ["foo", "bar"],
         excludes: ["baz", "qux"],
       },
     ],
   });
-  const queryParts = [...config.categories[0].keywords];
-  if (config.categories[0].excludes) {
-    queryParts.push("NOT", ...config.categories[0].excludes);
-  }
-  const query = queryParts.join(" ");
-  expect(query).toBe("foo bar NOT baz qux");
+  expect(config.categories[0].searchQuery).toBe("foo");
+  expect(config.categories[0].excludes).toEqual(["baz", "qux"]);
 });
 
 test("配置缺关键词或关键词为空数组时被 Zod 拒绝", () => {

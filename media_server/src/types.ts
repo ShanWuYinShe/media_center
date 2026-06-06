@@ -1,8 +1,10 @@
-export type ProviderName = "internet-archive" | "youtube";
+export type ProviderName = "youtube" | "bilibili";
+export type VideoKind = "vod" | "live";
 
 export type VideoSummary = {
   provider: ProviderName;
   id: string;
+  videoKind: VideoKind;
   title: string;
   description: string;
   year?: string;
@@ -31,6 +33,14 @@ export type VideoStream = {
   supportsRange: boolean;
 };
 
+export type PlaybackOption = {
+  id: string;
+  kind: "vod";
+  label: string;
+  url: string;
+  mimeType: "video/mp4" | "video/webm";
+};
+
 export type SearchResult = {
   query: string;
   category?: ContentCategory;
@@ -40,31 +50,21 @@ export type SearchResult = {
   items: VideoSummary[];
 };
 
+export type PlaybackKind = PlaybackOption["kind"];
+
 export type PublicVideoSummary = Omit<
   VideoSummary,
   "provider" | "sourceUrl" | "playable"
->;
-
-export type PlaybackOption =
-  | {
-      id: string;
-      kind: "stream";
-      label: string;
-      url: string;
-      mimeType: "video/mp4" | "video/webm";
-    }
-  | {
-      id: string;
-      kind: "external";
-      label: string;
-      url: string;
-    };
+> & {
+  playbackKind: PlaybackKind;
+};
 
 export type PublicVideoDetails = PublicVideoSummary & {
   playbackOptions: PlaybackOption[];
 };
 
-export type PublicSearchResult = Omit<SearchResult, "items"> & {
+export type PublicSearchResult = Omit<SearchResult, "items" | "category"> & {
+  category?: PublicContentCategory;
   items: PublicVideoSummary[];
 };
 
@@ -73,4 +73,11 @@ export type ContentCategory = {
   title: string;
   description: string;
   query: string;
+  keywords: string[];
+  excludes: string[];
 };
+
+export type PublicContentCategory = Omit<
+  ContentCategory,
+  "query" | "keywords" | "excludes"
+>;

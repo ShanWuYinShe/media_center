@@ -6,6 +6,7 @@ const categoryConfigSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
   description: z.string().min(1),
+  searchQuery: z.string().trim().min(1).optional(),
   keywords: z.array(z.string().min(1)).min(1),
   excludes: z.array(z.string().min(1)).optional(),
 });
@@ -17,15 +18,14 @@ const categoriesConfigSchema = z.object({
 function buildCategory(
   config: z.infer<typeof categoryConfigSchema>,
 ): ContentCategory {
-  const queryParts = [...config.keywords];
-  if (config.excludes && config.excludes.length > 0) {
-    queryParts.push("NOT", ...config.excludes);
-  }
+  const query = config.searchQuery ?? config.keywords[0];
   return {
     id: config.id,
     title: config.title,
     description: config.description,
-    query: queryParts.join(" "),
+    query,
+    keywords: config.keywords,
+    excludes: config.excludes ?? [],
   };
 }
 
