@@ -87,6 +87,7 @@ import com.example.mediacenter.ui.components.PosterGrid
 import com.example.mediacenter.ui.components.PrimaryPillButton
 import com.example.mediacenter.ui.components.SearchModeTopBar
 import com.example.mediacenter.ui.components.SecondaryPillButton
+import com.example.mediacenter.ui.components.tvFocusableLite
 import com.example.mediacenter.ui.theme.AppleTvColors
 import com.example.mediacenter.ui.theme.AppleTvShapes
 import com.example.mediacenter.ui.theme.AppleTvTheme
@@ -383,9 +384,27 @@ private fun HomeScreen(
 
     AppleTvBackground {
         Column(modifier = Modifier.fillMaxSize()) {
-            // 顶栏:分类浏览模式 → 搜索按钮 + 分类条;搜索模式 → 搜索栏 + 清除按钮。
-            // 两种模式共享同一行纵向空间,切换时整条替换,避免视觉残留。
-            if (inSearchMode) {
+            // 顶栏分三态(全部跟内容区语义对齐):
+            //   1) searchVisible=true            → 只显示 SearchPill;
+            //      **分类条完全隐藏**,因为内容区是 SearchPanel,跟分类无关,
+            //      之前显示分类条 + selected 蓝底是误导。
+            //   2) inSearchMode=true(已搜过)    → SearchModeTopBar(关键词 + ×)
+            //   3) 默认(分类浏览)                → SearchPill + CategoryRail
+            if (searchVisible) {
+                // 只留"搜索"按钮作为顶栏元素,水平居左;分类条让位给 SearchPanel。
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 56.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SecondaryPillButton(
+                        text = "搜索",
+                        onClick = { /* 已在搜索面板,忽略 */ },
+                        onFocused = { /* 已在搜索面板 */ },
+                    )
+                }
+            } else if (inSearchMode) {
                 SearchModeTopBar(
                     query = state.query,
                     onClear = { exitSearchMode() },
@@ -493,8 +512,19 @@ private fun HomeScreen(
 }
 
 // =====================================================================
-// SearchPanel:展开式搜索面板(玻璃卡 + 文本框 + 两个胶囊按钮)
+// SearchPanel:搜索弹窗(标题 + 输入框 + 热门关键词 chip + 操作按钮)
+//
+// 设计目标:
+//   1) **主操作焦点优先**:打开后初始焦点在"搜索"按钮,按 OK 立即搜。
+//   2) **快捷入口**:用户首次打开时(没输入),底部"热门关键词" chip 直接可
+//      点,避免面对空输入框无措。
+//   3) **取消路径清晰**:显式"取消"按钮 + BACK 键都能退出,无歧义。
 // =====================================================================
+
+private val SEARCH_HOT_KEYWORDS = listOf(
+    "动作", "喜剧", "科幻", "恐怖", "爱情", "悬疑",
+    "国产", "港片", "好莱坞", "纪录", "战争", "动画",
+)
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -505,12 +535,6 @@ private fun SearchPanel(
 ) {
     var query by remember(initialQuery) { mutableStateOf(initialQuery) }
 
-    // 焦点引导(主操作优先原则):打开面板时,初始焦点直接落在"搜索"按钮(主操作),
-    // 用户第一动作按 OK 即可用当前 query(留空走分类默认词)发起搜索,完全
-    // 不用先在键盘 / 输入框里逐字拼写。这跟 tvOS / Apple TV+ 搜索弹窗
-    // 的"焦点默认在确认按钮"行为一致——主操作永远是最快的下一步。
-    // 想编辑 query 时,用户可以再点搜索栏(顶栏 onTapQuery 也会展开 SearchPanel,
-    // 但那时焦点已经能让用户顺畅输入)或直接打字(若焦点恰好在输入框)。
     val searchButtonFocuser = remember { FocusRequester() }
     val cancelButtonFocuser = remember { FocusRequester() }
 
@@ -519,29 +543,32 @@ private fun SearchPanel(
             .fillMaxWidth()
             .padding(horizontal = 56.dp, vertical = 12.dp),
     ) {
+        // 标题:清楚说明当前在搜索模式
+        Text(
+            text = "搜索",
+            color = AppleTvColors.TextPrimary,
+            fontSize = 32.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = (-0.4).sp,
+            modifier = Modifier.padding(start = 4.dp, bottom = 16.dp),
+        )
+
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(AppleTvShapes.Card)
                 .background(AppleTvColors.GlassFillStrong)
-                .padding(horizontal = 28.dp, vertical = 22.dp),
+                .padding(horizontal = 28.dp, vertical = 24.dp),
         ) {
             Column {
-                Text(
-                    text = "关键词",
-                    color = AppleTvColors.TextTertiary,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    letterSpacing = (0.5).sp,
-                )
-                Spacer(Modifier.height(8.dp))
+                // 输入框区域:大号、明确提示文字
                 BasicTextField(
                     value = query,
                     onValueChange = { query = it },
                     singleLine = true,
                     textStyle = TextStyle(
                         color = AppleTvColors.TextPrimary,
-                        fontSize = 22.sp,
+                        fontSize = 24.sp,
                         fontWeight = FontWeight.SemiBold,
                         letterSpacing = (-0.2).sp,
                     ),
@@ -550,29 +577,24 @@ private fun SearchPanel(
                     decorationBox = { inner ->
                         if (query.isEmpty()) {
                             Text(
-                                text = "可选关键词(留空使用分类默认词)",
+                                text = "输入关键词,或从下方选一个",
                                 color = AppleTvColors.TextTertiary,
-                                fontSize = 22.sp,
+                                fontSize = 24.sp,
                             )
                         }
                         inner()
                     }
                 )
-                Spacer(Modifier.height(16.dp))
-                // Hidden focusable 节点:BasicTextField 内部把 DOWN 吞了
-                // (默认行为是"光标到行末"),所以在它跟 Row 之间加一个
-                // 1dp × 1dp 的 focusable Box,DOWN 焦点会落到这个 hidden
-                // 节点上;hidden 节点又把焦点转发给"搜索"按钮(主操作)。
+                // 焦点接续节点:BasicTextField 把 DOWN 吞了,这里放 hidden
+                // focusable spacer 把 DOWN 焦点路由回"搜索"按钮(主操作)。
                 Box(
                     modifier = Modifier
                         .size(1.dp)
                         .focusable()
                         .focusProperties { down = searchButtonFocuser },
                 )
-                Spacer(Modifier.height(15.dp))
-                // Row 加 focusGroup + 显式给两个按钮标 focusRequester 后,焦点在
-                // Row 内能从"搜索"横向跳到"取消"(LEFT / RIGHT 都行),不再卡
-                // 在 Row 第一个按钮上;退出 Row 则焦点回到 BasicTextField(在 Row 上方)。
+                Spacer(Modifier.height(20.dp))
+                // 主操作 + 取消
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     modifier = Modifier.focusGroup(),
@@ -580,7 +602,6 @@ private fun SearchPanel(
                     PrimaryPillButton(
                         text = "搜索",
                         onClick = { onSearch(query) },
-                        // 两个方向的焦点都跳"取消"——Row 内只有两个按钮,首尾相通。
                         modifier = Modifier
                             .focusRequester(searchButtonFocuser)
                             .focusProperties {
@@ -591,8 +612,6 @@ private fun SearchPanel(
                     SecondaryPillButton(
                         text = "取消",
                         onClick = onDismiss,
-                        // "取消"上也要显式把 left/right 指回"搜索",否则 RIGHT 从
-                        // "取消"会跑出 Row 焦点(Compose 默认行为)。
                         modifier = Modifier
                             .focusRequester(cancelButtonFocuser)
                             .focusProperties {
@@ -603,6 +622,35 @@ private fun SearchPanel(
                 }
             }
         }
+
+        // 热门关键词 chip 入口:无输入时让用户有可点的方向,不至于面对
+        // 空输入框。点击 = 立即用该关键词搜(直接走 onSearch + onDismiss
+        // 同 closeSearch 路径)。
+        Spacer(Modifier.height(24.dp))
+        Text(
+            text = "热门关键词",
+            color = AppleTvColors.TextTertiary,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            letterSpacing = (0.5).sp,
+            modifier = Modifier.padding(start = 4.dp, bottom = 12.dp),
+        )
+        // chip 用 flow layout 不容易做(没现成组件),退而用 LazyRow 横向滚动,
+        // 配合 focusGroup + focusRequester 让横向焦点跳转顺畅。
+        androidx.compose.foundation.lazy.LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .focusGroup(),
+        ) {
+            items(SEARCH_HOT_KEYWORDS.size) { index ->
+                val keyword = SEARCH_HOT_KEYWORDS[index]
+                HotKeywordChip(
+                    text = keyword,
+                    onClick = { onSearch(keyword) },
+                )
+            }
+        }
     }
 
     // 面板首次进入(从无到有):焦点落到"搜索"按钮(主操作),用户第一动作按 OK 即搜。
@@ -610,6 +658,43 @@ private fun SearchPanel(
     LaunchedEffect(Unit) {
         withFrameNanos { }
         runCatching { searchButtonFocuser.requestFocus() }
+    }
+}
+
+@Composable
+private fun HotKeywordChip(
+    text: String,
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val bg = if (focused) AppleTvColors.AppleBlue else AppleTvColors.GlassFill
+    val textColor = if (focused) AppleTvColors.TextPrimary else AppleTvColors.TextSecondary
+
+    Box(
+        modifier = Modifier
+            .height(40.dp)
+            .clip(AppleTvShapes.Chip)
+            .background(bg)
+            .border(
+                width = 1.dp,
+                color = if (focused) Color.Transparent else AppleTvColors.GlassBorder,
+                shape = AppleTvShapes.Chip,
+            )
+            .tvFocusableLite(
+                shape = AppleTvShapes.Chip,
+                focusedScale = 1.05f,
+                onClick = onClick,
+                onFocusChange = { focused = it },
+            )
+            .padding(horizontal = 18.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = textColor,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 
