@@ -46,7 +46,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -83,6 +85,7 @@ import com.example.mediacenter.ui.components.ErrorState
 import com.example.mediacenter.ui.components.LoadingState
 import com.example.mediacenter.ui.components.PosterGrid
 import com.example.mediacenter.ui.components.PrimaryPillButton
+import com.example.mediacenter.ui.components.SearchModeTopBar
 import com.example.mediacenter.ui.components.SecondaryPillButton
 import com.example.mediacenter.ui.theme.AppleTvColors
 import com.example.mediacenter.ui.theme.AppleTvShapes
@@ -256,7 +259,6 @@ private fun HomeScreen(
     posterGridState: LazyGridState,
 ) {
     var searchVisible by remember { mutableStateOf(false) }
-    var searchFocused by remember { mutableStateOf(false) }
     var restoreAttempted by remember { mutableStateOf(false) }
     var pendingCategoryFocusId by remember { mutableStateOf<String?>(null) }
     var pendingVideoFocusId by remember { mutableStateOf<String?>(null) }
@@ -306,7 +308,6 @@ private fun HomeScreen(
         if (rememberedVideoId != null && videoIndex >= 0) {
             posterGridState.scrollToItem(videoIndex)
             pendingVideoFocusId = rememberedVideoId
-            searchFocused = false
             restoreAttempted = true
             return@LaunchedEffect
         }
@@ -322,109 +323,169 @@ private fun HomeScreen(
                 categoryRailState.scrollToItem(categoryIndex)
             }
             pendingCategoryFocusId = categoryTargetId
-            searchFocused = false
             restoreAttempted = true
         }
     }
 
-    // SearchPanel 打开时,Back 优先关闭面板而不是退出 app
-    BackHandler(enabled = searchVisible) { searchVisible = false }
+    // 关闭搜索页时把焦点交还给合适的目标(主操作优先 + 退出回默认起点):
+    //   - 已搜过(state.query 非空)+ 有结果 → 焦点引导到第一个搜索结果,
+    //     跟"搜完直接看结果"的自然阅读顺序一致。
+    //   - 仅是打开过面板又取消(没搜) → 焦点 + selected 都回到**第一个分类**,
+    //     把"分类浏览"重置到明确的默认起点,不保留"上次选中"的中间状态;
+    //     这样用户从顶栏"搜索"按钮进来、犹豫一下又取消,能确定自己回到了 app 起点。
+    fun closeSearch() {
+        searchVisible = false
+        if (state.query.isNotEmpty() && state.items.isNotEmpty()) {
+            pendingVideoFocusId = state.items.first().id
+            focusScope.launch { posterGridState.scrollToItem(0) }
+        } else {
+            // 退出时**重置**到第一个分类(不沿用上次 selected),既清掉"搜索
+            // 入口"的视觉残留,又给用户一个明确的"app 起点"参照。
+            state.categories.firstOrNull()?.let { first ->
+                if (state.selectedCategoryId != first.id) {
+                    onSelectCategory(first)  // 真正切换 selectedCategoryId
+                }
+                pendingCategoryFocusId = first.id
+            }
+        }
+    }
+
+    // "搜索模式" = 已完成搜索且 SearchPanel 已关闭(state.query 非空 + !searchVisible)。
+    //
+    // 注意:**不要**把"SearchPanel 展开"算成 inSearchMode —— SearchPanel 自己已经
+    // 包含输入框 + 搜索/取消按钮,如果这时顶栏再渲染 SearchModeTopBar,屏幕上
+    // 会出现**两个看似输入框**的组件(顶栏的"🔍 搜索…"跟下方的 BasicTextField),
+    // 而且顶栏那个根本不可输入,纯粹误导用户。
+    //
+    // 所以顶栏分三种状态:
+    //   1) searchVisible=true            → 顶栏让位(只留背景),让 SearchPanel 独占视觉
+    //   2) !searchVisible && query 非空 → 顶栏 = SearchModeTopBar(展示已搜的 query)
+    //   3) !searchVisible && query=""   → 顶栏 = 搜索按钮 + 分类条(分类浏览)
+    val inSearchMode = !searchVisible && state.query.isNotEmpty()
+
+    // 退出搜索模式:
+    //   1) 关闭搜索面板(searchVisible = false)
+    //   2) 如果当前内容是搜索结果(有 query),让 ViewModel 重新跑"空关键词 + 第一个分类"
+    //      → 清空 query、selectedCategoryId 回到默认,内容区恢复为分类视频
+    fun exitSearchMode() {
+        searchVisible = false
+        if (state.query.isNotEmpty()) {
+            state.categories.firstOrNull()?.let { onSelectCategory(it) }
+        }
+    }
+
+    // Back 键分两个独立 BackHandler(后注册先调用,但 enabled 互斥所以不会同时拦截):
+    //   1) searchVisible → 关 SearchPanel(回到分类浏览);不放行 Back 走 Activity.finish。
+    //   2) inSearchMode(已有结果)→ 退出整个搜索模式(回到 first 分类)。
+    //   3) 否则让 Back 走默认 Activity.finish()。
+    BackHandler(enabled = searchVisible) { closeSearch() }
+    BackHandler(enabled = inSearchMode) { exitSearchMode() }
 
     AppleTvBackground {
         Column(modifier = Modifier.fillMaxSize()) {
-            // 分类区域:搜索按钮 + 分类条,紧凑排列节省纵向空间
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 56.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SecondaryPillButton(
-                    text = "搜索",
-                    onClick = { searchVisible = !searchVisible },
-                    focusedOverride = searchFocused,
-                    onFocusChange = { searchFocused = it },
+            // 顶栏:分类浏览模式 → 搜索按钮 + 分类条;搜索模式 → 搜索栏 + 清除按钮。
+            // 两种模式共享同一行纵向空间,切换时整条替换,避免视觉残留。
+            if (inSearchMode) {
+                SearchModeTopBar(
+                    query = state.query,
+                    onClear = { exitSearchMode() },
+                    // 点搜索栏或按 OK → 重新展开 SearchPanel 继续编辑 query,
+                    // 跟 iOS / tvOS 搜索栏行为一致;否则搜完就只能 × 退出,体验生硬。
+                    onTapQuery = { searchVisible = true },
                 )
-                Spacer(Modifier.width(12.dp))
-                CategoryRail(
-                    categories = state.categories,
-                    selectedCategoryId = state.selectedCategoryId,
-                    onSelectCategory = onSelectCategory,
-                    contentPadding = PaddingValues(0.dp),
-                    state = categoryRailState,
-                    pendingFocusCategoryId = pendingCategoryFocusId,
-                    onPendingFocusHandled = { categoryId ->
-                        if (pendingCategoryFocusId == categoryId) {
-                            pendingCategoryFocusId = null
-                        }
-                    },
-                    focuserRegister = { id, fr -> categoryFocusers[id] = fr },
-                    onCategoryFocused = { category ->
-                        // 焦点离开搜索按钮:强制清除其焦点态,避免嵌套 focusGroup
-                        // 偶发丢失 blur 事件导致搜索按钮“常亮”。
-                        searchFocused = false
-                        homeFocusState.markCategoryFocused(category.id)
-                    },
-                )
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 56.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SecondaryPillButton(
+                        text = "搜索",
+                        // 选中(获得焦点)即视为确认:直接展开搜索页,无需再按 OK。
+                        onClick = { searchVisible = true },
+                        onFocused = { searchVisible = true },
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    CategoryRail(
+                        categories = state.categories,
+                        selectedCategoryId = state.selectedCategoryId,
+                        onSelectCategory = onSelectCategory,
+                        contentPadding = PaddingValues(0.dp),
+                        state = categoryRailState,
+                        pendingFocusCategoryId = pendingCategoryFocusId,
+                        onPendingFocusHandled = { categoryId ->
+                            if (pendingCategoryFocusId == categoryId) {
+                                pendingCategoryFocusId = null
+                            }
+                        },
+                        focuserRegister = { id, fr -> categoryFocusers[id] = fr },
+                        onCategoryFocused = { category ->
+                            // 焦点回到分类条:退出搜索页,回到分类浏览。
+                            searchVisible = false
+                            homeFocusState.markCategoryFocused(category.id)
+                        },
+                    )
+                }
             }
 
-            // 搜索框(默认收起,点击搜索按钮展开)
+            // 内容区:搜索页(展开搜索时)/ 海报网格 / 加载 / 错误 / 空态。
+            // 搜索展开时隐藏分类海报,视觉上"跳转"到独立的搜索页。
             if (searchVisible) {
                 SearchPanel(
                     initialQuery = state.query,
                     onSearch = { keyword ->
                         onSearch(keyword)
-                        searchVisible = false
+                        closeSearch()
                     },
-                    onDismiss = { searchVisible = false },
+                    onDismiss = { closeSearch() },
                 )
-            }
-
-            // 内容区:海报网格 / 加载 / 错误 / 空态
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                when {
-                    state.error != null -> ErrorState(
-                        message = state.error,
-                        onRetry = onRetry,
-                        modifier = Modifier.align(Alignment.Center),
-                    )
-                    state.loading && state.items.isEmpty() -> LoadingState(
-                        modifier = Modifier.align(Alignment.Center),
-                    )
-                    state.items.isEmpty() -> EmptyState(message = "当前分类暂无内容")
-                    else -> PosterGrid(
-                        items = state.items,
-                        onSelect = onSelect,
-                        canLoadMore = state.canLoadMore,
-                        loadingMore = state.loadingMore,
-                        onLoadMore = onLoadMore,
-                        state = posterGridState,
-                        pendingFocusVideoId = pendingVideoFocusId,
-                        onPendingFocusHandled = { videoId ->
-                            if (pendingVideoFocusId == videoId) {
-                                pendingVideoFocusId = null
-                            }
-                        },
-                        onVideoFocused = { video ->
-                            searchFocused = false
-                            homeFocusState.markVideoFocused(
-                                categoryKey = homeFocusCategoryKey(state.selectedCategoryId),
-                                videoId = video.id,
-                            )
-                        },
-                        // 第一行海报按 UP 时,强制把焦点引到当前选中的分类 chip
-                        onUpFromFirstRow = {
-                            state.selectedCategoryId?.let { id ->
-                                homeFocusState.markCategoryFocused(id)
-                                categoryFocusers[id]?.let { fr ->
-                                    focusScope.launch {
-                                        withFrameNanos { }
-                                        runCatching { fr.requestFocus() }
+                Spacer(modifier = Modifier.weight(1f))
+            } else {
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    when {
+                        state.error != null -> ErrorState(
+                            message = state.error,
+                            onRetry = onRetry,
+                            modifier = Modifier.align(Alignment.Center),
+                        )
+                        state.loading && state.items.isEmpty() -> LoadingState(
+                            modifier = Modifier.align(Alignment.Center),
+                        )
+                        state.items.isEmpty() -> EmptyState(message = "当前分类暂无内容")
+                        else -> PosterGrid(
+                            items = state.items,
+                            onSelect = onSelect,
+                            canLoadMore = state.canLoadMore,
+                            loadingMore = state.loadingMore,
+                            onLoadMore = onLoadMore,
+                            state = posterGridState,
+                            pendingFocusVideoId = pendingVideoFocusId,
+                            onPendingFocusHandled = { videoId ->
+                                if (pendingVideoFocusId == videoId) {
+                                    pendingVideoFocusId = null
+                                }
+                            },
+                            onVideoFocused = { video ->
+                                homeFocusState.markVideoFocused(
+                                    categoryKey = homeFocusCategoryKey(state.selectedCategoryId),
+                                    videoId = video.id,
+                                )
+                            },
+                            // 第一行海报按 UP 时,强制把焦点引到当前选中的分类 chip
+                            onUpFromFirstRow = {
+                                state.selectedCategoryId?.let { id ->
+                                    homeFocusState.markCategoryFocused(id)
+                                    categoryFocusers[id]?.let { fr ->
+                                        focusScope.launch {
+                                            withFrameNanos { }
+                                            runCatching { fr.requestFocus() }
+                                        }
                                     }
                                 }
-                            }
-                        },
-                    )
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -435,6 +496,7 @@ private fun HomeScreen(
 // SearchPanel:展开式搜索面板(玻璃卡 + 文本框 + 两个胶囊按钮)
 // =====================================================================
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun SearchPanel(
     initialQuery: String,
@@ -442,6 +504,15 @@ private fun SearchPanel(
     onDismiss: () -> Unit,
 ) {
     var query by remember(initialQuery) { mutableStateOf(initialQuery) }
+
+    // 焦点引导(主操作优先原则):打开面板时,初始焦点直接落在"搜索"按钮(主操作),
+    // 用户第一动作按 OK 即可用当前 query(留空走分类默认词)发起搜索,完全
+    // 不用先在键盘 / 输入框里逐字拼写。这跟 tvOS / Apple TV+ 搜索弹窗
+    // 的"焦点默认在确认按钮"行为一致——主操作永远是最快的下一步。
+    // 想编辑 query 时,用户可以再点搜索栏(顶栏 onTapQuery 也会展开 SearchPanel,
+    // 但那时焦点已经能让用户顺畅输入)或直接打字(若焦点恰好在输入框)。
+    val searchButtonFocuser = remember { FocusRequester() }
+    val cancelButtonFocuser = remember { FocusRequester() }
 
     Column(
         modifier = Modifier
@@ -488,12 +559,57 @@ private fun SearchPanel(
                     }
                 )
                 Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    PrimaryPillButton(text = "搜索", onClick = { onSearch(query) })
-                    SecondaryPillButton(text = "取消", onClick = onDismiss)
+                // Hidden focusable 节点:BasicTextField 内部把 DOWN 吞了
+                // (默认行为是"光标到行末"),所以在它跟 Row 之间加一个
+                // 1dp × 1dp 的 focusable Box,DOWN 焦点会落到这个 hidden
+                // 节点上;hidden 节点又把焦点转发给"搜索"按钮(主操作)。
+                Box(
+                    modifier = Modifier
+                        .size(1.dp)
+                        .focusable()
+                        .focusProperties { down = searchButtonFocuser },
+                )
+                Spacer(Modifier.height(15.dp))
+                // Row 加 focusGroup + 显式给两个按钮标 focusRequester 后,焦点在
+                // Row 内能从"搜索"横向跳到"取消"(LEFT / RIGHT 都行),不再卡
+                // 在 Row 第一个按钮上;退出 Row 则焦点回到 BasicTextField(在 Row 上方)。
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    modifier = Modifier.focusGroup(),
+                ) {
+                    PrimaryPillButton(
+                        text = "搜索",
+                        onClick = { onSearch(query) },
+                        // 两个方向的焦点都跳"取消"——Row 内只有两个按钮,首尾相通。
+                        modifier = Modifier
+                            .focusRequester(searchButtonFocuser)
+                            .focusProperties {
+                                left = cancelButtonFocuser
+                                right = cancelButtonFocuser
+                            },
+                    )
+                    SecondaryPillButton(
+                        text = "取消",
+                        onClick = onDismiss,
+                        // "取消"上也要显式把 left/right 指回"搜索",否则 RIGHT 从
+                        // "取消"会跑出 Row 焦点(Compose 默认行为)。
+                        modifier = Modifier
+                            .focusRequester(cancelButtonFocuser)
+                            .focusProperties {
+                                left = searchButtonFocuser
+                                right = searchButtonFocuser
+                            },
+                    )
                 }
             }
         }
+    }
+
+    // 面板首次进入(从无到有):焦点落到"搜索"按钮(主操作),用户第一动作按 OK 即搜。
+    // 已经在编辑中(同一面板 key 复用)时不重复抢焦点,避免打断 IME 输入。
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        runCatching { searchButtonFocuser.requestFocus() }
     }
 }
 

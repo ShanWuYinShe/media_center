@@ -7,9 +7,10 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,7 +55,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -189,6 +189,141 @@ private fun SearchIcon(color: Color, size: androidx.compose.ui.unit.Dp) {
 }
 
 // =====================================================================
+// SearchModeTopBar:搜索模式顶栏(替代分类条)—— 放大镜 + 关键词 + 清除按钮
+//
+// 出现条件:HomeScreen 处于"搜索模式",即
+//   - 搜索面板展开(用户正在输入),或
+//   - 已完成搜索、内容区是搜索结果(state.query 非空)。
+// 在这两种情况下都不再展示分类条,避免"分类条 selected 蓝底 + 内容是搜索结果"
+// 的语义冲突(原 Issue:选择搜索以后,视频分类的焦点选择效果还显示)。
+//
+// 交互:整条"搜索栏"是单一可聚焦 + 可点击对象(放大镜 + 关键词作为一个整体),
+// 按 OK 或点它都能展开 SearchPanel 继续编辑 query;右侧 × 单独可聚焦 +
+// 可点击,用来退出整个搜索模式。两者的视觉权重跟 tvOS 搜索栏一致。
+// =====================================================================
+
+@Composable
+fun SearchModeTopBar(
+    query: String,
+    onClear: () -> Unit,
+    onTapQuery: () -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 56.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // 整条"搜索栏"作为单一可聚焦 + 可点击对象:点击或 OK 都展开 SearchPanel。
+        // 用 tvFocusableLite 替代 clickable + focusable(后者在 TV 模拟器上对
+        // input tap 路由不可靠;tvFocusableLite 内部的 clickable + scale + shadow
+        // 跟 ClearButton 一致,遥控器 OK 直接触发 onClick)。
+        var focused by remember { mutableStateOf(false) }
+        val borderColor by animateColorAsState(
+            targetValue = if (focused) AppleTvColors.GlassBorderFocused
+                          else AppleTvColors.GlassBorder,
+            animationSpec = tween(durationMillis = 180),
+            label = "searchBarFocusBorder",
+        )
+        val bg = if (focused) AppleTvColors.GlassFillStrong else AppleTvColors.GlassFill
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .weight(1f)
+                .height(54.dp)
+                .clip(AppleTvShapes.Chip)
+                .background(bg)
+                .border(
+                    width = if (focused) 2.dp else 1.dp,
+                    color = borderColor,
+                    shape = AppleTvShapes.Chip,
+                )
+                .tvFocusableLite(
+                    shape = AppleTvShapes.Chip,
+                    focusedScale = 1.04f,
+                    onClick = onTapQuery,
+                    onFocusChange = { focused = it },
+                )
+                .padding(horizontal = 22.dp),
+        ) {
+            SearchIcon(
+                color = if (focused) AppleTvColors.TextPrimary
+                        else AppleTvColors.TextSecondary,
+                size = 20.dp,
+            )
+            Spacer(Modifier.width(14.dp))
+            Text(
+                text = query.ifEmpty { "搜索…" },
+                color = if (query.isEmpty()) AppleTvColors.TextTertiary
+                        else AppleTvColors.TextPrimary,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        // 清除按钮:tvOS 风格 × 圆形按钮,焦点态变 Apple Blue 实底。
+        ClearButton(onClick = onClear)
+    }
+}
+
+@Composable
+private fun ClearButton(onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val bg = if (focused) AppleTvColors.AppleBlue else AppleTvColors.GlassFill
+    val glyphColor = if (focused) AppleTvColors.TextPrimary
+                     else AppleTvColors.TextSecondary
+
+    Box(
+        modifier = Modifier
+            .size(54.dp)
+            .clip(AppleTvShapes.Chip)
+            .background(bg)
+            .border(
+                width = 1.dp,
+                color = if (focused) Color.Transparent else AppleTvColors.GlassBorder,
+                shape = AppleTvShapes.Chip,
+            )
+            .tvFocusableLite(
+                shape = AppleTvShapes.Chip,
+                focusedScale = 1.08f,
+                onClick = onClick,
+                onFocusChange = { focused = it },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        ClearGlyph(color = glyphColor, size = 18.dp)
+    }
+}
+
+@Composable
+private fun ClearGlyph(color: Color, size: androidx.compose.ui.unit.Dp) {
+    androidx.compose.foundation.Canvas(modifier = Modifier.size(size)) {
+        val stroke = 1.8.dp.toPx()
+        val w = this.size.width
+        val h = this.size.height
+        // × 用两条对角线
+        drawLine(
+            color = color,
+            start = androidx.compose.ui.geometry.Offset(w * 0.22f, h * 0.22f),
+            end = androidx.compose.ui.geometry.Offset(w * 0.78f, h * 0.78f),
+            strokeWidth = stroke,
+            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+        )
+        drawLine(
+            color = color,
+            start = androidx.compose.ui.geometry.Offset(w * 0.78f, h * 0.22f),
+            end = androidx.compose.ui.geometry.Offset(w * 0.22f, h * 0.78f),
+            strokeWidth = stroke,
+            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+        )
+    }
+}
+
+// =====================================================================
 // CategoryChip:胶囊式分类选择条(替代原来的大卡片)
 // =====================================================================
 
@@ -200,9 +335,9 @@ fun CategoryChip(
     onFocused: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    // 关键:与 `tvFocusableLite` 共享同一个 interactionSource,这样
-    // 内部 `collectIsFocusedAsState()` 跟外部读到的值严格一致。
-    // 之前的实现外层 `var focused by remember` 跟内部不同源 → 状态不同步。
+    // 焦点态由 `tvFocusableLite` 的 onFocusChange 回调驱动(回调内部用
+    // onFocusChanged 直接读节点真实焦点态,可靠不卡顿)。不再用
+    // collectIsFocusedAsState —— 它在 composed 重新物化时可能残留 focused。
     val interactionSource = remember { MutableInteractionSource() }
     var focused by remember { mutableStateOf(false) }
 
@@ -255,6 +390,7 @@ fun CategoryChip(
                 interactionSource = interactionSource,
                 onClick = onClick,
                 onFocusChange = { isFocused ->
+                    focused = isFocused
                     if (isFocused) {
                         onFocused()
                         // 焦点到达时自动切换分类，不需要再按确认
@@ -626,15 +762,109 @@ fun PosterGrid(
                 focusModifier = Modifier.focusRequester(focusRequester),
             )
         }
-        if (loadingMore) {
+        // 瀑布流底部指示器:
+        //   · loadingMore  → 旋转 spinner + “正在加载更多…”
+        //   · 还能加载更多 → 静态“下滑加载更多”提示(让用户知道列表未到底)
+        //   · 到底了       → “已经到底啦”
+        if (loadingMore || canLoadMore) {
             item(span = { GridItemSpan(maxLineSpan) }) {
-                LoadingState(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 18.dp),
-                )
+                LoadMoreIndicator(loadingMore = loadingMore)
+            }
+        } else if (items.isNotEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                EndOfListIndicator()
             }
         }
+    }
+}
+
+@Composable
+private fun LoadMoreIndicator(loadingMore: Boolean) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 20.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (loadingMore) {
+            CircularProgressIndicator(
+                color = AppleTvColors.AppleBlue,
+                strokeWidth = 2.5.dp,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                text = "正在加载更多…",
+                color = AppleTvColors.TextSecondary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+            )
+        } else {
+            // 还能加载:展示“下滑加载更多”静态指示器(向下箭头 + 文案)
+            ChevronDownGlyph(size = 16.dp, color = AppleTvColors.TextTertiary)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "下滑加载更多",
+                color = AppleTvColors.TextTertiary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun EndOfListIndicator() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 20.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .width(28.dp)
+                .height(1.dp)
+                .background(AppleTvColors.GlassBorder),
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = "已经到底啦",
+            color = AppleTvColors.TextTertiary,
+            fontSize = 13.sp,
+        )
+        Spacer(Modifier.width(12.dp))
+        Box(
+            modifier = Modifier
+                .width(28.dp)
+                .height(1.dp)
+                .background(AppleTvColors.GlassBorder),
+        )
+    }
+}
+
+@Composable
+private fun ChevronDownGlyph(size: androidx.compose.ui.unit.Dp, color: Color) {
+    androidx.compose.foundation.Canvas(modifier = Modifier.size(size)) {
+        val stroke = 2.dp.toPx()
+        val w = this.size.width
+        val h = this.size.height
+        drawLine(
+            color = color,
+            start = androidx.compose.ui.geometry.Offset(w * 0.2f, h * 0.35f),
+            end = androidx.compose.ui.geometry.Offset(w * 0.5f, h * 0.65f),
+            strokeWidth = stroke,
+            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+        )
+        drawLine(
+            color = color,
+            start = androidx.compose.ui.geometry.Offset(w * 0.5f, h * 0.65f),
+            end = androidx.compose.ui.geometry.Offset(w * 0.8f, h * 0.35f),
+            strokeWidth = stroke,
+            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+        )
     }
 }
 
@@ -708,13 +938,14 @@ fun PrimaryPillButton(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     var focused by remember { mutableStateOf(false) }
-    val bg = if (focused) Color.White else AppleTvColors.AppleBlue
-    val textColor = if (focused) AppleTvColors.AppleBlue else AppleTvColors.TextPrimary
+    // 焦点态使用强调色:Apple Blue 实心 + 白字(焦点 = 当前操作位置,用最醒目的配色);
+    // 失焦态:白底 + 深色字(高对比,文字始终清晰可读)。
+    val bg = if (focused) AppleTvColors.AppleBlue else Color.White
+    val textColor = if (focused) AppleTvColors.TextPrimary else AppleTvColors.DeepSpace
 
     Box(
         modifier = modifier
             .height(48.dp)
-            .onFocusChanged { focused = it.isFocused }
             .clip(AppleTvShapes.Button)
             .background(bg)
             .tvFocusableLite(
@@ -722,6 +953,7 @@ fun PrimaryPillButton(
                 focusedScale = 1.06f,
                 interactionSource = interactionSource,
                 onClick = onClick,
+                onFocusChange = { focused = it },
             )
             .padding(horizontal = 30.dp),
         contentAlignment = Alignment.Center,
@@ -738,22 +970,26 @@ fun PrimaryPillButton(
 /**
  * 次级胶囊按钮(透明 + 边框,焦点态蓝色填充)。
  *
- * 默认自管理焦点态。也支持“受控模式”:父级传入 [focusedOverride] 强制焦点态,
- * 并通过 [onFocusChange] 监听焦点变化。受控模式用于解决嵌套 focusGroup 环境下
- * `onFocusChanged(false)` 偶发丢失导致按钮“常亮”的问题——父级可在焦点落到
- * 其它元素时强制把它置为非焦点。
+ * 完全自管理焦点态:焦点高亮只由按钮自身通过 [tvFocusableLite] 的 onFocusChange
+ * (内部 onFocusChanged 直接读节点真实焦点态)驱动。失焦时一定会回落,**不需要**
+ * 父级用 focusedOverride 之类的外部状态去强制清除——那是不可靠机制下的妥协方案,已移除。
  */
 @Composable
 fun SecondaryPillButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    focusedOverride: Boolean? = null,
-    onFocusChange: (Boolean) -> Unit = {},
+    onFocused: () -> Unit = {},
 ) {
     val interactionSource = remember { MutableInteractionSource() }
-    var selfFocused by remember { mutableStateOf(false) }
-    val focused = focusedOverride ?: selfFocused
+    var focused by remember { mutableStateOf(false) }
+    // 跳过节点**第一次**自动 focus 触发的回调。
+    // 原因:Compose 在冷启动 / Composable 首次进入屏幕时,会主动把焦点给到
+    // 第一个 focusable 元素,这一发 onFocusChange(isFocused=true) 是**框架行为**,
+    // 不是用户操作;如果不区分,会导致 `onFocused = { searchVisible = true }`
+    // 这类副作用在冷启动时自动执行(用户反馈:选择搜索以后,顶栏就自动变成搜索模式)。
+    // 真正的"用户导航到该按钮"是**第二次及以后**的 focus 事件。
+    val skipFirstFocus = remember { mutableStateOf(true) }
     val bg = if (focused) AppleTvColors.AppleBlue else AppleTvColors.GlassFill
     val textColor = if (focused) AppleTvColors.TextPrimary else AppleTvColors.TextSecondary
     val borderColor = if (focused) Color.Transparent else AppleTvColors.GlassBorder
@@ -761,10 +997,6 @@ fun SecondaryPillButton(
     Box(
         modifier = modifier
             .height(48.dp)
-            .onFocusChanged {
-                selfFocused = it.isFocused
-                onFocusChange(it.isFocused)
-            }
             .clip(AppleTvShapes.Button)
             .background(bg)
             .border(1.dp, borderColor, AppleTvShapes.Button)
@@ -773,6 +1005,16 @@ fun SecondaryPillButton(
                 focusedScale = 1.06f,
                 interactionSource = interactionSource,
                 onClick = onClick,
+                onFocusChange = { isFocused ->
+                    focused = isFocused
+                    if (isFocused) {
+                        if (skipFirstFocus.value) {
+                            skipFirstFocus.value = false
+                        } else {
+                            onFocused()
+                        }
+                    }
+                },
             )
             .padding(horizontal = 26.dp),
         contentAlignment = Alignment.Center,

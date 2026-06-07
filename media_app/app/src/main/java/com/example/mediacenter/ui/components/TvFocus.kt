@@ -10,23 +10,24 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.example.mediacenter.ui.theme.AppleTvColors
 
@@ -59,7 +60,12 @@ fun Modifier.tvFocusable(
     onFocusChange: ((Boolean) -> Unit)? = null,
 ): Modifier = composed {
     val source = interactionSource ?: remember { MutableInteractionSource() }
-    val focused by source.collectIsFocusedAsState()
+    // 焦点检测用 onFocusChanged **直接读取焦点节点的真实状态**,而不是
+    // collectIsFocusedAsState(interactionSource)。后者依赖成对的 Focus/Unfocus
+    // 交互;在 `composed{}` 重新物化、焦点节点被重建时,Unfocus 可能丢失,
+    // 导致计数残留 → "常亮"。onFocusChanged 读的是节点自身 FocusState,
+    // 节点重建后会以新节点真实状态重新回调,因此**不会卡住**。
+    var focused by remember { mutableStateOf(false) }
 
     val scale by animateFloatAsState(
         targetValue = if (focused) focusedScale else 1f,
@@ -89,12 +95,15 @@ fun Modifier.tvFocusable(
     }
 
     val currentOnFocusChange by rememberUpdatedState(onFocusChange)
-    LaunchedEffect(focused) {
-        currentOnFocusChange?.invoke(focused)
-    }
 
     this
-        .scale(scale)
+        // 用 graphicsLayer 的 lambda 形式做缩放:缩放值在绘制阶段读取,
+        // 不改变 modifier 元素身份 → 不会让后面的 focusable 节点被反复重建,
+        // 从而保证 onFocusChanged 的 blur 事件可靠送达。
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
         .shadow(
             elevation = elevation,
             shape = shape,
@@ -103,6 +112,12 @@ fun Modifier.tvFocusable(
             clip = false,
         )
         .border(width = borderWidth, color = borderColor, shape = shape)
+        .onFocusChanged { state ->
+            if (focused != state.isFocused) {
+                focused = state.isFocused
+                currentOnFocusChange?.invoke(state.isFocused)
+            }
+        }
         .then(
             if (onClick != null) {
                 Modifier.clickable(
@@ -125,7 +140,7 @@ fun Modifier.tvFocusableLite(
     onFocusChange: ((Boolean) -> Unit)? = null,
 ): Modifier = composed {
     val source = interactionSource ?: remember { MutableInteractionSource() }
-    val focused by source.collectIsFocusedAsState()
+    var focused by remember { mutableStateOf(false) }
 
     val scale by animateFloatAsState(
         targetValue = if (focused) focusedScale else 1f,
@@ -139,12 +154,12 @@ fun Modifier.tvFocusableLite(
     )
 
     val currentOnFocusChange by rememberUpdatedState(onFocusChange)
-    LaunchedEffect(focused) {
-        currentOnFocusChange?.invoke(focused)
-    }
 
     this
-        .scale(scale)
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
         .shadow(
             elevation = elevation,
             shape = shape,
@@ -152,6 +167,12 @@ fun Modifier.tvFocusableLite(
             spotColor = AppleTvColors.AppleBlue,
             clip = false,
         )
+        .onFocusChanged { state ->
+            if (focused != state.isFocused) {
+                focused = state.isFocused
+                currentOnFocusChange?.invoke(state.isFocused)
+            }
+        }
         .then(
             if (onClick != null) {
                 Modifier.clickable(
