@@ -103,6 +103,8 @@ import com.example.mediacenter.ui.theme.AppleTvShapes
 import com.example.mediacenter.ui.theme.AppleTvTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
  * 顶层 App composable。
@@ -116,12 +118,14 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun MediaCenterApp(
+    mediaServerUrl: String,
     state: MediaUiState,
     onSearch: (String) -> Unit,
     onSelectCategory: (ContentCategory) -> Unit,
     onSelect: (VideoSummary) -> Unit,
     onPlay: (PlaybackOption) -> Unit,
     onPlayNext: () -> Unit,
+    onPlayPrevious: () -> Unit,
     onLoadMore: () -> Unit,
     onBack: () -> Unit,
     onRetry: () -> Unit,
@@ -144,11 +148,19 @@ fun MediaCenterApp(
                         if (playingIndex >= 0 && playingIndex + 1 < state.items.size)
                             state.items[playingIndex + 1]
                         else null
+                    val previousVideo =
+                        if (playingIndex > 0)
+                            state.items[playingIndex - 1]
+                        else null
                     PlayerScreen(
+                        mediaServerUrl = mediaServerUrl,
                         stream = state.playing,
+                        hasPrevious = previousVideo != null,
+                        previousTitle = previousVideo?.title,
                         hasNext = nextVideo != null || state.canLoadMore,
                         nextTitle = nextVideo?.title,
                         onPlayNext = onPlayNext,
+                        onPlayPrevious = onPlayPrevious,
                         onBack = onBack,
                     )
                 }
@@ -1052,31 +1064,88 @@ private fun PlaybackOptionsRow(
 // PlayerScreen:全屏播放 + Apple TV 风格自定义控制覆盖层
 //
 // D-pad 行为(全部由根 Box.onPreviewKeyEvent 统一处理):
+//   UP/DOWN    → 上一个/下一个
 //   LEFT/RIGHT → seek ±10s(不论覆盖层是否可见)
-//   UP/DOWN/OK  → 切换播放/暂停 + 亮起控制覆盖层
+//   OK         → 切换播放/暂停 + 亮起控制覆盖层
 //   BACK        → 根 Surface 拦截返回上一屏
 //
 // 覆盖层不是可聚焦按钮(纯视觉),电视遥控器可直接操纵播放,不像手机
 // 控制条那样需要逐个 Tab 到达按钮。
 // =====================================================================
 
+private const val PlaybackUserAgent =
+    "Mozilla/5.0 (Linux; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+private fun proxiedPlaybackUrl(mediaServerUrl: String, originalUrl: String): String {
+    val apiBase = mediaApiBaseUrl(mediaServerUrl) ?: return originalUrl
+    val original = originalUrl.toHttpUrlOrNull() ?: apiBase.resolve(originalUrl) ?: return originalUrl
+    if (original.scheme != "http" && original.scheme != "https") return originalUrl
+    if (original.isAssetProxyUrl()) return original.toString()
+    return apiBase.newBuilder()
+        .addPathSegment("asset")
+        .addQueryParameter("url", original.toString())
+        .build()
+        .toString()
+}
+
+private fun mediaApiBaseUrl(mediaServerUrl: String): HttpUrl? {
+    val root = mediaServerUrl.trim().trimEnd('/').toHttpUrlOrNull() ?: return null
+    val builder = root.newBuilder()
+    if (root.pathSegments.none { it.isNotEmpty() }) {
+        builder.addPathSegment("api")
+    }
+    return builder.build()
+}
+
+private fun HttpUrl.isAssetProxyUrl(): Boolean {
+    return pathSegments.lastOrNull() == "asset" && queryParameter("url") != null
+}
+
+private fun playbackRequestHeaders(url: String): Map<String, String> {
+    val headers = mutableMapOf(
+        "Accept" to "video/*,*/*;q=0.8",
+        "Accept-Language" to "zh-CN,zh;q=0.9,en;q=0.8",
+    )
+    val host = url.toHttpUrlOrNull()?.host ?: return headers
+    when {
+        host.isHostOrSubdomain("bilivideo.com") || host.isHostOrSubdomain("bilibili.com") ->
+            headers["Referer"] = "https://www.bilibili.com"
+        host.isHostOrSubdomain("googlevideo.com") || host.isHostOrSubdomain("youtube.com") ->
+            headers["Referer"] = "https://www.youtube.com"
+    }
+    return headers
+}
+
+private fun String.isHostOrSubdomain(domain: String): Boolean {
+    return this == domain || endsWith(".$domain")
+}
+
 @Composable
 @OptIn(UnstableApi::class)
 private fun PlayerScreen(
+    mediaServerUrl: String,
     stream: PlaybackOption,
+    hasPrevious: Boolean,
+    previousTitle: String?,
     hasNext: Boolean,
     nextTitle: String?,
     onPlayNext: () -> Unit,
+    onPlayPrevious: () -> Unit,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val playbackUrl = remember(mediaServerUrl, stream.url) {
+        proxiedPlaybackUrl(mediaServerUrl, stream.url)
+    }
 
-    val player = remember(stream.url) {
+    val player = remember(playbackUrl, stream.mimeType) {
         val dataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(8_000)
             .setReadTimeoutMs(20_000)
+            .setUserAgent(PlaybackUserAgent)
+            .setDefaultRequestProperties(playbackRequestHeaders(playbackUrl))
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
             .setSeekBackIncrementMs(10_000)
@@ -1085,7 +1154,7 @@ private fun PlayerScreen(
             .apply {
                 setMediaItem(
                     MediaItem.Builder()
-                        .setUri(stream.url)
+                        .setUri(playbackUrl)
                         .setMimeType(
                             if (stream.mimeType == "video/webm") MimeTypes.VIDEO_WEBM
                             else MimeTypes.VIDEO_MP4
@@ -1104,6 +1173,7 @@ private fun PlayerScreen(
     var isPlaying by remember { mutableStateOf(true) }
     val currentHasNext by rememberUpdatedState(hasNext)
     val currentOnPlayNext by rememberUpdatedState(onPlayNext)
+    val currentOnPlayPrevious by rememberUpdatedState(onPlayPrevious)
     val currentOnBack by rememberUpdatedState(onBack)
 
     // 控制覆盖层自动闪烁:每次用户按键亮起,3 秒后淡出
@@ -1198,15 +1268,25 @@ private fun PlayerScreen(
                 val isOk = nativeCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER
                     || nativeCode == android.view.KeyEvent.KEYCODE_ENTER
                 val isNextKey = nativeCode == android.view.KeyEvent.KEYCODE_MEDIA_NEXT
+                val isPreviousKey = nativeCode == android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS
                 when {
-                    isOk || event.key == Key.DirectionUp -> {
+                    isOk -> {
                         togglePlaybackAndShowControls()
+                        true
+                    }
+                    // ↑ 或 媒体上一首键 → 播放当前分类的上一个视频
+                    event.key == Key.DirectionUp || isPreviousKey -> {
+                        if (hasPrevious) {
+                            currentOnPlayPrevious()
+                        } else {
+                            showControls()
+                        }
                         true
                     }
                     // ↓ 或 媒体下一首键 → 播放当前分类的下一个视频
                     event.key == Key.DirectionDown || isNextKey -> {
                         if (hasNext) {
-                            onPlayNext()
+                            currentOnPlayNext()
                         } else {
                             showControls()
                         }
@@ -1249,6 +1329,8 @@ private fun PlayerScreen(
                 position = position,
                 duration = duration,
                 title = stream.label,
+                hasPrevious = hasPrevious,
+                previousTitle = previousTitle,
                 hasNext = hasNext,
                 nextTitle = nextTitle,
             )
@@ -1266,6 +1348,8 @@ private fun PlayerOverlay(
     position: Long,
     duration: Long,
     title: String,
+    hasPrevious: Boolean,
+    previousTitle: String?,
     hasNext: Boolean,
     nextTitle: String?,
 ) {
@@ -1354,7 +1438,8 @@ private fun PlayerOverlay(
             ) {
                 Text(
                     text = buildString {
-                        append("OK 播放/暂停 · ←→ 快退/快进")
+                        append("OK 播放/暂停 · ←→ 快退/快进 10 秒")
+                        if (hasPrevious) append(" · ↑ 上一个")
                         if (hasNext) append(" · ↓ 下一个")
                     },
                     color = AppleTvColors.TextTertiary,
@@ -1371,7 +1456,17 @@ private fun PlayerOverlay(
                 )
             }
 
-            // 下一个视频预告(若有),单独一行,留足间距防止覆盖
+            // 上/下一个视频预告(若有),单独一行,留足间距防止覆盖
+            if (hasPrevious && previousTitle != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "上一个:$previousTitle",
+                    color = AppleTvColors.TextSecondary,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             if (hasNext && nextTitle != null) {
                 Spacer(Modifier.height(8.dp))
                 Text(

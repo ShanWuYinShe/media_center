@@ -220,7 +220,21 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             }
             return
         }
+        pendingAutoAdvanceFromId = null
         playVideoAt(nextIndex, items)
+    }
+
+    /**
+     * 播放“上一个”:只在当前已加载列表内回退,不跨页反向加载历史页。
+     */
+    fun playPrevious() {
+        val current = mutableState.value
+        val items = current.items
+        val curId = current.playingVideo?.id ?: current.selected?.id ?: return
+        val idx = items.indexOfFirst { it.id == curId }
+        if (idx <= 0) return
+        pendingAutoAdvanceFromId = null
+        playVideoAt(idx - 1, items, prefetchNextPage = false)
     }
 
     /**
@@ -228,10 +242,14 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
      * 失败时**清空 playing**:让 UI 从播放页退回详情页,而不是把用户困在
      * 一帧"已结束/卡死"的播放画面上(播放页本身不渲染错误态)。
      */
-    private fun playVideoAt(index: Int, items: List<VideoSummary>) {
+    private fun playVideoAt(
+        index: Int,
+        items: List<VideoSummary>,
+        prefetchNextPage: Boolean = true,
+    ) {
         val nextVideo = items[index]
         // 临近列表末尾时顺便预取下一页,保证“下一个”能持续可用
-        if (index >= items.size - 3) loadMore()
+        if (prefetchNextPage && index >= items.size - 3) loadMore()
         detailsJob?.cancel()
         detailsJob = viewModelScope.launch {
             mutableState.update { it.copy(loading = true, error = null) }
