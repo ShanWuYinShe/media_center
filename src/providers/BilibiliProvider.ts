@@ -363,8 +363,49 @@ function throwIfVoucherOnlyPlayUrl(response: BilibiliPlayUrlResponse): void {
     "PROVIDER_UNAVAILABLE",
     "B站播放地址请求触发风控，请稍后重试。",
     502,
-    { v_voucher: data.v_voucher },
+    { reason: "bilibili_voucher", v_voucher: data.v_voucher },
   );
+}
+
+function isBilibiliVoucherError(error: unknown): error is ApiError {
+  return (
+    error instanceof ApiError &&
+    error.code === "PROVIDER_UNAVAILABLE" &&
+    isRecord(error.providerError) &&
+    error.providerError.reason === "bilibili_voucher"
+  );
+}
+
+function withFallbackMetadata(
+  error: ApiError,
+  video: NonNullable<BilibiliVideoResponse["data"]>,
+): ApiError {
+  return new ApiError(error.code, error.message, error.statusCode, {
+    ...(isRecord(error.providerError) ? error.providerError : {}),
+    fallbackSearchQuery: fallbackSearchQuery(video),
+    bvid: video.bvid,
+    title: video.title,
+    description: video.desc,
+    creator: video.owner?.name,
+    thumbnailUrl: normalizePicUrl(video.pic),
+    durationSeconds: positiveInteger(video.duration),
+    sourceUrl: video.bvid
+      ? `https://www.bilibili.com/video/${video.bvid}`
+      : undefined,
+    year: video.pubdate
+      ? new Date(video.pubdate * 1000).getFullYear().toString()
+      : undefined,
+  });
+}
+
+function fallbackSearchQuery(
+  video: NonNullable<BilibiliVideoResponse["data"]>,
+) {
+  return video.title?.trim() ?? "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function nonEmptyString(value: string | undefined): string | undefined {
@@ -492,7 +533,14 @@ export class BilibiliProvider implements VideoProvider {
     // 复用已获取的 cid，避免 getStreams 重复请求 view API
     let streams: VideoStream[] = [];
     if (v.cid) {
-      streams = await this.fetchStreams(id, v.cid);
+      try {
+        streams = await this.fetchStreams(id, v.cid);
+      } catch (error) {
+        if (isBilibiliVoucherError(error)) {
+          throw withFallbackMetadata(error, v);
+        }
+        throw error;
+      }
     }
 
     return {
@@ -521,7 +569,14 @@ export class BilibiliProvider implements VideoProvider {
     if (info.code !== 0 || !info.data?.cid) {
       throw new ApiError("NO_PLAYABLE_STREAM", "无法获取视频流信息。", 422);
     }
-    return this.fetchStreams(id, info.data.cid);
+    try {
+      return await this.fetchStreams(id, info.data.cid);
+    } catch (error) {
+      if (isBilibiliVoucherError(error)) {
+        throw withFallbackMetadata(error, info.data);
+      }
+      throw error;
+    }
   }
 
   /**

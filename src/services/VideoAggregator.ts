@@ -27,11 +27,24 @@ const DEFAULT_SEARCH_DETAIL_TIMEOUT_MS = positiveNumber(
   process.env.SEARCH_DETAIL_TIMEOUT_MS,
   8_000,
 );
+const YOUTUBE_FALLBACK_CANDIDATES = 5;
+const MIN_YOUTUBE_FALLBACK_SCORE = 0.32;
 
 type VideoAggregatorOptions = {
   providerSearchTimeoutMs?: number;
   detailResolveTimeoutMs?: number;
   searchDetailTimeoutMs?: number;
+};
+
+type BilibiliPlaybackFallback = {
+  query: string;
+  title: string;
+  description: string;
+  creator?: string;
+  thumbnailUrl?: string;
+  durationSeconds?: number;
+  sourceUrl: string;
+  year?: string;
 };
 
 export class VideoAggregator {
@@ -128,11 +141,7 @@ export class VideoAggregator {
 
   async getDetails(videoId: string): Promise<PublicVideoDetails> {
     const { providerName, sourceId } = decodeVideoId(videoId);
-    const details = await withTimeout(
-      this.provider(providerName).getDetails(sourceId),
-      this.detailResolveTimeoutMs,
-      () => providerTimeoutError(providerName, "详情解析"),
-    );
+    const details = await this.resolveDetails(providerName, sourceId);
     const publicDetails = this.toPublicDetails(details);
     this.detailCache.set(videoId, publicDetails);
     return publicDetails;
@@ -328,6 +337,92 @@ export class VideoAggregator {
     );
   }
 
+  private async resolveDetails(
+    providerName: string,
+    sourceId: string,
+  ): Promise<VideoDetails> {
+    try {
+      return await withTimeout(
+        this.provider(providerName).getDetails(sourceId),
+        this.detailResolveTimeoutMs,
+        () => providerTimeoutError(providerName, "详情解析"),
+      );
+    } catch (error) {
+      const fallback = bilibiliPlaybackFallback(providerName, sourceId, error);
+      if (!fallback) {
+        throw error;
+      }
+      const youtubeDetails = await this.findYoutubeFallback(fallback);
+      if (youtubeDetails) {
+        return {
+          provider: "bilibili",
+          id: sourceId,
+          videoKind: "vod",
+          title: fallback.title,
+          description: fallback.description,
+          year: fallback.year,
+          creators: fallback.creator ? [fallback.creator] : [],
+          thumbnailUrl: fallback.thumbnailUrl,
+          durationSeconds: fallback.durationSeconds,
+          sourceUrl: fallback.sourceUrl,
+          playable: true,
+          streams: youtubeDetails.streams,
+        };
+      }
+      throw error;
+    }
+  }
+
+  private async findYoutubeFallback(
+    fallback: BilibiliPlaybackFallback,
+  ): Promise<VideoDetails | undefined> {
+    const youtube = this.providers.find(
+      (provider) => provider.name === "youtube",
+    );
+    if (!youtube) {
+      return undefined;
+    }
+    const search = await withTimeout(
+      youtube.search(fallback.query, 1, YOUTUBE_FALLBACK_CANDIDATES),
+      this.providerSearchTimeoutMs,
+      () => providerTimeoutError("youtube", "补源搜索"),
+    );
+    const candidates = search.items
+      .filter((item) => item.provider === "youtube" && item.videoKind === "vod")
+      .map((item) => ({
+        item,
+        score: youtubeFallbackScore(item, fallback),
+      }))
+      .filter(({ score }) => score >= MIN_YOUTUBE_FALLBACK_SCORE)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, YOUTUBE_FALLBACK_CANDIDATES);
+
+    let lastCandidateError: unknown;
+    for (const { item } of candidates) {
+      try {
+        const details = await withTimeout(
+          youtube.getDetails(item.id),
+          this.detailResolveTimeoutMs,
+          () => providerTimeoutError("youtube", "补源解析"),
+        );
+        if (details.videoKind === "vod" && details.streams.length > 0) {
+          return details;
+        }
+      } catch (error) {
+        lastCandidateError = error;
+      }
+    }
+    if (lastCandidateError) {
+      throw new ApiError(
+        "PROVIDER_UNAVAILABLE",
+        "B站播放地址触发风控，YouTube 补源暂不可用。",
+        502,
+        lastCandidateError,
+      );
+    }
+    return undefined;
+  }
+
   private provider(name: string): VideoProvider {
     const provider = this.providers.find(
       (candidate) => candidate.name === name,
@@ -428,6 +523,122 @@ function publicDetailsToSummary(
   const { playbackOptions: _omit, ...summary } = details;
   void _omit;
   return summary;
+}
+
+function bilibiliPlaybackFallback(
+  providerName: string,
+  sourceId: string,
+  error: unknown,
+): BilibiliPlaybackFallback | undefined {
+  if (
+    providerName !== "bilibili" ||
+    !(error instanceof ApiError) ||
+    error.code !== "PROVIDER_UNAVAILABLE" ||
+    !isRecord(error.providerError) ||
+    error.providerError.reason !== "bilibili_voucher"
+  ) {
+    return undefined;
+  }
+  const title = stringValue(error.providerError.title);
+  const query = stringValue(error.providerError.fallbackSearchQuery) ?? title;
+  if (!query) {
+    return undefined;
+  }
+  return {
+    query,
+    title: title ?? query,
+    description: stringValue(error.providerError.description) ?? "",
+    creator: stringValue(error.providerError.creator),
+    thumbnailUrl: stringValue(error.providerError.thumbnailUrl),
+    durationSeconds: positiveFiniteNumber(error.providerError.durationSeconds),
+    sourceUrl:
+      stringValue(error.providerError.sourceUrl) ??
+      `https://www.bilibili.com/video/${sourceId}`,
+    year: stringValue(error.providerError.year),
+  };
+}
+
+function youtubeFallbackScore(
+  item: SearchResult["items"][number],
+  fallback: BilibiliPlaybackFallback,
+): number {
+  let score = textSimilarity(item.title, fallback.title);
+  if (fallback.durationSeconds && item.durationSeconds) {
+    const diff = Math.abs(item.durationSeconds - fallback.durationSeconds);
+    const closeEnough = Math.max(120, fallback.durationSeconds * 0.15);
+    if (diff <= closeEnough) {
+      score += 0.25;
+    } else if (diff > Math.max(600, fallback.durationSeconds * 0.5)) {
+      score -= 0.2;
+    }
+  }
+  const fallbackCreator = fallback.creator;
+  if (
+    fallbackCreator &&
+    item.creators.some(
+      (itemCreator) =>
+        normalizedText(itemCreator).includes(normalizedText(fallbackCreator)) ||
+        normalizedText(fallbackCreator).includes(normalizedText(itemCreator)),
+    )
+  ) {
+    score += 0.05;
+  }
+  return score;
+}
+
+function textSimilarity(left: string, right: string): number {
+  const a = normalizedText(left);
+  const b = normalizedText(right);
+  if (!a || !b) {
+    return 0;
+  }
+  if (a === b) {
+    return 1;
+  }
+  const minLength = Math.min(a.length, b.length);
+  if (minLength >= 8 && (a.includes(b) || b.includes(a))) {
+    return 0.75;
+  }
+  const aParts = bigrams(a);
+  const bParts = bigrams(b);
+  const union = new Set([...aParts, ...bParts]);
+  let intersection = 0;
+  for (const part of aParts) {
+    if (bParts.has(part)) {
+      intersection += 1;
+    }
+  }
+  return union.size > 0 ? intersection / union.size : 0;
+}
+
+function normalizedText(value: string): string {
+  return value.toLocaleLowerCase().replace(/[^\p{Letter}\p{Number}]+/gu, "");
+}
+
+function bigrams(value: string): Set<string> {
+  const chars = Array.from(value);
+  if (chars.length <= 1) {
+    return new Set(chars);
+  }
+  const out = new Set<string>();
+  for (let index = 0; index < chars.length - 1; index++) {
+    out.add(`${chars[index]}${chars[index + 1]}`);
+  }
+  return out;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function positiveFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function relevanceScore(

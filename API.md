@@ -22,6 +22,7 @@ App 应把配置值当作 **API base URL**，也就是下面端点表中路径�
 - 视频 ID：`id` 是服务端生成的不透明字符串，App 必须原样保存，并在放入 URL path 时执行 URL encode。
 - 分页：`page` 从 `1` 开始；`pageSize` 范围是 `1..40`，默认 `20`。
 - 图片和播放 URL：`thumbnailUrl`、`playbackOptions[].url` 都是服务端签发的 `/asset?url=...&sig=...` 代理地址，App 应直接使用它们，不要自行拼接。
+- 补源：当 Bilibili 播放接口触发 `v_voucher` 风控时，服务端会按原视频标题尝试 YouTube 公开视频补源；响应仍保留原列表项 ID，App 无需切换 Provider。
 - Range：播放代理支持 HTTP Range。Media3/ExoPlayer 正常发起 Range 请求即可。
 
 ## 错误响应
@@ -183,7 +184,7 @@ Query：
 
 ### `GET /videos/{id}`
 
-获取视频详情和可播放选项。`id` 来自列表或搜索结果，App 必须 URL encode。
+获取视频详情和可播放选项。`id` 来自列表或搜索结果，App 必须 URL encode。若原来源临时不可用，服务端可能返回同一 `id` 下的合规补源播放选项。
 
 响应：
 

@@ -259,5 +259,12 @@ test("Bilibili v_voucher 风控响应转成上游不可用错误", async () => {
   await expect(provider.getDetails("BVVOUCHER")).rejects.toMatchObject({
     code: "PROVIDER_UNAVAILABLE",
     statusCode: 502,
+    providerError: {
+      reason: "bilibili_voucher",
+      fallbackSearchQuery: "风控视频",
+      title: "风控视频",
+      creator: "UP",
+      sourceUrl: "https://www.bilibili.com/video/BVVOUCHER",
+    },
   });
 });

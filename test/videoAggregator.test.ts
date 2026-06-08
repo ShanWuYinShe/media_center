@@ -6,6 +6,7 @@ import type {
   VideoSummary,
 } from "../src/types.js";
 import type { VideoProvider } from "../src/providers/VideoProvider.js";
+import { ApiError } from "../src/errors.js";
 
 const playableStream: VideoStream = {
   id: "stream-1",
@@ -33,9 +34,13 @@ function summary(
   };
 }
 
-function details(id: string, streams: VideoStream[]): VideoDetails {
+function details(
+  id: string,
+  streams: VideoStream[],
+  provider: "bilibili" | "youtube" = "bilibili",
+): VideoDetails {
   return {
-    ...summary(id, streams.length > 0),
+    ...summary(id, streams.length > 0, provider),
     sourceUrl: `https://example.test/${id}`,
     streams,
   };
@@ -124,6 +129,76 @@ test("详情接口拒绝没有点播播放地址的视频", async () => {
   await expect(
     new VideoAggregator([provider]).getDetails(encoded("bilibili", "empty")),
   ).rejects.toThrow("暂无可由 App 直接播放的点播媒体地址");
+});
+
+test("Bilibili 风控时用 YouTube 补源并保留原视频 ID", async () => {
+  const bilibiliProvider: VideoProvider = {
+    name: "bilibili",
+    async search(query, page, pageSize): Promise<SearchResult> {
+      return { query, page, pageSize, total: 0, items: [] };
+    },
+    async getDetails() {
+      throw new ApiError(
+        "PROVIDER_UNAVAILABLE",
+        "B站播放地址请求触发风控，请稍后重试。",
+        502,
+        {
+          reason: "bilibili_voucher",
+          fallbackSearchQuery: "风控视频完整测试",
+          title: "风控视频完整测试",
+          description: "B站元数据",
+          creator: "UP 主",
+          thumbnailUrl: "https://i.example.test/bili.jpg",
+          durationSeconds: 3600,
+          sourceUrl: "https://www.bilibili.com/video/BVFAIL",
+          year: "2026",
+        },
+      );
+    },
+    async getStreams() {
+      return [];
+    },
+  };
+  const youtubeProvider: VideoProvider = {
+    name: "youtube",
+    async search(query, page, pageSize): Promise<SearchResult> {
+      return {
+        query,
+        page,
+        pageSize,
+        total: 1,
+        items: [
+          {
+            ...summary("yt-match", true, "youtube"),
+            title: "风控视频完整测试",
+            durationSeconds: 3590,
+          },
+        ],
+      };
+    },
+    async getDetails(id) {
+      return details(id, [{ ...playableStream, id: "yt-stream" }], "youtube");
+    },
+    async getStreams() {
+      return [playableStream];
+    },
+  };
+
+  const result = await new VideoAggregator([
+    bilibiliProvider,
+    youtubeProvider,
+  ]).getDetails(encoded("bilibili", "BVFAIL"));
+
+  expect(result).toMatchObject({
+    id: encoded("bilibili", "BVFAIL"),
+    title: "风控视频完整测试",
+    description: "B站元数据",
+    year: "2026",
+    creators: ["UP 主"],
+    thumbnailUrl: "https://i.example.test/bili.jpg",
+    durationSeconds: 3600,
+    playbackOptions: [{ id: "yt-stream", mimeType: "video/mp4" }],
+  });
 });
 
 test("详情接口每次刷新播放地址避免过期缓存", async () => {
