@@ -40,6 +40,8 @@ type YtOEmbed = {
 const PROVIDER: ProviderName = "youtube";
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const DEFAULT_CLIENT_VERSION = "2.20240601.01.00";
+const MAX_CONTINUATION_PAGES = 120;
 
 // ── 工具函数 ──────────────────────────────────────────────────────
 
@@ -62,6 +64,76 @@ function extractYtInitialData(html: string): unknown | null {
   } catch {
     return null;
   }
+}
+
+function extractInnertubeApiKey(html: string): string | undefined {
+  return html.match(/"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"/)?.[1];
+}
+
+function extractInnertubeClientVersion(html: string): string {
+  return (
+    html.match(/"INNERTUBE_CLIENT_VERSION"\s*:\s*"([^"]+)"/)?.[1] ??
+    DEFAULT_CLIENT_VERSION
+  );
+}
+
+function extractSearchVideos(data: unknown): YtSearchVideo[] {
+  const videos: YtSearchVideo[] = [];
+  const seen = new Set<string>();
+  walkObjects(data, (record) => {
+    const video = record.videoRenderer as YtSearchVideo | undefined;
+    if (!video?.videoId || seen.has(video.videoId)) {
+      return;
+    }
+    seen.add(video.videoId);
+    videos.push(video);
+  });
+  return videos;
+}
+
+function extractContinuationToken(data: unknown): string | undefined {
+  let token: string | undefined;
+  walkObjects(data, (record) => {
+    if (token) {
+      return;
+    }
+    const continuation = record.continuationItemRenderer as
+      | {
+          continuationEndpoint?: {
+            continuationCommand?: { token?: string };
+          };
+        }
+      | undefined;
+    const endpoint = record.continuationEndpoint as
+      | {
+          continuationCommand?: { token?: string };
+        }
+      | undefined;
+    const command = record.continuationCommand as
+      | { token?: string }
+      | undefined;
+    token =
+      continuation?.continuationEndpoint?.continuationCommand?.token ??
+      endpoint?.continuationCommand?.token ??
+      command?.token;
+  });
+  return token;
+}
+
+function walkObjects(
+  value: unknown,
+  visitor: (record: Record<string, unknown>) => void,
+): void {
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => walkObjects(item, visitor));
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  visitor(record);
+  Object.values(record).forEach((child) => walkObjects(child, visitor));
 }
 
 /** 从 watch 页面 HTML 提取视频时长（第一条 lengthText 是视频本身的） */
@@ -124,54 +196,63 @@ export class YouTubeProvider implements VideoProvider {
   ): Promise<SearchResult> {
     const url = new URL("https://www.youtube.com/results");
     url.searchParams.set("search_query", query);
-    // YouTube 翻页用 cursor，简单起见只取第一页结果，然后 slice 模拟分页
     const html = await this.fetchText(url.toString());
     const data = extractYtInitialData(html);
     if (!data) {
       return { query, page, pageSize, total: 0, items: [] };
     }
 
-    const sections =
-      (
-        data as {
-          contents?: {
-            twoColumnSearchResultsRenderer?: {
-              primaryContents?: {
-                sectionListRenderer?: { contents?: unknown[] };
-              };
-            };
-          };
+    const requiredCount = page * pageSize;
+    const apiKey = extractInnertubeApiKey(html);
+    const clientVersion = extractInnertubeClientVersion(html);
+    const videos: YtSearchVideo[] = [];
+    const seen = new Set<string>();
+    const appendVideos = (source: unknown) => {
+      for (const video of extractSearchVideos(source)) {
+        if (!video.videoId || seen.has(video.videoId)) {
+          continue;
         }
-      )?.contents?.twoColumnSearchResultsRenderer?.primaryContents
-        ?.sectionListRenderer?.contents ?? [];
+        seen.add(video.videoId);
+        videos.push(video);
+      }
+    };
 
-    const videos = sections
-      .flatMap(
-        (section) =>
-          (
-            section as {
-              itemSectionRenderer?: { contents?: unknown[] };
-            }
-          )?.itemSectionRenderer?.contents ?? [],
-      )
-      .filter(
-        (item): item is { videoRenderer: YtSearchVideo } =>
-          !!(item as { videoRenderer?: YtSearchVideo }).videoRenderer?.videoId,
-      )
-      .map((item) => item.videoRenderer);
-
-    // 模拟分页
-    const start = (page - 1) * pageSize;
-    const vodVideos = videos.filter(
+    appendVideos(data);
+    let continuationToken = extractContinuationToken(data);
+    let continuationPages = 0;
+    let vodVideos = videos.filter(
       (video) => parseHms(video.lengthText?.simpleText) !== undefined,
     );
+    while (
+      apiKey &&
+      continuationToken &&
+      vodVideos.length < requiredCount &&
+      continuationPages < MAX_CONTINUATION_PAGES
+    ) {
+      const continuationData = await this.fetchContinuation(
+        apiKey,
+        clientVersion,
+        continuationToken,
+      );
+      appendVideos(continuationData);
+      continuationToken = extractContinuationToken(continuationData);
+      continuationPages += 1;
+      vodVideos = videos.filter(
+        (video) => parseHms(video.lengthText?.simpleText) !== undefined,
+      );
+    }
+
+    const start = (page - 1) * pageSize;
     const paged = vodVideos.slice(start, start + pageSize);
+    const hasMore = Boolean(apiKey && continuationToken);
 
     return {
       query,
       page,
       pageSize,
-      total: vodVideos.length,
+      total: hasMore
+        ? Math.max(vodVideos.length, start + paged.length + 1)
+        : vodVideos.length,
       items: paged.map((v) => this.searchItemToSummary(v)),
     };
   }
@@ -283,6 +364,53 @@ export class YouTubeProvider implements VideoProvider {
       throw new ApiError(
         "PROVIDER_UNAVAILABLE",
         "无法连接 YouTube oEmbed API。",
+        502,
+        error,
+      );
+    }
+  }
+
+  private async fetchContinuation(
+    apiKey: string,
+    clientVersion: string,
+    token: string,
+  ): Promise<unknown> {
+    const url = new URL("https://www.youtube.com/youtubei/v1/search");
+    url.searchParams.set("key", apiKey);
+    try {
+      const resp = await this.fetcher(url.toString(), {
+        method: "POST",
+        headers: {
+          "User-Agent": USER_AGENT,
+          "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+          "Content-Type": "application/json",
+          Origin: "https://www.youtube.com",
+          Referer: "https://www.youtube.com/results",
+        },
+        body: JSON.stringify({
+          context: {
+            client: {
+              clientName: "WEB",
+              clientVersion,
+            },
+          },
+          continuation: token,
+        }),
+      });
+      if (!resp.ok) {
+        throw new ApiError(
+          "PROVIDER_UNAVAILABLE",
+          "YouTube 翻页接口返回了错误响应。",
+          502,
+          { status: resp.status },
+        );
+      }
+      return await resp.json();
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      throw new ApiError(
+        "PROVIDER_UNAVAILABLE",
+        "无法连接 YouTube 翻页接口。",
         502,
         error,
       );

@@ -276,7 +276,6 @@ export class BilibiliProvider implements VideoProvider {
     const { include, excludeTerms } = parseQuery(query);
     const dotaQuery = isDotaQuery(include || query);
 
-    // 构建搜索参数
     const params: Record<string, string> = {
       search_type: "video",
       keyword: include || query,
@@ -284,10 +283,6 @@ export class BilibiliProvider implements VideoProvider {
       page_size: String(Math.min(pageSize, 50)),
       order: "totalrank",
     };
-    if (!dotaQuery) {
-      // duration=4 → ≥60 分钟,过滤掉影视/纪录片里的解说/片段等短视频。
-      params.duration = "4";
-    }
 
     // wbi 签名
     const { imgKey, subKey } = await this.ensureWbiKeys();

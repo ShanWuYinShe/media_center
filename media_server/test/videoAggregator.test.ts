@@ -124,3 +124,46 @@ test("详情接口拒绝没有点播播放地址的视频", async () => {
     new VideoAggregator([provider]).getDetails(encoded("bilibili", "empty")),
   ).rejects.toThrow("暂无可由 App 直接播放的点播媒体地址");
 });
+
+test("搜索会扫描来源后续页以填满公开分页", async () => {
+  const provider: VideoProvider = {
+    name: "bilibili",
+    async search(query, page, pageSize): Promise<SearchResult> {
+      const itemsByPage: Record<number, VideoSummary[]> = {
+        1: [summary("no-stream-1", true), summary("no-stream-2", true)],
+        2: [
+          summary("playable-1", true),
+          summary("playable-2", true),
+          summary("playable-3", true),
+          summary("playable-4", true),
+        ],
+      };
+      return {
+        query,
+        page,
+        pageSize,
+        total: 6,
+        items: itemsByPage[page] ?? [],
+      };
+    },
+    async getDetails(id) {
+      return details(id, id.startsWith("playable") ? [playableStream] : []);
+    },
+    async getStreams() {
+      return [playableStream];
+    },
+  };
+  const aggregator = new VideoAggregator([provider]);
+
+  const page1 = await aggregator.search("测试", 1, 2);
+  const page2 = await aggregator.search("测试", 2, 2);
+
+  expect(page1.items.map((item) => item.id)).toEqual([
+    encoded("bilibili", "playable-1"),
+    encoded("bilibili", "playable-2"),
+  ]);
+  expect(page2.items.map((item) => item.id)).toEqual([
+    encoded("bilibili", "playable-3"),
+    encoded("bilibili", "playable-4"),
+  ]);
+});

@@ -55,6 +55,89 @@ const SEARCH_HTML = `
 })};</script></head><body></body></html>
 `;
 
+const SEARCH_HTML_WITH_CONTINUATION = `
+<html><head>
+<script>ytcfg.set(${JSON.stringify({
+  INNERTUBE_API_KEY: "test-api-key",
+  INNERTUBE_CLIENT_VERSION: "test-client-version",
+})});</script>
+<script>var ytInitialData = ${JSON.stringify({
+  contents: {
+    twoColumnSearchResultsRenderer: {
+      primaryContents: {
+        sectionListRenderer: {
+          contents: [
+            {
+              itemSectionRenderer: {
+                contents: [
+                  {
+                    videoRenderer: {
+                      videoId: "page1vid1",
+                      title: { runs: [{ text: "Page 1 Video 1" }] },
+                      lengthText: { simpleText: "12:00" },
+                      ownerText: { runs: [{ text: "频道 A" }] },
+                    },
+                  },
+                  {
+                    videoRenderer: {
+                      videoId: "page1vid2",
+                      title: { runs: [{ text: "Page 1 Video 2" }] },
+                      lengthText: { simpleText: "13:00" },
+                      ownerText: { runs: [{ text: "频道 A" }] },
+                    },
+                  },
+                ],
+              },
+            },
+            {
+              continuationItemRenderer: {
+                continuationEndpoint: {
+                  continuationCommand: { token: "TOKEN_1" },
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+  },
+})};</script>
+</head><body></body></html>
+`;
+
+const CONTINUATION_JSON = {
+  onResponseReceivedCommands: [
+    {
+      appendContinuationItemsAction: {
+        continuationItems: [
+          {
+            itemSectionRenderer: {
+              contents: [
+                {
+                  videoRenderer: {
+                    videoId: "page2vid1",
+                    title: { runs: [{ text: "Page 2 Video 1" }] },
+                    lengthText: { simpleText: "14:00" },
+                    ownerText: { runs: [{ text: "频道 B" }] },
+                  },
+                },
+                {
+                  videoRenderer: {
+                    videoId: "page2vid2",
+                    title: { runs: [{ text: "Page 2 Video 2" }] },
+                    lengthText: { simpleText: "15:00" },
+                    ownerText: { runs: [{ text: "频道 B" }] },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+};
+
 const OEMBED_JSON = {
   title: "Test Video Detail",
   author_name: "Detail Channel",
@@ -171,6 +254,33 @@ test("搜索分页模拟", async () => {
   const page2 = await provider.search("测试", 2, 1);
   expect(page2.items).toHaveLength(1);
   expect(page2.items[0].id).toBe("testvid2");
+});
+
+test("搜索使用 YouTube continuation 获取后续页", async () => {
+  const calls: Array<{ url: string; method?: string; body?: string }> = [];
+  const provider = new YouTubeProvider(async (input, init) => {
+    calls.push({
+      url: String(input),
+      method: init?.method,
+      body: init?.body?.toString(),
+    });
+    if (String(input).includes("youtubei/v1/search")) {
+      return mockJson(CONTINUATION_JSON);
+    }
+    return mockHtml(SEARCH_HTML_WITH_CONTINUATION);
+  }, VOD_EXTRACTOR);
+
+  const result = await provider.search("测试", 2, 2);
+
+  expect(result.items.map((item) => item.id)).toEqual([
+    "page2vid1",
+    "page2vid2",
+  ]);
+  expect(calls).toHaveLength(2);
+  expect(calls[1].url).toContain("key=test-api-key");
+  expect(calls[1].method).toBe("POST");
+  expect(calls[1].body).toContain("TOKEN_1");
+  expect(calls[1].body).toContain("test-client-version");
 });
 
 test("getDetails 通过 oEmbed + watch 页面获取详情", async () => {

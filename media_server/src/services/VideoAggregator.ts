@@ -11,11 +11,12 @@ import type {
 } from "../types.js";
 import type { VideoProvider } from "../providers/VideoProvider.js";
 
+const PROVIDER_PAGE_SIZE = 50;
+const PROVIDER_CANDIDATE_FACTOR = 4;
+const MIN_PROVIDER_CANDIDATES = 40;
+const MIN_PROVIDER_PAGES = 2;
+
 export class VideoAggregator {
-  private readonly searchCache = new LRUCache<string, PublicSearchResult>({
-    max: 1_000,
-    ttl: 15 * 60_000,
-  });
   private readonly detailCache = new LRUCache<string, PublicVideoDetails>({
     max: 5_000,
     ttl: 60 * 60_000,
@@ -30,16 +31,48 @@ export class VideoAggregator {
     category?: ContentCategory,
   ): Promise<PublicSearchResult> {
     const expandedQuery = [category?.query, query].filter(Boolean).join(" ");
-    const cacheKey = `${category?.id ?? "free"}:${expandedQuery}:${page}:${pageSize}`;
-    const cached = this.searchCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
+    const items = await this.searchItems(
+      expandedQuery,
+      page * pageSize,
+      category,
+    );
+    const pageStart = (page - 1) * pageSize;
+    const pageEnd = page * pageSize;
 
-    const providerPageSize = category ? Math.min(pageSize * 6, 40) : pageSize;
+    return {
+      query,
+      category: category ? toPublicCategory(category) : undefined,
+      page,
+      pageSize,
+      total: items.length,
+      items: items.slice(pageStart, pageEnd),
+    };
+  }
+
+  async searchItems(
+    expandedQuery: string,
+    targetCount: number,
+    category?: ContentCategory,
+  ): Promise<PublicVideoSummary[]> {
+    if (targetCount <= 0) {
+      return [];
+    }
+    const rawCandidateTarget = Math.max(
+      MIN_PROVIDER_CANDIDATES,
+      targetCount * PROVIDER_CANDIDATE_FACTOR,
+    );
+    const maxProviderPages = Math.max(
+      MIN_PROVIDER_PAGES,
+      Math.ceil(rawCandidateTarget / PROVIDER_PAGE_SIZE),
+    );
     const settledResults = await Promise.allSettled(
       this.providers.map((provider) =>
-        provider.search(expandedQuery, page, providerPageSize),
+        this.collectProviderSearchResult(
+          provider,
+          expandedQuery,
+          rawCandidateTarget,
+          maxProviderPages,
+        ),
       ),
     );
     const results = settledResults.flatMap((result) =>
@@ -52,27 +85,13 @@ export class VideoAggregator {
         502,
       );
     }
-    const playableGroups: PublicVideoSummary[][] = [];
-    for (const result of results) {
-      const remaining = pageSize - playableGroups.flat().length;
-      if (remaining <= 0) {
-        break;
-      }
-      playableGroups.push(
-        await this.resolvePlayableSummaries(result, remaining, category),
-      );
-    }
-    const items = interleave(playableGroups, pageSize);
-    const merged: PublicSearchResult = {
-      query,
-      category: category ? toPublicCategory(category) : undefined,
-      page,
-      pageSize,
-      total: playableGroups.reduce((total, group) => total + group.length, 0),
-      items,
-    };
-    this.searchCache.set(cacheKey, merged);
-    return merged;
+    const playableGroups = await this.resolvePlayableGroups(
+      results,
+      targetCount,
+      Math.min(targetCount, PROVIDER_PAGE_SIZE),
+      category,
+    );
+    return interleave(playableGroups, targetCount);
   }
 
   async getDetails(videoId: string): Promise<PublicVideoDetails> {
@@ -92,29 +111,154 @@ export class VideoAggregator {
     return (await this.getDetails(videoId)).playbackOptions;
   }
 
-  private async resolvePlayableSummaries(
-    result: SearchResult,
-    limit: number,
+  private async collectProviderSearchResult(
+    provider: VideoProvider,
+    query: string,
+    rawCandidateTarget: number,
+    maxProviderPages: number,
+  ): Promise<SearchResult> {
+    const items: SearchResult["items"] = [];
+    const seen = new Set<string>();
+    let total = 0;
+    let emptyPages = 0;
+    let noNewPages = 0;
+
+    for (
+      let providerPage = 1;
+      providerPage <= maxProviderPages;
+      providerPage++
+    ) {
+      const result = await provider.search(
+        query,
+        providerPage,
+        providerPage === 1
+          ? Math.max(PROVIDER_PAGE_SIZE, rawCandidateTarget)
+          : PROVIDER_PAGE_SIZE,
+      );
+      total = Math.max(total, result.total);
+      if (result.items.length === 0) {
+        emptyPages += 1;
+      } else {
+        emptyPages = 0;
+      }
+
+      let newItems = 0;
+      for (const item of result.items) {
+        const key = `${item.provider}:${item.id}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        items.push(item);
+        newItems += 1;
+      }
+      if (newItems === 0) {
+        noNewPages += 1;
+      } else {
+        noNewPages = 0;
+      }
+
+      if (items.length >= rawCandidateTarget) {
+        break;
+      }
+      if (total > 0 && items.length >= total) {
+        break;
+      }
+      if (emptyPages >= 2) {
+        break;
+      }
+      if (noNewPages >= 2) {
+        break;
+      }
+    }
+
+    return {
+      query,
+      page: 1,
+      pageSize: items.length,
+      total: Math.max(total, items.length),
+      items,
+    };
+  }
+
+  private async resolvePlayableGroups(
+    results: SearchResult[],
+    targetCount: number,
+    pageSize: number,
     category?: ContentCategory,
+  ): Promise<PublicVideoSummary[][]> {
+    const rankedCandidates = results.map((result) =>
+      result.items
+        .filter((item) => item.playable && item.videoKind === "vod")
+        .map((item) => ({ item, score: relevanceScore(item, category) }))
+        .filter(({ score }) => score >= 0)
+        .sort((a, b) => b.score - a.score)
+        .map(({ item }) => item),
+    );
+    const offsets = rankedCandidates.map(() => 0);
+    const exhausted = rankedCandidates.map(
+      (candidates) => candidates.length === 0,
+    );
+    const groups: PublicVideoSummary[][] = rankedCandidates.map(() => []);
+    const chunkSize = Math.max(1, Math.ceil(pageSize / results.length));
+
+    while (interleave(groups, targetCount).length < targetCount) {
+      let progressed = false;
+      const chunks = await Promise.all(
+        rankedCandidates.map((candidates, index) => {
+          if (exhausted[index]) {
+            return Promise.resolve([]);
+          }
+          const start = offsets[index];
+          const end = Math.min(start + chunkSize, candidates.length);
+          const slice = candidates.slice(start, end);
+          offsets[index] = end;
+          if (end >= candidates.length) {
+            exhausted[index] = true;
+          }
+          if (slice.length === 0) {
+            return Promise.resolve([]);
+          }
+          progressed = true;
+          return this.resolveCandidateSummaries(slice);
+        }),
+      );
+
+      chunks.forEach((chunk, index) => {
+        if (chunk.length > 0) {
+          groups[index] = groups[index].concat(chunk);
+        }
+      });
+
+      if (!progressed || exhausted.every(Boolean)) {
+        break;
+      }
+    }
+
+    return groups;
+  }
+
+  private async resolveCandidateSummaries(
+    candidates: SearchResult["items"],
   ): Promise<PublicVideoSummary[]> {
-    const candidates = result.items
-      .filter((item) => item.playable && item.videoKind === "vod")
-      .map((item) => ({ item, score: relevanceScore(item, category) }))
-      .filter(({ score }) => score >= 0)
-      .sort((a, b) => b.score - a.score)
-      .map(({ item }) => item)
-      .slice(0, limit);
     const resolved = await Promise.allSettled(
       candidates.map(async (item) => {
+        // 先查 60 分钟详情缓存:点播解析(尤其 YouTube 走 yt-dlp)非常昂贵,
+        // 搜索/翻页/不同分类间常命中同一视频。命中缓存可直接复用已解析结果,
+        // 避免重复拉起 yt-dlp —— 这是冷启动首屏变慢的主要来源之一。
+        const videoId = encodeVideoId(item.provider, item.id);
+        const cachedDetails = this.detailCache.get(videoId);
+        if (cachedDetails) {
+          return cachedDetails.playbackOptions.length > 0
+            ? publicDetailsToSummary(cachedDetails)
+            : undefined;
+        }
         const details = await this.provider(item.provider).getDetails(item.id);
         if (details.videoKind !== "vod" || details.streams.length === 0) {
           return undefined;
         }
         const publicDetails = this.toPublicDetails(details);
-        this.detailCache.set(
-          encodeVideoId(details.provider, details.id),
-          publicDetails,
-        );
+        this.detailCache.set(videoId, publicDetails);
         return this.toPublicSummary(details);
       }),
     );
@@ -189,6 +333,15 @@ function toPublicCategory(category: ContentCategory) {
   };
 }
 
+/** 从缓存的公开详情还原公开摘要(去掉 playbackOptions)。 */
+function publicDetailsToSummary(
+  details: PublicVideoDetails,
+): PublicVideoSummary {
+  const { playbackOptions: _omit, ...summary } = details;
+  void _omit;
+  return summary;
+}
+
 function relevanceScore(
   item: SearchResult["items"][number],
   category?: ContentCategory,
@@ -256,9 +409,36 @@ function relevanceScore(
   }
   if (
     category.id === "red-classic" &&
-    !["红色", "长征", "抗战", "抗日", "解放战争", "革命", "红军", "战争"].some(
-      (term) => text.includes(term),
-    )
+    ![
+      "红色",
+      "长征",
+      "抗战",
+      "抗日",
+      "解放",
+      "解放战争",
+      "革命",
+      "红军",
+      "战争",
+      "抗美援朝",
+      "志愿军",
+      "八路军",
+      "新四军",
+      "游击",
+      "地道战",
+      "地雷战",
+      "上甘岭",
+      "英雄儿女",
+      "闪闪的红星",
+      "铁道游击队",
+      "董存瑞",
+      "狼牙山",
+      "小兵张嘎",
+      "南征北战",
+      "红色娘子军",
+      "智取威虎山",
+      "林海雪原",
+      "老电影",
+    ].some((term) => text.includes(term))
   ) {
     return -1;
   }

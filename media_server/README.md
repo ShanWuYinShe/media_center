@@ -11,12 +11,14 @@
 
 - `GET /health`
 - `GET /api/categories`
+- `GET /api/categories/:id/videos?page=1&pageSize=20`
 - `GET /api/search?q=关键词&page=1&pageSize=20`
-- `GET /api/search?category=documentaries&page=1&pageSize=20`
 - `GET /api/videos/:id`
 - `GET /api/videos/:id/playback`
 
-`/api/search` 会先做后端点播播放地址校验，只公开后续能通过 `/api/videos/:id/playback` 拿到 `kind=vod` 的结果。App 不需要也不应该处理 provider、sourceUrl、网页播放或外部打开。
+分类浏览走 `/api/categories/:id/videos`，结果由服务端定期维护缓存快照，默认预刷新 100 页；客户端请求超过当前缓存深度时，服务端会继续扩展该分类的视频流。
+
+`/api/search` 只用于搜索页的临时关键词搜索，不缓存响应。分类和搜索接口都会先做后端点播播放地址校验，只公开后续能通过 `/api/videos/:id/playback` 拿到 `kind=vod` 的结果。App 不需要也不应该处理 provider、sourceUrl、网页播放或外部打开。
 
 内置一级专区为电影、电视剧、纪录片、红色经典和 Dota 专区。Dota 分类以 Dota1 / 魔兽争霸 3 / DotA Allstars 录像和完整对局为主，兼顾 Dota2 / TI。
 

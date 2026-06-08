@@ -7,26 +7,32 @@ import { ApiError } from "./errors.js";
 import { BilibiliProvider } from "./providers/BilibiliProvider.js";
 import { YouTubeProvider } from "./providers/YouTubeProvider.js";
 import type { VideoProvider } from "./providers/VideoProvider.js";
+import { CategoryResultCache } from "./services/CategoryResultCache.js";
 import { HttpResponseCache } from "./services/HttpResponseCache.js";
 import { VideoAggregator } from "./services/VideoAggregator.js";
 
 const searchSchema = z.object({
-  q: z.string().trim().max(120).optional().default(""),
-  category: z.string().trim().max(80).optional(),
+  q: z.string().trim().min(1).max(120),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(40).default(20),
 });
 
+const categoryParamsSchema = z.object({ id: z.string().trim().min(1).max(80) });
+const pageQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(40).default(20),
+});
 const videoParamsSchema = z.object({ id: z.string().min(1) });
 const assetQuerySchema = z.object({ url: z.string().url() });
 
 export function buildServer() {
-  const app = Fastify({ logger: true });
+  const app = Fastify({ logger: true, trustProxy: true });
   const providers: VideoProvider[] = [
     new BilibiliProvider(),
     new YouTubeProvider(),
   ];
   const aggregator = new VideoAggregator(providers);
+  const categoryCache = new CategoryResultCache(aggregator, contentCategories);
   const responseCache = new HttpResponseCache();
 
   app.register(cors, { origin: true });
@@ -68,25 +74,24 @@ export function buildServer() {
     })),
   }));
 
-  app.get("/api/search", async (request) => {
-    const query = searchSchema.parse(request.query);
-    const category = findContentCategory(query.category);
-    if (query.category && !category) {
+  app.get("/api/categories/:id/videos", async (request) => {
+    const params = categoryParamsSchema.parse(request.params);
+    const query = pageQuerySchema.parse(request.query);
+    const category = findContentCategory(params.id);
+    if (!category) {
       throw new ApiError("NOT_FOUND", "不支持的内容分类。", 404);
     }
-    if (!query.q && !category) {
-      throw new ApiError(
-        "BAD_REQUEST",
-        "关键词或内容分类至少需要提供一个。",
-        400,
-      );
-    }
-    const result = await aggregator.search(
-      query.q,
+    const result = await categoryCache.getPage(
+      category,
       query.page,
       query.pageSize,
-      category,
     );
+    return rewriteUrls(result, request);
+  });
+
+  app.get("/api/search", async (request) => {
+    const query = searchSchema.parse(request.query);
+    const result = await aggregator.search(query.q, query.page, query.pageSize);
     return rewriteUrls(result, request);
   });
 
@@ -173,7 +178,7 @@ export function buildServer() {
     return reply.send(upstreamStream);
   });
 
-  return app;
+  return { app, categoryCache };
 }
 
 function upstreamRequestHeaders(
