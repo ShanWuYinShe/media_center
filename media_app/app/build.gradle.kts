@@ -13,7 +13,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.mediacenter"
-        minSdk = 26
+        minSdk = 19
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
@@ -86,6 +86,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
     implementation("androidx.media3:media3-ui:$media3Version")
     implementation("androidx.tv:tv-material:1.0.0")
     implementation("io.coil-kt:coil-compose:2.7.0")

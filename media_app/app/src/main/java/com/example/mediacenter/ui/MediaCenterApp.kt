@@ -1354,7 +1354,7 @@ private const val PlaybackUserAgent =
 
 private fun playbackRequestHeaders(url: String): Map<String, String> {
     val headers = mutableMapOf(
-        "Accept" to "video/*,*/*;q=0.8",
+        "Accept" to "*/*",
         "Accept-Language" to "zh-CN,zh;q=0.9,en;q=0.8",
     )
     val host = url.toHttpUrlOrNull()?.host ?: return headers
@@ -1365,6 +1365,15 @@ private fun playbackRequestHeaders(url: String): Map<String, String> {
             headers["Referer"] = "https://www.youtube.com"
     }
     return headers
+}
+
+private fun playbackMimeType(mimeType: String?): String {
+    return when (mimeType?.lowercase()) {
+        "application/dash+xml", "application/mpd", "application/dash" -> MimeTypes.APPLICATION_MPD
+        "video/webm" -> MimeTypes.VIDEO_WEBM
+        "video/mp4", null -> MimeTypes.VIDEO_MP4
+        else -> mimeType
+    }
 }
 
 private fun String.isHostOrSubdomain(domain: String): Boolean {
@@ -1403,10 +1412,7 @@ private fun PlayerScreen(
                 setMediaItem(
                     MediaItem.Builder()
                         .setUri(playbackUrl)
-                        .setMimeType(
-                            if (stream.mimeType == "video/webm") MimeTypes.VIDEO_WEBM
-                            else MimeTypes.VIDEO_MP4
-                        )
+                        .setMimeType(playbackMimeType(stream.mimeType))
                         .build(),
                 )
                 repeatMode = Player.REPEAT_MODE_OFF
