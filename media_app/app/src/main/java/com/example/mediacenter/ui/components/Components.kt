@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
@@ -61,6 +63,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -132,18 +136,18 @@ fun AppleTvTopBar(
 @Composable
 private fun SearchPill(onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
-    val bg = if (focused) Color.White else AppleTvColors.GlassFill
-    val textColor = if (focused) AppleTvColors.DeepSpace else AppleTvColors.TextPrimary
+    val bg = if (focused) AppleTvColors.AppleBlue else AppleTvColors.GlassFill
+    val textColor = AppleTvColors.TextPrimary
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .height(54.dp)
+            .requiredHeight(54.dp)
             .clip(AppleTvShapes.Chip)
             .background(bg)
             .border(
-                width = 1.dp,
-                color = if (focused) Color.Transparent else AppleTvColors.GlassBorder,
+                width = if (focused) 2.5.dp else 1.dp,
+                color = if (focused) AppleTvColors.GlassBorderFocused else AppleTvColors.GlassBorder,
                 shape = AppleTvShapes.Chip,
             )
             .tvFocusableLite(
@@ -162,6 +166,8 @@ private fun SearchPill(onClick: () -> Unit) {
             color = textColor,
             fontSize = 16.sp,
             fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -185,6 +191,43 @@ fun SearchIcon(color: Color, size: androidx.compose.ui.unit.Dp) {
             end = androidx.compose.ui.geometry.Offset(this.size.width * 0.92f, this.size.height * 0.92f),
             strokeWidth = stroke,
             cap = androidx.compose.ui.graphics.StrokeCap.Round,
+        )
+    }
+}
+
+@Composable
+fun PlayGlyph(color: Color, size: androidx.compose.ui.unit.Dp) {
+    androidx.compose.foundation.Canvas(modifier = Modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val path = androidx.compose.ui.graphics.Path().apply {
+            moveTo(w * 0.28f, h * 0.18f)
+            lineTo(w * 0.28f, h * 0.82f)
+            lineTo(w * 0.82f, h * 0.50f)
+            close()
+        }
+        drawPath(path = path, color = color)
+    }
+}
+
+@Composable
+fun PauseGlyph(color: Color, size: androidx.compose.ui.unit.Dp) {
+    androidx.compose.foundation.Canvas(modifier = Modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val barWidth = w * 0.22f
+        val radius = androidx.compose.ui.geometry.CornerRadius(w * 0.05f, w * 0.05f)
+        drawRoundRect(
+            color = color,
+            topLeft = androidx.compose.ui.geometry.Offset(w * 0.24f, h * 0.18f),
+            size = androidx.compose.ui.geometry.Size(barWidth, h * 0.64f),
+            cornerRadius = radius,
+        )
+        drawRoundRect(
+            color = color,
+            topLeft = androidx.compose.ui.geometry.Offset(w * 0.54f, h * 0.18f),
+            size = androidx.compose.ui.geometry.Size(barWidth, h * 0.64f),
+            cornerRadius = radius,
         )
     }
 }
@@ -232,7 +275,7 @@ fun SearchModeTopBar(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .weight(1f)
-                .height(54.dp)
+                .requiredHeight(54.dp)
                 .clip(AppleTvShapes.Chip)
                 .background(bg)
                 .border(
@@ -280,12 +323,12 @@ private fun ClearButton(onClick: () -> Unit) {
 
     Box(
         modifier = Modifier
-            .size(54.dp)
+            .requiredSize(54.dp)
             .clip(AppleTvShapes.Chip)
             .background(bg)
             .border(
-                width = 1.dp,
-                color = if (focused) Color.Transparent else AppleTvColors.GlassBorder,
+                width = if (focused) 2.5.dp else 1.dp,
+                color = if (focused) AppleTvColors.GlassBorderFocused else AppleTvColors.GlassBorder,
                 shape = AppleTvShapes.Chip,
             )
             .tvFocusableLite(
@@ -342,30 +385,17 @@ fun CategoryChip(
     val interactionSource = remember { MutableInteractionSource() }
     var focused by remember { mutableStateOf(false) }
 
-    // 视觉规则(对照 Apple Music tab 真实行为):
-    //   焦点态要**强于** selected,因为焦点代表"用户当前正在操作的位置",
-    //   selected 是"被动标记"哪个是当前分类。
-    //   - 焦点 + selected  →  Apple Blue 实心 + scale 1.10(顶配:已有颜色 + 抬升)
-    //   - 焦点 + 未选中  →  **白底反白** + scale 1.10(颜色突变,强提示)
-    //   - 失焦 + selected  →  Apple Blue(无缩放,只是"我是当前分类"标记)
-    //   - 失焦 + 未选中  →  玻璃灰
+    // 焦点态全 app 统一:Apple Blue 背景 + 白字 + 明显外框。
     val bg = when {
-        focused && !selected -> Color.White
+        focused -> AppleTvColors.AppleBlue
         selected -> AppleTvColors.AppleBlue
         else -> AppleTvColors.GlassFill
     }
     val textColor = when {
-        focused && !selected -> AppleTvColors.DeepSpace
+        focused -> AppleTvColors.TextPrimary
         selected -> AppleTvColors.TextPrimary
         else -> AppleTvColors.TextSecondary
     }
-    // 焦点视觉规则(全 app 统一 — 任何 chip 焦点态视觉一致):
-    //   - 不再使用 scale/elevation 区分(selected 跟未选中),只靠:
-    //       · 白边 2.5dp (焦点永远有,失焦 0)
-    //       · 底色 (焦点+未选中 → 白底反白,焦点+selected → Apple Blue,失焦未选 → 玻璃灰,失焦 selected → Apple Blue)
-    //   - 焦点 + selected 跟 焦点 + 未选中 视觉规则相同:都有白边,只是底色不同。
-    //   - 这避免了"国产电影 selected + 焦点"看起来"永远焦点"问题,
-    //     因为它跟其他失焦 chip **大小一致**,只颜色不同。
     val focusedScale = 1.0f
     val focusedElevation = 0.dp
     // 边框三态:
@@ -394,7 +424,7 @@ fun CategoryChip(
 
     Box(
         modifier = modifier
-            .height(44.dp)
+            .requiredHeight(44.dp)
             .clip(AppleTvShapes.Chip)
             .background(bg)
             .border(width = borderWidth, color = borderColor, shape = AppleTvShapes.Chip)
@@ -421,6 +451,8 @@ fun CategoryChip(
             fontSize = 15.sp,
             fontWeight = if (selected || focused) FontWeight.SemiBold else FontWeight.Medium,
             letterSpacing = (-0.1).sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         // 已选中的 chip:始终在底部显示 Apple Blue 指示条
         if (selected) {
@@ -506,7 +538,7 @@ fun PosterCard(
     val interactionSource = remember { MutableInteractionSource() }
     var focused by remember { mutableStateOf(false) }
 
-    val focusedScale = 1.08f
+    val focusedScale = 1.0f
     val cardColor by animateColorAsState(
         targetValue = if (focused) AppleTvColors.GlassBorderFocused
                       else Color.Transparent,
@@ -586,7 +618,7 @@ fun PosterCard(
                 Text(
                     text = video.title,
                     color = Color.White,
-                    fontSize = if (focused) 14.sp else 13.sp,
+                    fontSize = 13.sp,
                     fontWeight = if (focused) FontWeight.Bold else FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -711,6 +743,8 @@ fun PosterGrid(
     canLoadMore: Boolean,
     loadingMore: Boolean,
     onLoadMore: () -> Unit,
+    onPrefetchVisibleDetails: (List<VideoSummary>) -> Unit = {},
+    onCancelVisibleDetailsPrefetch: () -> Unit = {},
     modifier: Modifier = Modifier,
     state: LazyGridState = rememberLazyGridState(),
     pendingFocusVideoId: String? = null,
@@ -740,6 +774,13 @@ fun PosterGrid(
         }
     }
     val showEndOfList = !canLoadMore && !loadingMore && items.isNotEmpty() && endReached
+    val visibleVideos by remember(items, state) {
+        derivedStateOf {
+            state.layoutInfo.visibleItemsInfo
+                .mapNotNull { item -> items.getOrNull(item.index) }
+                .distinctBy { it.id }
+        }
+    }
 
     LaunchedEffect(shouldLoadMore) {
         if (shouldLoadMore) {
@@ -750,6 +791,17 @@ fun PosterGrid(
         if (endVisible) {
             endReached = true
         }
+    }
+    LaunchedEffect(state.isScrollInProgress) {
+        if (state.isScrollInProgress) {
+            onCancelVisibleDetailsPrefetch()
+        }
+    }
+    LaunchedEffect(visibleVideos, state.isScrollInProgress) {
+        if (state.isScrollInProgress || visibleVideos.isEmpty()) {
+            return@LaunchedEffect
+        }
+        onPrefetchVisibleDetails(visibleVideos)
     }
 
     Column(modifier = modifier.fillMaxSize()) {
@@ -986,7 +1038,7 @@ private fun WarningGlyph(size: androidx.compose.ui.unit.Dp) {
 }
 
 // =====================================================================
-// PrimaryPillButton:胶囊形主按钮(Apple Blue 实心,焦点变白)
+// PrimaryPillButton:胶囊形主按钮(焦点态 Apple Blue + 白字 + 外框)
 // =====================================================================
 
 @Composable
@@ -994,35 +1046,52 @@ fun PrimaryPillButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    height: Dp = 48.dp,
+    horizontalPadding: Dp = 30.dp,
+    textSize: TextUnit = 16.sp,
+    focusedScale: Float = 1.06f,
+    leadingIcon: @Composable ((Color) -> Unit)? = null,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     var focused by remember { mutableStateOf(false) }
-    // 焦点态使用强调色:Apple Blue 实心 + 白字(焦点 = 当前操作位置,用最醒目的配色);
-    // 失焦态:白底 + 深色字(高对比,文字始终清晰可读)。
     val bg = if (focused) AppleTvColors.AppleBlue else Color.White
     val textColor = if (focused) AppleTvColors.TextPrimary else AppleTvColors.DeepSpace
+    val borderColor = if (focused) AppleTvColors.GlassBorderFocused else Color.Transparent
+    val borderWidth = if (focused) 2.5.dp else 0.dp
 
     Box(
         modifier = modifier
-            .height(48.dp)
+            .requiredHeight(height)
             .clip(AppleTvShapes.Button)
             .background(bg)
+            .border(borderWidth, borderColor, AppleTvShapes.Button)
             .tvFocusableLite(
                 shape = AppleTvShapes.Button,
-                focusedScale = 1.06f,
+                focusedScale = focusedScale,
                 interactionSource = interactionSource,
                 onClick = onClick,
                 onFocusChange = { focused = it },
             )
-            .padding(horizontal = 30.dp),
+            .padding(horizontal = horizontalPadding),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = text,
-            color = textColor,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            if (leadingIcon != null) {
+                leadingIcon(textColor)
+                Spacer(Modifier.width(10.dp))
+            }
+            Text(
+                text = text,
+                color = textColor,
+                fontSize = textSize,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -1051,14 +1120,15 @@ fun SecondaryPillButton(
     val skipFirstFocus = remember { mutableStateOf(true) }
     val bg = if (focused) AppleTvColors.AppleBlue else AppleTvColors.GlassFill
     val textColor = if (focused) AppleTvColors.TextPrimary else AppleTvColors.TextSecondary
-    val borderColor = if (focused) Color.Transparent else AppleTvColors.GlassBorder
+    val borderColor = if (focused) AppleTvColors.GlassBorderFocused else AppleTvColors.GlassBorder
+    val borderWidth = if (focused) 2.5.dp else 1.dp
 
     Box(
         modifier = modifier
-            .height(48.dp)
+            .requiredHeight(48.dp)
             .clip(AppleTvShapes.Button)
             .background(bg)
-            .border(1.dp, borderColor, AppleTvShapes.Button)
+            .border(borderWidth, borderColor, AppleTvShapes.Button)
             .tvFocusableLite(
                 shape = AppleTvShapes.Button,
                 focusedScale = 1.06f,
@@ -1084,6 +1154,70 @@ fun SecondaryPillButton(
             fontSize = 16.sp,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+fun SelectablePillButton(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val bg = when {
+        focused -> AppleTvColors.AppleBlue
+        selected -> AppleTvColors.AppleBlue
+        else -> AppleTvColors.GlassFill
+    }
+    val textColor = when {
+        focused -> AppleTvColors.TextPrimary
+        selected -> AppleTvColors.TextPrimary
+        else -> AppleTvColors.TextSecondary
+    }
+    val borderColor by animateColorAsState(
+        targetValue = when {
+            focused -> AppleTvColors.GlassBorderFocused
+            selected -> AppleTvColors.AppleBlue
+            else -> AppleTvColors.GlassBorder
+        },
+        animationSpec = tween(durationMillis = 180),
+        label = "selectablePillBorder",
+    )
+    val borderWidth by animateDpAsState(
+        targetValue = when {
+            focused -> 2.5.dp
+            selected -> 1.5.dp
+            else -> 1.dp
+        },
+        animationSpec = tween(durationMillis = 180),
+        label = "selectablePillBorderWidth",
+    )
+
+    Box(
+        modifier = modifier
+            .requiredHeight(44.dp)
+            .clip(AppleTvShapes.Button)
+            .background(bg)
+            .border(borderWidth, borderColor, AppleTvShapes.Button)
+            .tvFocusableLite(
+                shape = AppleTvShapes.Button,
+                focusedScale = 1.04f,
+                onClick = onClick,
+                onFocusChange = { focused = it },
+            )
+            .padding(horizontal = 22.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = textColor,
+            fontSize = 15.sp,
+            fontWeight = if (selected || focused) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

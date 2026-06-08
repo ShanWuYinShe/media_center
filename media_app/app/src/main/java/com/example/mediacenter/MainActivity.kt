@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.mediacenter.data.MediaApi
 import com.example.mediacenter.data.MediaRepository
+import com.example.mediacenter.data.VideoDetailsCache
 import com.example.mediacenter.ui.MediaCenterApp
 import com.example.mediacenter.ui.MediaViewModel
 import com.example.mediacenter.ui.MediaViewModelFactory
@@ -17,7 +18,16 @@ import com.example.mediacenter.ui.MediaViewModelFactory
 class MainActivity : ComponentActivity() {
     private val viewModel: MediaViewModel by viewModels {
         MediaViewModelFactory(
-            MediaRepository(MediaApi(BuildConfig.MEDIA_SERVER_URL)),
+            MediaRepository(
+                api = MediaApi(BuildConfig.MEDIA_SERVER_URL),
+                categoryDetailsCache = VideoDetailsCache(cacheDir),
+                searchDetailsCache = VideoDetailsCache(
+                    cacheDir = cacheDir,
+                    cacheDirectoryName = VideoDetailsCache.SearchCacheDirectoryName,
+                    maxBytes = VideoDetailsCache.SearchMaxBytes,
+                    maxAgeMillis = VideoDetailsCache.SearchMaxAgeMillis,
+                ),
+            ),
         )
     }
 
@@ -43,6 +53,8 @@ private fun App(viewModel: MediaViewModel) {
         onPlayNext = viewModel::playNext,
         onPlayPrevious = viewModel::playPrevious,
         onLoadMore = viewModel::loadMore,
+        onPrefetchVisibleDetails = viewModel::prefetchVisibleDetails,
+        onCancelVisibleDetailsPrefetch = viewModel::cancelVisibleDetailsPrefetch,
         onBack = viewModel::back,
         onRetry = viewModel::retry,
     )

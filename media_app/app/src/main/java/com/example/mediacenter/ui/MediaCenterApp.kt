@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,7 +20,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
@@ -28,6 +32,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -70,6 +75,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.annotation.OptIn
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -92,10 +99,13 @@ import com.example.mediacenter.ui.components.CategoryRail
 import com.example.mediacenter.ui.components.EmptyState
 import com.example.mediacenter.ui.components.ErrorState
 import com.example.mediacenter.ui.components.LoadingState
+import com.example.mediacenter.ui.components.PauseGlyph
+import com.example.mediacenter.ui.components.PlayGlyph
 import com.example.mediacenter.ui.components.PosterGrid
 import com.example.mediacenter.ui.components.PrimaryPillButton
 import com.example.mediacenter.ui.components.SearchIcon
 import com.example.mediacenter.ui.components.SearchModeTopBar
+import com.example.mediacenter.ui.components.SelectablePillButton
 import com.example.mediacenter.ui.components.SecondaryPillButton
 import com.example.mediacenter.ui.components.tvFocusableLite
 import com.example.mediacenter.ui.theme.AppleTvColors
@@ -125,6 +135,8 @@ fun MediaCenterApp(
     onPlayNext: () -> Unit,
     onPlayPrevious: () -> Unit,
     onLoadMore: () -> Unit,
+    onPrefetchVisibleDetails: (List<VideoSummary>) -> Unit,
+    onCancelVisibleDetailsPrefetch: () -> Unit,
     onBack: () -> Unit,
     onRetry: () -> Unit,
 ) {
@@ -174,6 +186,8 @@ fun MediaCenterApp(
                     onSelectCategory = onSelectCategory,
                     onSelect = onSelect,
                     onLoadMore = onLoadMore,
+                    onPrefetchVisibleDetails = onPrefetchVisibleDetails,
+                    onCancelVisibleDetailsPrefetch = onCancelVisibleDetailsPrefetch,
                     onRetry = onRetry,
                     onBack = onBack,
                     homeFocusState = homeFocusState,
@@ -262,6 +276,8 @@ private fun HomeScreen(
     onSelectCategory: (ContentCategory) -> Unit,
     onSelect: (VideoSummary) -> Unit,
     onLoadMore: () -> Unit,
+    onPrefetchVisibleDetails: (List<VideoSummary>) -> Unit,
+    onCancelVisibleDetailsPrefetch: () -> Unit,
     onRetry: () -> Unit,
     onBack: () -> Unit,
     homeFocusState: HomeFocusState,
@@ -541,6 +557,8 @@ private fun HomeScreen(
                             canLoadMore = state.canLoadMore,
                             loadingMore = state.loadingMore,
                             onLoadMore = onLoadMore,
+                            onPrefetchVisibleDetails = onPrefetchVisibleDetails,
+                            onCancelVisibleDetailsPrefetch = onCancelVisibleDetailsPrefetch,
                             state = posterGridState,
                             pendingFocusVideoId = pendingVideoFocusId,
                             onPendingFocusHandled = { videoId ->
@@ -611,7 +629,7 @@ private val SEARCH_HOT_KEYWORDS = listOf(
     "国产", "港片", "好莱坞", "纪录", "战争", "动画",
 )
 
-// 圆形放大镜搜索按钮(图标-only),用于首页右上角。焦点态白底高亮。
+// 圆形放大镜搜索按钮(图标-only),用于首页右上角。焦点态蓝底 + 白色外框。
 //
 // resolveDownTarget:可回溯导航 —— 按 DOWN 时**显式**把焦点交给"当前选中的
 // 分类 chip",而不是让系统按空间位置(放大镜在右上角)挑最近的那个 chip。
@@ -624,17 +642,17 @@ private fun SearchIconButton(
     resolveDownTarget: () -> FocusRequester? = { null },
 ) {
     var focused by remember { mutableStateOf(false) }
-    val bg = if (focused) Color.White else AppleTvColors.GlassFill
-    val iconColor = if (focused) AppleTvColors.DeepSpace else AppleTvColors.TextPrimary
+    val bg = if (focused) AppleTvColors.AppleBlue else AppleTvColors.GlassFill
+    val iconColor = AppleTvColors.TextPrimary
 
     Box(
         modifier = modifier
-            .size(54.dp)
+            .requiredSize(54.dp)
             .clip(CircleShape)
             .background(bg)
             .border(
-                width = 1.dp,
-                color = if (focused) Color.Transparent else AppleTvColors.GlassBorder,
+                width = if (focused) 2.5.dp else 1.dp,
+                color = if (focused) AppleTvColors.GlassBorderFocused else AppleTvColors.GlassBorder,
                 shape = CircleShape,
             )
             .focusProperties {
@@ -834,12 +852,12 @@ private fun HotKeywordChip(
 
     Box(
         modifier = modifier
-            .height(40.dp)
+            .requiredHeight(40.dp)
             .clip(AppleTvShapes.Chip)
             .background(bg)
             .border(
-                width = 1.dp,
-                color = if (focused) Color.Transparent else AppleTvColors.GlassBorder,
+                width = if (focused) 2.5.dp else 1.dp,
+                color = if (focused) AppleTvColors.GlassBorderFocused else AppleTvColors.GlassBorder,
                 shape = AppleTvShapes.Chip,
             )
             .tvFocusableLite(
@@ -856,6 +874,8 @@ private fun HotKeywordChip(
             color = textColor,
             fontSize = 14.sp,
             fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -863,6 +883,9 @@ private fun HotKeywordChip(
 // =====================================================================
 // DetailScreen:详情页 —— 左侧大图 + 右侧文案与播放选项
 // =====================================================================
+
+private const val DetailDescriptionCollapsedLines = 5
+private const val DetailDialogScrollStepPx = 180
 
 @Composable
 private fun DetailScreen(
@@ -872,11 +895,19 @@ private fun DetailScreen(
     onPlay: (PlaybackOption) -> Unit,
     onBack: () -> Unit,
 ) {
+    val descriptionText = details.description.ifBlank { "暂无简介" }
+    var descriptionDialogVisible by remember(details.id) { mutableStateOf(false) }
     // Back 键:返回上一层(详情 → 主页)。用 BackHandler 注册到 Activity 的
     // OnBackPressedDispatcher,**不依赖 Compose 焦点**,保证焦点在任何子节点
     // (海报、播放按钮…)时 BACK 都能被本屏消费,而不会透传到 Activity.finish
     // 直接退出到系统桌面。enabled 恒为 true:详情屏永远应当拦截 BACK 回主页。
-    BackHandler(enabled = true) { onBack() }
+    BackHandler(enabled = true) {
+        if (descriptionDialogVisible) {
+            descriptionDialogVisible = false
+        } else {
+            onBack()
+        }
+    }
 
     AppleTvBackground {
         Row(
@@ -927,42 +958,46 @@ private fun DetailScreen(
 
             // 右侧文案
             Column(modifier = Modifier.fillMaxSize()) {
-                Spacer(Modifier.height(8.dp))
-                val metadata = listOfNotNull(
-                    details.durationSeconds?.let { formatDurationSeconds(it) },
-                    details.year,
-                    details.creators.firstOrNull(),
-                )
-                if (metadata.isNotEmpty()) {
-                    Text(
-                        text = metadata.joinToString(" · "),
-                        color = AppleTvColors.TextTertiary,
-                        fontSize = 14.sp,
-                        letterSpacing = (0.6).sp,
-                        fontWeight = FontWeight.Medium,
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false),
+                ) {
+                    Spacer(Modifier.height(8.dp))
+                    val metadata = listOfNotNull(
+                        details.durationSeconds?.let { formatDurationSeconds(it) },
+                        details.year,
+                        details.creators.firstOrNull(),
                     )
-                    Spacer(Modifier.height(10.dp))
+                    if (metadata.isNotEmpty()) {
+                        Text(
+                            text = metadata.joinToString(" · "),
+                            color = AppleTvColors.TextTertiary,
+                            fontSize = 14.sp,
+                            letterSpacing = (0.6).sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                    }
+                    Text(
+                        text = details.title,
+                        color = AppleTvColors.TextPrimary,
+                        fontSize = 34.sp,
+                        lineHeight = 42.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = (-0.5).sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(20.dp))
+                    DetailDescriptionPreview(
+                        description = descriptionText,
+                        onShowFull = { descriptionDialogVisible = true },
+                    )
                 }
-                Text(
-                    text = details.title,
-                    color = AppleTvColors.TextPrimary,
-                    fontSize = 34.sp,
-                    lineHeight = 42.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = (-0.5).sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.height(20.dp))
-                Text(
-                    text = details.description.ifBlank { "暂无简介" },
-                    color = AppleTvColors.TextSecondary,
-                    fontSize = 16.sp,
-                    lineHeight = 26.sp,
-                    maxLines = 7,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.height(32.dp))
+                Spacer(Modifier.height(24.dp))
                 PlaybackOptionsRow(
                     options = details.playbackOptions,
                     onPlay = onPlay,
@@ -970,6 +1005,240 @@ private fun DetailScreen(
                 if (error != null) {
                     Spacer(Modifier.height(24.dp))
                     DetailErrorBanner(message = error, onRetry = onRetry)
+                }
+            }
+        }
+    }
+
+    if (descriptionDialogVisible) {
+        DetailDescriptionDialog(
+            title = details.title,
+            description = descriptionText,
+            onDismiss = { descriptionDialogVisible = false },
+        )
+    }
+}
+
+@Composable
+private fun DetailDescriptionPreview(
+    description: String,
+    onShowFull: () -> Unit,
+) {
+    var hasOverflow by remember(description) { mutableStateOf(false) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = description,
+            color = AppleTvColors.TextSecondary,
+            fontSize = 16.sp,
+            lineHeight = 26.sp,
+            maxLines = DetailDescriptionCollapsedLines,
+            overflow = TextOverflow.Ellipsis,
+            onTextLayout = { result ->
+                val overflow = result.hasVisualOverflow
+                if (hasOverflow != overflow) {
+                    hasOverflow = overflow
+                }
+            },
+        )
+        if (hasOverflow) {
+            Spacer(Modifier.height(12.dp))
+            DetailDisclosureButton(onClick = onShowFull)
+        }
+    }
+}
+
+@Composable
+private fun DetailDisclosureButton(onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val bg = if (focused) AppleTvColors.AppleBlue else AppleTvColors.GlassFillStrong
+    val contentColor = if (focused) AppleTvColors.TextPrimary else AppleTvColors.TextSecondary
+
+    Row(
+        modifier = Modifier
+            .requiredHeight(42.dp)
+            .clip(AppleTvShapes.Button)
+            .background(bg)
+            .border(
+                width = if (focused) 2.5.dp else 1.dp,
+                color = if (focused) AppleTvColors.GlassBorderFocused else AppleTvColors.GlassBorder,
+                shape = AppleTvShapes.Button,
+            )
+            .tvFocusableLite(
+                shape = AppleTvShapes.Button,
+                focusedScale = 1.04f,
+                onClick = onClick,
+                onFocusChange = { focused = it },
+            )
+            .padding(horizontal = 18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "查看完整简介",
+            color = contentColor,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        ChevronRightGlyph(color = contentColor, size = 14.dp)
+    }
+}
+
+@Composable
+private fun ChevronRightGlyph(color: Color, size: androidx.compose.ui.unit.Dp) {
+    androidx.compose.foundation.Canvas(modifier = Modifier.size(size)) {
+        val stroke = 2.dp.toPx()
+        val w = this.size.width
+        val h = this.size.height
+        drawLine(
+            color = color,
+            start = androidx.compose.ui.geometry.Offset(w * 0.35f, h * 0.20f),
+            end = androidx.compose.ui.geometry.Offset(w * 0.65f, h * 0.50f),
+            strokeWidth = stroke,
+            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+        )
+        drawLine(
+            color = color,
+            start = androidx.compose.ui.geometry.Offset(w * 0.65f, h * 0.50f),
+            end = androidx.compose.ui.geometry.Offset(w * 0.35f, h * 0.80f),
+            strokeWidth = stroke,
+            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+        )
+    }
+}
+
+@Composable
+private fun DetailDescriptionDialog(
+    title: String,
+    description: String,
+    onDismiss: () -> Unit,
+) {
+    val scrollState = rememberScrollState()
+    val closeFocusRequester = remember { FocusRequester() }
+    val coroutineScope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        runCatching { closeFocusRequester.requestFocus() }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.72f))
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when (event.key) {
+                        Key.DirectionDown -> {
+                            coroutineScope.launch {
+                                scrollState.animateScrollTo(
+                                    (scrollState.value + DetailDialogScrollStepPx)
+                                        .coerceAtMost(scrollState.maxValue)
+                                )
+                            }
+                            true
+                        }
+                        Key.DirectionUp -> {
+                            coroutineScope.launch {
+                                scrollState.animateScrollTo(
+                                    (scrollState.value - DetailDialogScrollStepPx)
+                                        .coerceAtLeast(0)
+                                )
+                            }
+                            true
+                        }
+                        else -> false
+                    }
+                }
+                .padding(horizontal = 96.dp, vertical = 72.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                modifier = Modifier
+                    .width(820.dp)
+                    .heightIn(max = 540.dp)
+                    .clip(AppleTvShapes.Dialog)
+                    .background(
+                        Brush.verticalGradient(
+                            0f to AppleTvColors.SurfaceElevated,
+                            1f to AppleTvColors.DeepSpace,
+                        )
+                    )
+                    .border(1.dp, AppleTvColors.GlassBorder, AppleTvShapes.Dialog)
+                    .padding(32.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .clip(AppleTvShapes.Chip)
+                        .background(AppleTvColors.AppleBlue),
+                )
+                Spacer(Modifier.height(24.dp))
+                Text(
+                    text = "完整简介",
+                    color = AppleTvColors.AppleBlue,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = (0.8).sp,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = title,
+                    color = AppleTvColors.TextPrimary,
+                    fontSize = 30.sp,
+                    lineHeight = 36.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "按 ↑↓ 阅读 · BACK 关闭",
+                    color = AppleTvColors.TextTertiary,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                )
+                Spacer(Modifier.height(18.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 300.dp)
+                        .clip(AppleTvShapes.Card)
+                        .background(AppleTvColors.GlassFill)
+                        .border(1.dp, AppleTvColors.GlassBorder, AppleTvShapes.Card)
+                        .padding(horizontal = 22.dp, vertical = 18.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(scrollState),
+                    ) {
+                        Text(
+                            text = description,
+                            color = AppleTvColors.TextSecondary,
+                            fontSize = 17.sp,
+                            lineHeight = 28.sp,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(24.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    PrimaryPillButton(
+                        text = "完成",
+                        onClick = onDismiss,
+                        horizontalPadding = 34.dp,
+                        modifier = Modifier.focusRequester(closeFocusRequester),
+                    )
                 }
             }
         }
@@ -1021,17 +1290,26 @@ private fun PlaybackOptionsRow(
         withFrameNanos { }
         runCatching { playFocusRequester.requestFocus() }
     }
+    val optionIds = remember(options) { options.map { it.id } }
+    var selectedOptionId by remember(optionIds) { mutableStateOf(options.first().id) }
+    val selectedOption = options.firstOrNull { it.id == selectedOptionId } ?: options.first()
 
     Column {
-        // 主播放按钮:默认用第一档(最高)清晰度直接播放,初始焦点落在此
-        val primary = options.first()
         PrimaryPillButton(
-            text = "▶  播放",
-            onClick = { onPlay(primary) },
+            text = buildString {
+                append("播放")
+                selectedOption.label.takeIf { it.isNotBlank() }?.let { append(" · $it") }
+            },
+            onClick = { onPlay(selectedOption) },
+            height = 58.dp,
+            horizontalPadding = 38.dp,
+            textSize = 20.sp,
+            focusedScale = 1.04f,
+            leadingIcon = { color -> PlayGlyph(color = color, size = 18.dp) },
             modifier = Modifier.focusRequester(playFocusRequester),
         )
 
-        // 有多档清晰度时,展示清晰度选择行(每个都可聚焦)
+        // 有多档清晰度时,先选择清晰度,再按上方主播放按钮开播。
         if (options.size > 1) {
             Spacer(Modifier.height(20.dp))
             Text(
@@ -1047,9 +1325,10 @@ private fun PlaybackOptionsRow(
                 modifier = Modifier.focusGroup(),
             ) {
                 options.take(5).forEach { option ->
-                    SecondaryPillButton(
+                    SelectablePillButton(
                         text = option.label.ifBlank { "播放" },
-                        onClick = { onPlay(option) },
+                        selected = option.id == selectedOption.id,
+                        onClick = { selectedOptionId = option.id },
                     )
                 }
             }
@@ -1357,11 +1636,11 @@ private fun PlayerOverlay(
                 .border(2.dp, Color.White.copy(alpha = 0.55f), CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = if (isPlaying) "⏸" else "▶",
-                color = Color.White,
-                fontSize = 36.sp,
-            )
+            if (isPlaying) {
+                PauseGlyph(color = Color.White, size = 36.dp)
+            } else {
+                PlayGlyph(color = Color.White, size = 36.dp)
+            }
         }
 
         // ── 底部渐变遮罩 + 进度条 + 时间码 + 遥控提示 ──

@@ -1,12 +1,14 @@
 package com.example.mediacenter.ui
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.mediacenter.data.ContentCategory
 import com.example.mediacenter.data.MediaRepository
-import com.example.mediacenter.data.VideoDetails
 import com.example.mediacenter.data.PlaybackOption
+import com.example.mediacenter.data.VideoDetails
+import com.example.mediacenter.data.VideoDetailsCacheScope
 import com.example.mediacenter.data.VideoSummary
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -59,6 +61,9 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     private var searchJob: Job? = null
     private var loadMoreJob: Job? = null
     private var detailsJob: Job? = null
+    private var detailsPrefetchJob: Job? = null
+    private val categoryDetailsPrefetchCompletedIds = mutableSetOf<String>()
+    private val searchDetailsPrefetchCompletedIds = mutableSetOf<String>()
     // 在列表末尾按"下一个"时,记录续播来源 id:loadMore 拉到新一页后,
     // 在其 onSuccess 里自动续播该来源的下一条,避免自动续播在分页边界"断档"。
     private var pendingAutoAdvanceFromId: String? = null
@@ -79,8 +84,12 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             return
         }
         detailsJob?.cancel()
+        detailsPrefetchJob?.cancel()
         loadMoreJob?.cancel()
         searchJob?.cancel()
+        if (query.isNotBlank()) {
+            searchDetailsPrefetchCompletedIds.clear()
+        }
         pendingAutoAdvanceFromId = null
         searchJob = viewModelScope.launch {
             mutableState.update {
@@ -175,10 +184,11 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     fun openDetails(video: VideoSummary) {
         // 修复:快速连点两条 video 时,后到的请求要把前一条取消,
         // 否则可能出现"先看到 B 详情、再被 A 详情覆盖"的乱序。
+        val cacheScope = currentDetailsCacheScope()
         detailsJob?.cancel()
         detailsJob = viewModelScope.launch {
             mutableState.update { it.copy(loading = true, error = null) }
-            runCatchingCancellable { repository.details(video) }
+            runCatchingCancellable { repository.details(video, cacheScope) }
                 .onSuccess { details ->
                     mutableState.update { it.copy(selected = details, loading = false) }
                 }
@@ -188,6 +198,38 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     }
                 }
         }
+    }
+
+    fun prefetchVisibleDetails(videos: List<VideoSummary>) {
+        val cacheScope = currentDetailsCacheScope()
+        val completedIds = detailsPrefetchCompletedIdsFor(cacheScope)
+        val candidates = videos
+            .asSequence()
+            .filter { it.videoKind == "vod" }
+            .distinctBy { it.id }
+            .filter { it.id !in completedIds }
+            .toList()
+        detailsPrefetchJob?.cancel()
+        detailsPrefetchJob = null
+        if (candidates.isEmpty()) return
+
+        detailsPrefetchJob = viewModelScope.launch {
+            candidates.forEach { video ->
+                try {
+                    repository.prefetchDetails(video, cacheScope)
+                    completedIds.add(video.id)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    Log.w(PrefetchLogTag, "Unable to prefetch details for ${video.id}", error)
+                }
+            }
+        }
+    }
+
+    fun cancelVisibleDetailsPrefetch() {
+        detailsPrefetchJob?.cancel()
+        detailsPrefetchJob = null
     }
 
     fun play(stream: PlaybackOption) {
@@ -295,12 +337,17 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         prefetchNextPage: Boolean = true,
     ) {
         val nextVideo = items[index]
+        val cacheScope = currentDetailsCacheScope()
         // 临近列表末尾时顺便预取下一页,保证“下一个”能持续可用
         if (prefetchNextPage && index >= items.size - 3) loadMore()
         detailsJob?.cancel()
         detailsJob = viewModelScope.launch {
             mutableState.update { it.copy(loading = true, error = null) }
-            runCatchingCancellable { repository.details(nextVideo) }
+            runCatchingCancellable {
+                val details = repository.details(nextVideo, cacheScope)
+                val playbackOptions = repository.playbackOptions(details.id)
+                details.copy(playbackOptions = playbackOptions)
+            }
                 .onSuccess { details ->
                     val option = details.playbackOptions.firstOrNull()
                     if (option == null) {
@@ -391,9 +438,27 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             search(mutableState.value.query)
         }
     }
+
+    private fun currentDetailsCacheScope(): VideoDetailsCacheScope {
+        return if (mutableState.value.query.isNotBlank()) {
+            VideoDetailsCacheScope.Search
+        } else {
+            VideoDetailsCacheScope.Category
+        }
+    }
+
+    private fun detailsPrefetchCompletedIdsFor(
+        cacheScope: VideoDetailsCacheScope,
+    ): MutableSet<String> {
+        return when (cacheScope) {
+            VideoDetailsCacheScope.Category -> categoryDetailsPrefetchCompletedIds
+            VideoDetailsCacheScope.Search -> searchDetailsPrefetchCompletedIds
+        }
+    }
 }
 
 private const val PageSize = 18
+private const val PrefetchLogTag = "MediaViewModel"
 
 class MediaViewModelFactory(
     private val repository: MediaRepository,
