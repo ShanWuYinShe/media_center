@@ -23,10 +23,15 @@ const DEFAULT_DETAIL_RESOLVE_TIMEOUT_MS = positiveNumber(
   process.env.DETAIL_RESOLVE_TIMEOUT_MS,
   35_000,
 );
+const DEFAULT_SEARCH_DETAIL_TIMEOUT_MS = positiveNumber(
+  process.env.SEARCH_DETAIL_TIMEOUT_MS,
+  8_000,
+);
 
 type VideoAggregatorOptions = {
   providerSearchTimeoutMs?: number;
   detailResolveTimeoutMs?: number;
+  searchDetailTimeoutMs?: number;
 };
 
 export class VideoAggregator {
@@ -37,6 +42,7 @@ export class VideoAggregator {
 
   private readonly providerSearchTimeoutMs: number;
   private readonly detailResolveTimeoutMs: number;
+  private readonly searchDetailTimeoutMs: number;
 
   constructor(
     private readonly providers: VideoProvider[],
@@ -46,6 +52,8 @@ export class VideoAggregator {
       options.providerSearchTimeoutMs ?? DEFAULT_PROVIDER_SEARCH_TIMEOUT_MS;
     this.detailResolveTimeoutMs =
       options.detailResolveTimeoutMs ?? DEFAULT_DETAIL_RESOLVE_TIMEOUT_MS;
+    this.searchDetailTimeoutMs =
+      options.searchDetailTimeoutMs ?? DEFAULT_SEARCH_DETAIL_TIMEOUT_MS;
   }
 
   async search(
@@ -233,8 +241,16 @@ export class VideoAggregator {
     );
     const groups: PublicVideoSummary[][] = rankedCandidates.map(() => []);
     const chunkSize = Math.max(1, Math.ceil(pageSize / results.length));
+    let remainingDetailAttempts = Math.max(
+      targetCount * 2,
+      pageSize * results.length,
+      4,
+    );
 
-    while (interleave(groups, targetCount).length < targetCount) {
+    while (
+      remainingDetailAttempts > 0 &&
+      interleave(groups, targetCount).length < targetCount
+    ) {
       let progressed = false;
       const chunks = await Promise.all(
         rankedCandidates.map((candidates, index) => {
@@ -242,7 +258,16 @@ export class VideoAggregator {
             return Promise.resolve([]);
           }
           const start = offsets[index];
-          const end = Math.min(start + chunkSize, candidates.length);
+          const take = Math.min(
+            chunkSize,
+            remainingDetailAttempts,
+            candidates.length - start,
+          );
+          if (take <= 0) {
+            return Promise.resolve([]);
+          }
+          remainingDetailAttempts -= take;
+          const end = start + take;
           const slice = candidates.slice(start, end);
           offsets[index] = end;
           if (end >= candidates.length) {
@@ -287,7 +312,7 @@ export class VideoAggregator {
         }
         const details = await withTimeout(
           this.provider(item.provider).getDetails(item.id),
-          this.detailResolveTimeoutMs,
+          this.searchDetailTimeoutMs,
           () => providerTimeoutError(item.provider, "详情解析"),
         );
         if (details.videoKind !== "vod" || details.streams.length === 0) {

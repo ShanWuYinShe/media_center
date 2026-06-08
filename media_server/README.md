@@ -30,6 +30,6 @@
 - YouTube 普通视频通过开源工具 `yt-dlp` 解析点播地址；本地运行请安装 `yt-dlp`，或设置 `VOD_EXTRACTOR_BIN=/path/to/yt-dlp`。
 - `/api/asset` 不会先下载完整文件，而是把 App 的 HTTP Range 请求直接转发给上游 CDN，再把响应流式返回给 Media3/ExoPlayer，支持边下边播和 seek。
 - 后端会按 URL + Range 缓存点播片段和图片响应，默认缓存目录 `/cache`，总上限 50GB，可用 `BACKEND_CACHE_DIR` 和 `BACKEND_CACHE_MAX_BYTES` 覆盖。
-- 上游 HTTP 请求默认 10 秒超时（`PROVIDER_FETCH_TIMEOUT_MS`），Provider 搜索默认 15 秒超时（`PROVIDER_SEARCH_TIMEOUT_MS`），详情/点播解析默认 35 秒超时（`DETAIL_RESOLVE_TIMEOUT_MS`），避免单个来源卡住整个 API。
+- 上游 HTTP 请求默认 10 秒超时（`PROVIDER_FETCH_TIMEOUT_MS`），Provider 搜索默认 15 秒超时（`PROVIDER_SEARCH_TIMEOUT_MS`），搜索页候选详情校验默认 8 秒超时（`SEARCH_DETAIL_TIMEOUT_MS`），直接详情/点播解析默认 35 秒超时（`DETAIL_RESOLVE_TIMEOUT_MS`），避免单个来源卡住整个 API。
 
 后续扩展其他来源时，请通过官方 API、已授权数据源或合规开源解析工具实现 `VideoProvider`，不要接入盗版站点、绕过 DRM 或未授权下载。
