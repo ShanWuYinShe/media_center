@@ -64,6 +64,7 @@ type BilibiliPlayUrlResponse = {
     quality?: number;
     accept_quality?: number[];
     accept_description?: string[];
+    v_voucher?: string;
     durl?: Array<{
       url: string;
       backup_url?: string[];
@@ -350,6 +351,22 @@ function positiveInteger(value: number | undefined): number | undefined {
     : undefined;
 }
 
+function throwIfVoucherOnlyPlayUrl(response: BilibiliPlayUrlResponse): void {
+  const data = response.data;
+  if (!data?.v_voucher) {
+    return;
+  }
+  if ((data.durl?.length ?? 0) > 0 || (data.dash?.video?.length ?? 0) > 0) {
+    return;
+  }
+  throw new ApiError(
+    "PROVIDER_UNAVAILABLE",
+    "B站播放地址请求触发风控，请稍后重试。",
+    502,
+    { v_voucher: data.v_voucher },
+  );
+}
+
 function nonEmptyString(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
@@ -517,6 +534,7 @@ export class BilibiliProvider implements VideoProvider {
     cid: number,
   ): Promise<VideoStream[]> {
     const dashProbe = await this.fetchDashPlayUrl(bvid, cid, 80);
+    throwIfVoucherOnlyPlayUrl(dashProbe);
     const dashStreams = this.dashStreams(bvid, dashProbe);
     if (dashStreams.length > 0) {
       return dashStreams;
@@ -524,6 +542,7 @@ export class BilibiliProvider implements VideoProvider {
 
     // 第一次请求高清晰度,顺带读取 accept_quality 列表
     const probe = await this.fetchPlayUrl(bvid, cid, 80);
+    throwIfVoucherOnlyPlayUrl(probe);
     if ((probe.data?.durl ?? []).length === 0) {
       return [];
     }
@@ -547,6 +566,7 @@ export class BilibiliProvider implements VideoProvider {
         qn === (probe.data?.quality ?? -1)
           ? probe
           : await this.fetchPlayUrl(bvid, cid, qn);
+      throwIfVoucherOnlyPlayUrl(data);
       const durls = data.data?.durl ?? [];
       if (durls.length !== 1) continue;
       const durl = durls[0];

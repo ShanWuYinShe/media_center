@@ -45,7 +45,7 @@ function encoded(provider: string, id: string): string {
   return `${provider}:${Buffer.from(id, "utf8").toString("base64url")}`;
 }
 
-test("搜索结果只公开已校验可直接播放的视频", async () => {
+test("Bilibili 搜索结果不在列表阶段解析播放地址", async () => {
   const bilibiliProvider: VideoProvider = {
     name: "bilibili",
     async search(query, page, pageSize): Promise<SearchResult> {
@@ -93,8 +93,8 @@ test("搜索结果只公开已校验可直接播放的视频", async () => {
   ]).search("Dota", 1, 10);
 
   expect(result.query).toBe("Dota");
-  expect(result.total).toBe(1);
-  expect(result.items).toHaveLength(1);
+  expect(result.total).toBe(2);
+  expect(result.items).toHaveLength(2);
   expect(result.items[0]).toMatchObject({
     id: encoded("bilibili", "playable"),
     videoKind: "vod",
@@ -104,6 +104,7 @@ test("搜索结果只公开已校验可直接播放的视频", async () => {
   expect(result.items[0]).not.toHaveProperty("provider");
   expect(result.items[0]).not.toHaveProperty("sourceUrl");
   expect(result.items[0]).not.toHaveProperty("playbackOptions");
+  expect(result.items[1].id).toBe(encoded("bilibili", "no-stream"));
 });
 
 test("详情接口拒绝没有点播播放地址的视频", async () => {
@@ -155,14 +156,18 @@ test("详情接口每次刷新播放地址避免过期缓存", async () => {
   const aggregator = new VideoAggregator([provider]);
 
   await aggregator.search("测试", 1, 1);
-  const firstDetails = await aggregator.getDetails(encoded("bilibili", "playable"));
-  const secondDetails = await aggregator.getDetails(encoded("bilibili", "playable"));
+  const firstDetails = await aggregator.getDetails(
+    encoded("bilibili", "playable"),
+  );
+  const secondDetails = await aggregator.getDetails(
+    encoded("bilibili", "playable"),
+  );
 
   expect(firstDetails.playbackOptions[0].url).toBe(
-    "https://cdn.example.test/video-2.mp4",
+    "https://cdn.example.test/video-1.mp4",
   );
   expect(secondDetails.playbackOptions[0].url).toBe(
-    "https://cdn.example.test/video-3.mp4",
+    "https://cdn.example.test/video-2.mp4",
   );
 });
 
@@ -200,12 +205,12 @@ test("搜索会扫描来源后续页以填满公开分页", async () => {
   const page2 = await aggregator.search("测试", 2, 2);
 
   expect(page1.items.map((item) => item.id)).toEqual([
-    encoded("bilibili", "playable-1"),
-    encoded("bilibili", "playable-2"),
+    encoded("bilibili", "no-stream-1"),
+    encoded("bilibili", "no-stream-2"),
   ]);
   expect(page2.items.map((item) => item.id)).toEqual([
-    encoded("bilibili", "playable-3"),
-    encoded("bilibili", "playable-4"),
+    encoded("bilibili", "playable-1"),
+    encoded("bilibili", "playable-2"),
   ]);
 });
 

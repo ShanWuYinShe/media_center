@@ -219,3 +219,45 @@ test("Bilibili DASH 清单作为流式播放项返回", async () => {
   });
   expect(isDashManifestReference(details.streams[0].url)).toBe(true);
 });
+
+test("Bilibili v_voucher 风控响应转成上游不可用错误", async () => {
+  const provider = new BilibiliProvider(async (input) => {
+    const url = String(input);
+    if (url.includes("/x/web-interface/nav")) {
+      return jsonResponse({
+        code: 0,
+        data: {
+          wbi_img: {
+            img_url: `https://i0.hdslb.com/bfs/wbi/${"a".repeat(64)}.png`,
+            sub_url: `https://i0.hdslb.com/bfs/wbi/${"b".repeat(64)}.png`,
+          },
+        },
+      });
+    }
+    if (url.includes("/x/web-interface/wbi/view")) {
+      return jsonResponse({
+        code: 0,
+        data: {
+          bvid: "BVVOUCHER",
+          title: "风控视频",
+          desc: "简介",
+          cid: 100,
+          owner: { name: "UP" },
+        },
+      });
+    }
+    if (url.includes("/x/player/wbi/playurl")) {
+      return jsonResponse({
+        code: 0,
+        message: "OK",
+        data: { v_voucher: "voucher_test" },
+      });
+    }
+    return jsonResponse({ code: -1 });
+  });
+
+  await expect(provider.getDetails("BVVOUCHER")).rejects.toMatchObject({
+    code: "PROVIDER_UNAVAILABLE",
+    statusCode: 502,
+  });
+});

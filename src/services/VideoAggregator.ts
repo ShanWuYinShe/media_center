@@ -304,6 +304,12 @@ export class VideoAggregator {
             ? publicDetailsToSummary(cachedDetails)
             : undefined;
         }
+        if (item.provider === "bilibili") {
+          // Bilibili playurl is aggressively rate-limited from server IPs.
+          // Search/category pages expose metadata only; playback is resolved
+          // just-in-time via /videos/:id/playback.
+          return this.toPublicSummary(item);
+        }
         const details = await withTimeout(
           this.provider(item.provider).getDetails(item.id),
           this.searchDetailTimeoutMs,
