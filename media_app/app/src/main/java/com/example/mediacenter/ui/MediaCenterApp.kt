@@ -103,7 +103,6 @@ import com.example.mediacenter.ui.theme.AppleTvShapes
 import com.example.mediacenter.ui.theme.AppleTvTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
@@ -118,7 +117,6 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
  */
 @Composable
 fun MediaCenterApp(
-    mediaServerUrl: String,
     state: MediaUiState,
     onSearch: (String) -> Unit,
     onSelectCategory: (ContentCategory) -> Unit,
@@ -153,7 +151,6 @@ fun MediaCenterApp(
                             state.items[playingIndex - 1]
                         else null
                     PlayerScreen(
-                        mediaServerUrl = mediaServerUrl,
                         stream = state.playing,
                         hasPrevious = previousVideo != null,
                         previousTitle = previousVideo?.title,
@@ -1076,31 +1073,6 @@ private fun PlaybackOptionsRow(
 private const val PlaybackUserAgent =
     "Mozilla/5.0 (Linux; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-private fun proxiedPlaybackUrl(mediaServerUrl: String, originalUrl: String): String {
-    val apiBase = mediaApiBaseUrl(mediaServerUrl) ?: return originalUrl
-    val original = originalUrl.toHttpUrlOrNull() ?: apiBase.resolve(originalUrl) ?: return originalUrl
-    if (original.scheme != "http" && original.scheme != "https") return originalUrl
-    if (original.isAssetProxyUrl()) return original.toString()
-    return apiBase.newBuilder()
-        .addPathSegment("asset")
-        .addQueryParameter("url", original.toString())
-        .build()
-        .toString()
-}
-
-private fun mediaApiBaseUrl(mediaServerUrl: String): HttpUrl? {
-    val root = mediaServerUrl.trim().trimEnd('/').toHttpUrlOrNull() ?: return null
-    val builder = root.newBuilder()
-    if (root.pathSegments.none { it.isNotEmpty() }) {
-        builder.addPathSegment("api")
-    }
-    return builder.build()
-}
-
-private fun HttpUrl.isAssetProxyUrl(): Boolean {
-    return pathSegments.lastOrNull() == "asset" && queryParameter("url") != null
-}
-
 private fun playbackRequestHeaders(url: String): Map<String, String> {
     val headers = mutableMapOf(
         "Accept" to "video/*,*/*;q=0.8",
@@ -1123,7 +1095,6 @@ private fun String.isHostOrSubdomain(domain: String): Boolean {
 @Composable
 @OptIn(UnstableApi::class)
 private fun PlayerScreen(
-    mediaServerUrl: String,
     stream: PlaybackOption,
     hasPrevious: Boolean,
     previousTitle: String?,
@@ -1135,9 +1106,7 @@ private fun PlayerScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val playbackUrl = remember(mediaServerUrl, stream.url) {
-        proxiedPlaybackUrl(mediaServerUrl, stream.url)
-    }
+    val playbackUrl = remember(stream.url) { stream.url }
 
     val player = remember(playbackUrl, stream.mimeType) {
         val dataSourceFactory = DefaultHttpDataSource.Factory()

@@ -45,4 +45,4 @@ API 由 `workwork/services/media_server` 维护。实现或调整 App 前先看�
 - `workwork/services/media_server/API.md`
 - `workwork/services/media_server/openapi.json`
 
-扩展其他 Provider 时应使用官方 API 或已授权数据源，不接入盗版站点、DRM 绕过或盗链资源。
+App 只原样使用 API 返回的图片/播放 URL，不自行构造代理地址或处理代理签名。扩展其他 Provider 时应使用官方 API 或已授权数据源，不接入盗版站点、DRM 绕过或盗链资源。

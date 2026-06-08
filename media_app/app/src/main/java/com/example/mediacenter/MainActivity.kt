@@ -35,7 +35,6 @@ class MainActivity : ComponentActivity() {
 private fun App(viewModel: MediaViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     MediaCenterApp(
-        mediaServerUrl = BuildConfig.MEDIA_SERVER_URL,
         state = state,
         onSearch = viewModel::search,
         onSelectCategory = viewModel::selectCategory,
