@@ -10,6 +10,7 @@ import type { VideoProvider } from "./providers/VideoProvider.js";
 import { CategoryResultCache } from "./services/CategoryResultCache.js";
 import { HttpResponseCache } from "./services/HttpResponseCache.js";
 import { VideoAggregator } from "./services/VideoAggregator.js";
+import { fetchWithTimeout } from "./services/fetchWithTimeout.js";
 
 const searchSchema = z.object({
   q: z.string().trim().min(1).max(120),
@@ -135,7 +136,7 @@ export function buildServer() {
     const upstreamHeaders = upstreamRequestHeaders(url, range);
     let upstream: Response;
     try {
-      upstream = await fetch(url, {
+      upstream = await fetchWithTimeout(fetch, url, {
         redirect: "follow",
         headers: upstreamHeaders,
       });

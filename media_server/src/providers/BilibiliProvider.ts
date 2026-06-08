@@ -8,6 +8,7 @@ import type {
   VideoSummary,
 } from "../types.js";
 import type { VideoProvider } from "./VideoProvider.js";
+import { fetchWithTimeout } from "../services/fetchWithTimeout.js";
 
 type FetchLike = typeof fetch;
 
@@ -477,7 +478,7 @@ export class BilibiliProvider implements VideoProvider {
 
   private async getJson<T>(url: URL): Promise<T> {
     try {
-      const response = await this.fetcher(url.toString(), {
+      const response = await fetchWithTimeout(this.fetcher, url.toString(), {
         headers: {
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

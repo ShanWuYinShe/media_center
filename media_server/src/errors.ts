@@ -3,6 +3,7 @@ export class ApiError extends Error {
     public readonly code:
       | "BAD_REQUEST"
       | "NOT_FOUND"
+      | "PROVIDER_TIMEOUT"
       | "PROVIDER_UNAVAILABLE"
       | "NO_PLAYABLE_STREAM",
     message: string,

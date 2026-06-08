@@ -15,6 +15,19 @@ const PROVIDER_PAGE_SIZE = 50;
 const PROVIDER_CANDIDATE_FACTOR = 4;
 const MIN_PROVIDER_CANDIDATES = 40;
 const MIN_PROVIDER_PAGES = 2;
+const DEFAULT_PROVIDER_SEARCH_TIMEOUT_MS = positiveNumber(
+  process.env.PROVIDER_SEARCH_TIMEOUT_MS,
+  15_000,
+);
+const DEFAULT_DETAIL_RESOLVE_TIMEOUT_MS = positiveNumber(
+  process.env.DETAIL_RESOLVE_TIMEOUT_MS,
+  35_000,
+);
+
+type VideoAggregatorOptions = {
+  providerSearchTimeoutMs?: number;
+  detailResolveTimeoutMs?: number;
+};
 
 export class VideoAggregator {
   private readonly detailCache = new LRUCache<string, PublicVideoDetails>({
@@ -22,7 +35,18 @@ export class VideoAggregator {
     ttl: 60 * 60_000,
   });
 
-  constructor(private readonly providers: VideoProvider[]) {}
+  private readonly providerSearchTimeoutMs: number;
+  private readonly detailResolveTimeoutMs: number;
+
+  constructor(
+    private readonly providers: VideoProvider[],
+    options: VideoAggregatorOptions = {},
+  ) {
+    this.providerSearchTimeoutMs =
+      options.providerSearchTimeoutMs ?? DEFAULT_PROVIDER_SEARCH_TIMEOUT_MS;
+    this.detailResolveTimeoutMs =
+      options.detailResolveTimeoutMs ?? DEFAULT_DETAIL_RESOLVE_TIMEOUT_MS;
+  }
 
   async search(
     query: string,
@@ -101,7 +125,11 @@ export class VideoAggregator {
     if (cached) {
       return cached;
     }
-    const details = await this.provider(providerName).getDetails(sourceId);
+    const details = await withTimeout(
+      this.provider(providerName).getDetails(sourceId),
+      this.detailResolveTimeoutMs,
+      () => providerTimeoutError(providerName, "详情解析"),
+    );
     const publicDetails = this.toPublicDetails(details);
     this.detailCache.set(cacheKey, publicDetails);
     return publicDetails;
@@ -128,12 +156,16 @@ export class VideoAggregator {
       providerPage <= maxProviderPages;
       providerPage++
     ) {
-      const result = await provider.search(
-        query,
-        providerPage,
-        providerPage === 1
-          ? Math.max(PROVIDER_PAGE_SIZE, rawCandidateTarget)
-          : PROVIDER_PAGE_SIZE,
+      const result = await withTimeout(
+        provider.search(
+          query,
+          providerPage,
+          providerPage === 1
+            ? Math.max(PROVIDER_PAGE_SIZE, rawCandidateTarget)
+            : PROVIDER_PAGE_SIZE,
+        ),
+        this.providerSearchTimeoutMs,
+        () => providerTimeoutError(provider.name, "搜索"),
       );
       total = Math.max(total, result.total);
       if (result.items.length === 0) {
@@ -253,7 +285,11 @@ export class VideoAggregator {
             ? publicDetailsToSummary(cachedDetails)
             : undefined;
         }
-        const details = await this.provider(item.provider).getDetails(item.id);
+        const details = await withTimeout(
+          this.provider(item.provider).getDetails(item.id),
+          this.detailResolveTimeoutMs,
+          () => providerTimeoutError(item.provider, "详情解析"),
+        );
         if (details.videoKind !== "vod" || details.streams.length === 0) {
           return undefined;
         }
@@ -299,6 +335,33 @@ export class VideoAggregator {
       playbackOptions: toPlaybackOptions(details),
     };
   }
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  createError: () => Error,
+): Promise<T> {
+  if (timeoutMs <= 0) {
+    return promise;
+  }
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(createError()), timeoutMs);
+    promise.then(resolve, reject).finally(() => clearTimeout(timeout));
+  });
+}
+
+function providerTimeoutError(provider: string, operation: string): ApiError {
+  return new ApiError(
+    "PROVIDER_TIMEOUT",
+    `${provider} ${operation}响应超时。`,
+    502,
+  );
+}
+
+function positiveNumber(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function toPlaybackOptions(details: VideoDetails): PlaybackOption[] {

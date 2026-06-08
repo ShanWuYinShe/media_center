@@ -12,6 +12,7 @@ import {
   type VodExtractor,
   YtDlpVodExtractor,
 } from "../services/VodExtractor.js";
+import { fetchWithTimeout } from "../services/fetchWithTimeout.js";
 
 type FetchLike = typeof fetch;
 
@@ -321,7 +322,7 @@ export class YouTubeProvider implements VideoProvider {
 
   private async fetchText(url: string): Promise<string> {
     try {
-      const resp = await this.fetcher(url, {
+      const resp = await fetchWithTimeout(this.fetcher, url, {
         headers: {
           "User-Agent": USER_AGENT,
           "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
@@ -349,7 +350,7 @@ export class YouTubeProvider implements VideoProvider {
 
   private async fetchJson<T>(url: string): Promise<T> {
     try {
-      const resp = await this.fetcher(url);
+      const resp = await fetchWithTimeout(this.fetcher, url);
       if (!resp.ok) {
         throw new ApiError(
           "PROVIDER_UNAVAILABLE",
@@ -378,7 +379,7 @@ export class YouTubeProvider implements VideoProvider {
     const url = new URL("https://www.youtube.com/youtubei/v1/search");
     url.searchParams.set("key", apiKey);
     try {
-      const resp = await this.fetcher(url.toString(), {
+      const resp = await fetchWithTimeout(this.fetcher, url.toString(), {
         method: "POST",
         headers: {
           "User-Agent": USER_AGENT,

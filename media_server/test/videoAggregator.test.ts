@@ -167,3 +167,45 @@ test("搜索会扫描来源后续页以填满公开分页", async () => {
     encoded("bilibili", "playable-4"),
   ]);
 });
+
+test("搜索不会被无响应的视频来源阻塞", async () => {
+  const hangingProvider: VideoProvider = {
+    name: "youtube",
+    async search(): Promise<SearchResult> {
+      return new Promise<SearchResult>(() => {});
+    },
+    async getDetails() {
+      return details("never", []);
+    },
+    async getStreams() {
+      return [];
+    },
+  };
+  const healthyProvider: VideoProvider = {
+    name: "bilibili",
+    async search(query, page, pageSize): Promise<SearchResult> {
+      return {
+        query,
+        page,
+        pageSize,
+        total: 1,
+        items: [summary("playable", true)],
+      };
+    },
+    async getDetails() {
+      return details("playable", [playableStream]);
+    },
+    async getStreams() {
+      return [playableStream];
+    },
+  };
+
+  const result = await new VideoAggregator([hangingProvider, healthyProvider], {
+    providerSearchTimeoutMs: 10,
+    detailResolveTimeoutMs: 50,
+  }).search("测试", 1, 1);
+
+  expect(result.items.map((item) => item.id)).toEqual([
+    encoded("bilibili", "playable"),
+  ]);
+});
