@@ -231,20 +231,41 @@ function numberHeader(value: string | null): number | undefined {
 
 /** 把响应里的上游 url(thumbnailUrl / 点播 url)重写为本服务的代理 URL。 */
 function rewriteUrls<T>(payload: T, request: FastifyRequest): T {
-  const base = `${request.protocol}://${request.host}`;
-  return walk(payload, base) as T;
+  const apiBase = `${request.protocol}://${request.host}${normalizePublicApiPrefix(request.headers["x-forwarded-prefix"])}`;
+  return walk(payload, apiBase) as T;
 }
 
-const PROXY_PREFIX = "/api/asset?url=";
+const DEFAULT_PUBLIC_API_PREFIX = "/api";
+const PUBLIC_API_PREFIX_PATTERN = /^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/;
+
+export function normalizePublicApiPrefix(
+  value: string | string[] | undefined,
+): string {
+  const rawValue = Array.isArray(value) ? value[0] : value;
+  const candidate = rawValue?.split(",")[0]?.trim();
+  if (!candidate) {
+    return DEFAULT_PUBLIC_API_PREFIX;
+  }
+  const prefixed = candidate.startsWith("/") ? candidate : `/${candidate}`;
+  const normalized = prefixed.replace(/\/+$/, "");
+  if (
+    !normalized ||
+    normalized.includes("//") ||
+    !PUBLIC_API_PREFIX_PATTERN.test(normalized)
+  ) {
+    return DEFAULT_PUBLIC_API_PREFIX;
+  }
+  return normalized;
+}
 
 function shouldProxy(url: string): boolean {
   // 只代理 http(s) 资源,跳过相对路径 / data: / blob:。
   return /^https?:\/\//i.test(url);
 }
 
-function walk(value: unknown, base: string): unknown {
+function walk(value: unknown, apiBase: string): unknown {
   if (Array.isArray(value)) {
-    return value.map((v) => walk(v, base));
+    return value.map((v) => walk(v, apiBase));
   }
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
@@ -254,12 +275,12 @@ function walk(value: unknown, base: string): unknown {
         typeof v === "string" &&
         shouldProxy(v)
       ) {
-        out[k] = wrapUrl(base, v);
+        out[k] = wrapUrl(apiBase, v);
       } else if (k === "sourceUrl") {
         // sourceUrl 是 Provider 内部详情页,不作为公开播放地址,不走代理。
         out[k] = v;
       } else {
-        out[k] = walk(v, base);
+        out[k] = walk(v, apiBase);
       }
     }
     return out;
@@ -267,6 +288,6 @@ function walk(value: unknown, base: string): unknown {
   return value;
 }
 
-function wrapUrl(base: string, original: string): string {
-  return `${base}${PROXY_PREFIX}${encodeURIComponent(original)}`;
+function wrapUrl(apiBase: string, original: string): string {
+  return `${apiBase}/asset?url=${encodeURIComponent(original)}`;
 }

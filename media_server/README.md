@@ -16,6 +16,8 @@
 - `GET /api/videos/:id`
 - `GET /api/videos/:id/playback`
 
+在 workwork 的 nginx 反代后，公开路径使用服务分类前缀 `/api/media/*`，例如 `/api/media/categories` 会转发到本服务内部的 `/api/categories`。nginx 会设置 `X-Forwarded-Prefix: /api/media`，因此响应里的图片和播放代理地址也会生成到 `/api/media/asset`。
+
 分类浏览走 `/api/categories/:id/videos`，结果由服务端定期维护缓存快照，默认预刷新 100 页；客户端请求超过当前缓存深度时，服务端会继续扩展该分类的视频流。
 
 `/api/search` 只用于搜索页的临时关键词搜索，不缓存响应。分类和搜索接口都会先做后端点播播放地址校验，只公开后续能通过 `/api/videos/:id/playback` 拿到 `kind=vod` 的结果。App 不需要也不应该处理 provider、sourceUrl、网页播放或外部打开。
