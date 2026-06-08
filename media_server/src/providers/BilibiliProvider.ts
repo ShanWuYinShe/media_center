@@ -269,6 +269,22 @@ export class BilibiliProvider implements VideoProvider {
     return { imgKey: this.wbiImgKey, subKey: this.wbiSubKey };
   }
 
+  private async signedURL(
+    path: string,
+    params: Record<string, string>,
+  ): Promise<URL> {
+    const { imgKey, subKey } = await this.ensureWbiKeys();
+    const signed = signWbiParams(params, imgKey, subKey);
+    const queryString = Object.keys(signed)
+      .sort()
+      .map((k) => {
+        const v = signed[k].replace(/[!'()*]/g, "");
+        return `${encodeURIComponent(k)}=${encodeURIComponent(v)}`;
+      })
+      .join("&");
+    return new URL(`${API_BASE}${path}?${queryString}`);
+  }
+
   async search(
     query: string,
     page: number,
@@ -285,21 +301,9 @@ export class BilibiliProvider implements VideoProvider {
       order: "totalrank",
     };
 
-    // wbi 签名
-    const { imgKey, subKey } = await this.ensureWbiKeys();
-    const signed = signWbiParams(params, imgKey, subKey);
-
-    // 手动构建 query string(与签名计算使用相同编码),避免 URL.searchParams 的
-    // application/x-www-form-urlencoded 编码与 encodeURIComponent 不一致导致签名校验失败
-    const queryString = Object.keys(signed)
-      .sort()
-      .map((k) => {
-        const v = signed[k].replace(/[!'()*]/g, "");
-        return `${encodeURIComponent(k)}=${encodeURIComponent(v)}`;
-      })
-      .join("&");
-    const url = new URL(
-      `${API_BASE}/x/web-interface/wbi/search/type?${queryString}`,
+    const url = await this.signedURL(
+      "/x/web-interface/wbi/search/type",
+      params,
     );
 
     const data = await this.getJson<BilibiliSearchResponse>(url);
@@ -327,8 +331,7 @@ export class BilibiliProvider implements VideoProvider {
   }
 
   async getDetails(id: string): Promise<VideoDetails> {
-    const url = new URL(`${API_BASE}/x/web-interface/view`);
-    url.searchParams.set("bvid", id);
+    const url = await this.signedURL("/x/web-interface/wbi/view", { bvid: id });
 
     const data = await this.getJson<BilibiliVideoResponse>(url);
     if (data.code !== 0 || !data.data?.bvid) {
@@ -361,8 +364,9 @@ export class BilibiliProvider implements VideoProvider {
 
   async getStreams(id: string): Promise<VideoStream[]> {
     // 获取 cid
-    const infoUrl = new URL(`${API_BASE}/x/web-interface/view`);
-    infoUrl.searchParams.set("bvid", id);
+    const infoUrl = await this.signedURL("/x/web-interface/wbi/view", {
+      bvid: id,
+    });
     const info = await this.getJson<BilibiliVideoResponse>(infoUrl);
     if (info.code !== 0 || !info.data?.cid) {
       throw new ApiError("NO_PLAYABLE_STREAM", "无法获取视频流信息。", 422);
@@ -433,12 +437,13 @@ export class BilibiliProvider implements VideoProvider {
     cid: number,
     qn: number,
   ): Promise<BilibiliPlayUrlResponse> {
-    const playUrl = new URL(`${API_BASE}/x/player/playurl`);
-    playUrl.searchParams.set("bvid", bvid);
-    playUrl.searchParams.set("cid", String(cid));
-    playUrl.searchParams.set("fnval", "0");
-    playUrl.searchParams.set("qn", String(qn));
-    playUrl.searchParams.set("fourk", "1");
+    const playUrl = await this.signedURL("/x/player/wbi/playurl", {
+      bvid,
+      cid: String(cid),
+      fnval: "0",
+      qn: String(qn),
+      fourk: "1",
+    });
     return this.getJson<BilibiliPlayUrlResponse>(playUrl);
   }
 
