@@ -128,18 +128,13 @@ export class VideoAggregator {
 
   async getDetails(videoId: string): Promise<PublicVideoDetails> {
     const { providerName, sourceId } = decodeVideoId(videoId);
-    const cacheKey = videoId;
-    const cached = this.detailCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
     const details = await withTimeout(
       this.provider(providerName).getDetails(sourceId),
       this.detailResolveTimeoutMs,
       () => providerTimeoutError(providerName, "详情解析"),
     );
     const publicDetails = this.toPublicDetails(details);
-    this.detailCache.set(cacheKey, publicDetails);
+    this.detailCache.set(videoId, publicDetails);
     return publicDetails;
   }
 
@@ -300,9 +295,8 @@ export class VideoAggregator {
   ): Promise<PublicVideoSummary[]> {
     const resolved = await Promise.allSettled(
       candidates.map(async (item) => {
-        // 先查 60 分钟详情缓存:点播解析(尤其 YouTube 走 extractor)非常昂贵,
-        // 搜索/翻页/不同分类间常命中同一视频。命中缓存可直接复用已解析结果,
-        // 避免重复调用 extractor —— 这是冷启动首屏变慢的主要来源之一。
+        // 搜索阶段可复用详情缓存里的"可播放"结论,避免重复调用 extractor。
+        // 真正进入详情/播放时仍重新解析,因为 Provider CDN 直链有时效。
         const videoId = encodeVideoId(item.provider, item.id);
         const cachedDetails = this.detailCache.get(videoId);
         if (cachedDetails) {

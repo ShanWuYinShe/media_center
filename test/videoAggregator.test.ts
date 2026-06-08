@@ -125,6 +125,47 @@ test("详情接口拒绝没有点播播放地址的视频", async () => {
   ).rejects.toThrow("暂无可由 App 直接播放的点播媒体地址");
 });
 
+test("详情接口每次刷新播放地址避免过期缓存", async () => {
+  let detailCalls = 0;
+  const provider: VideoProvider = {
+    name: "bilibili",
+    async search(query, page, pageSize): Promise<SearchResult> {
+      return {
+        query,
+        page,
+        pageSize,
+        total: 1,
+        items: [summary("playable", true)],
+      };
+    },
+    async getDetails(id) {
+      detailCalls += 1;
+      return details(id, [
+        {
+          ...playableStream,
+          url: `https://cdn.example.test/video-${detailCalls}.mp4`,
+          originalUrl: `https://cdn.example.test/video-${detailCalls}.mp4`,
+        },
+      ]);
+    },
+    async getStreams() {
+      return [playableStream];
+    },
+  };
+  const aggregator = new VideoAggregator([provider]);
+
+  await aggregator.search("测试", 1, 1);
+  const firstDetails = await aggregator.getDetails(encoded("bilibili", "playable"));
+  const secondDetails = await aggregator.getDetails(encoded("bilibili", "playable"));
+
+  expect(firstDetails.playbackOptions[0].url).toBe(
+    "https://cdn.example.test/video-2.mp4",
+  );
+  expect(secondDetails.playbackOptions[0].url).toBe(
+    "https://cdn.example.test/video-3.mp4",
+  );
+});
+
 test("搜索会扫描来源后续页以填满公开分页", async () => {
   const provider: VideoProvider = {
     name: "bilibili",
