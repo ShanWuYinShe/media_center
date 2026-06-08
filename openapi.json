@@ -279,7 +279,10 @@
           "kind": { "type": "string", "enum": ["vod"] },
           "label": { "type": "string" },
           "url": { "type": "string", "format": "uri" },
-          "mimeType": { "type": "string", "enum": ["video/mp4", "video/webm"] }
+          "mimeType": {
+            "type": "string",
+            "enum": ["video/mp4", "video/webm", "application/dash+xml"]
+          }
         },
         "additionalProperties": true
       },

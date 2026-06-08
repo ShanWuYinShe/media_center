@@ -21,11 +21,16 @@ export type VideoDetails = VideoSummary & {
   streams: VideoStream[];
 };
 
+export type StreamMimeType =
+  | "video/mp4"
+  | "video/webm"
+  | "application/dash+xml";
+
 export type VideoStream = {
   id: string;
   url: string;
   originalUrl: string;
-  mimeType: "video/mp4" | "video/webm";
+  mimeType: StreamMimeType;
   quality: string;
   width?: number;
   height?: number;
@@ -38,7 +43,7 @@ export type PlaybackOption = {
   kind: "vod";
   label: string;
   url: string;
-  mimeType: "video/mp4" | "video/webm";
+  mimeType: StreamMimeType;
 };
 
 export type SearchResult = {

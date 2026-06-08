@@ -9,6 +9,12 @@ import type {
 } from "../types.js";
 import type { VideoProvider } from "./VideoProvider.js";
 import { fetchWithTimeout } from "../services/fetchWithTimeout.js";
+import {
+  createDashManifestReference,
+  DASH_MANIFEST_MIME_TYPE,
+  type DashAudioRepresentation,
+  type DashVideoRepresentation,
+} from "../services/StreamManifests.js";
 
 type FetchLike = typeof fetch;
 
@@ -66,8 +72,42 @@ type BilibiliPlayUrlResponse = {
       size: number;
       quality: number;
     }>;
+    dash?: {
+      duration?: number;
+      minBufferTime?: number;
+      min_buffer_time?: number;
+      video?: BilibiliDashItem[];
+      audio?: BilibiliDashItem[];
+    };
   };
 };
+
+type BilibiliDashItem = {
+  id?: number;
+  baseUrl?: string;
+  base_url?: string;
+  backupUrl?: string[];
+  backup_url?: string[];
+  bandwidth?: number;
+  mimeType?: string;
+  mime_type?: string;
+  codecs?: string;
+  width?: number;
+  height?: number;
+  frameRate?: string;
+  frame_rate?: string;
+  SegmentBase?: BilibiliDashSegmentBase;
+  segment_base?: BilibiliDashSegmentBase;
+};
+
+type BilibiliDashSegmentBase = {
+  Initialization?: string;
+  initialization?: string;
+  indexRange?: string;
+  index_range?: string;
+};
+
+type DashRepresentationBase = Omit<DashVideoRepresentation, "mimeType">;
 
 // ── 常量 ──────────────────────────────────────────────────────────
 
@@ -220,6 +260,90 @@ function compactQualityDesc(desc: string, quality: number): string {
     return match[0].replace(/\s+/g, "").toUpperCase();
   }
   return qualityLabel(quality);
+}
+
+function dashVideoLabel(
+  item: BilibiliDashItem,
+  representation: DashVideoRepresentation,
+): string {
+  if (representation.height) {
+    return `${representation.height}P`;
+  }
+  return item.id ? qualityLabel(item.id) : "DASH";
+}
+
+function bestDashAudio(
+  items: BilibiliDashItem[],
+): DashAudioRepresentation | undefined {
+  return items
+    .flatMap((item) => {
+      const representation = dashAudioRepresentation(item);
+      return representation ? [representation] : [];
+    })
+    .sort((a, b) => (b.bandwidth ?? 0) - (a.bandwidth ?? 0))[0];
+}
+
+function dashVideoRepresentation(
+  item: BilibiliDashItem,
+): DashVideoRepresentation | undefined {
+  const representation = dashRepresentation(item, "video");
+  return representation
+    ? { ...representation, mimeType: "video/mp4" }
+    : undefined;
+}
+
+function dashAudioRepresentation(
+  item: BilibiliDashItem,
+): DashAudioRepresentation | undefined {
+  const representation = dashRepresentation(item, "audio");
+  return representation
+    ? { ...representation, mimeType: "audio/mp4" }
+    : undefined;
+}
+
+function dashRepresentation(
+  item: BilibiliDashItem,
+  kind: "video" | "audio",
+): DashRepresentationBase | undefined {
+  const url = dashItemUrl(item);
+  if (!url) {
+    return undefined;
+  }
+  const expectedMimeType = kind === "video" ? "video/mp4" : "audio/mp4";
+  const mimeType = item.mimeType ?? item.mime_type ?? expectedMimeType;
+  if (mimeType !== expectedMimeType) {
+    return undefined;
+  }
+  const segmentBase = item.SegmentBase ?? item.segment_base;
+  return {
+    id: String(item.id ?? `${kind}-${item.bandwidth ?? 0}`),
+    url,
+    codecs: item.codecs,
+    bandwidth: positiveInteger(item.bandwidth),
+    width: positiveInteger(item.width),
+    height: positiveInteger(item.height),
+    frameRate: item.frameRate ?? item.frame_rate,
+    initialization: segmentBase?.Initialization ?? segmentBase?.initialization,
+    indexRange: segmentBase?.indexRange ?? segmentBase?.index_range,
+  };
+}
+
+function dashItemUrl(item: BilibiliDashItem): string | undefined {
+  const candidates = [
+    item.baseUrl,
+    item.base_url,
+    ...(item.backupUrl ?? []),
+    ...(item.backup_url ?? []),
+  ];
+  return candidates.find(
+    (url) => url !== undefined && /^https?:\/\//i.test(url),
+  );
+}
+
+function positiveInteger(value: number | undefined): number | undefined {
+  return value !== undefined && Number.isInteger(value) && value > 0
+    ? value
+    : undefined;
 }
 
 /** 解析 "HH:MM:SS" 或 "MM:SS" 为秒数 */
@@ -383,6 +507,12 @@ export class BilibiliProvider implements VideoProvider {
     bvid: string,
     cid: number,
   ): Promise<VideoStream[]> {
+    const dashProbe = await this.fetchDashPlayUrl(bvid, cid, 80);
+    const dashStreams = this.dashStreams(bvid, dashProbe);
+    if (dashStreams.length > 0) {
+      return dashStreams;
+    }
+
     // 第一次请求高清晰度,顺带读取 accept_quality 列表
     const probe = await this.fetchPlayUrl(bvid, cid, 80);
     if ((probe.data?.durl ?? []).length === 0) {
@@ -408,7 +538,9 @@ export class BilibiliProvider implements VideoProvider {
         qn === (probe.data?.quality ?? -1)
           ? probe
           : await this.fetchPlayUrl(bvid, cid, qn);
-      const durl = data.data?.durl?.[0];
+      const durls = data.data?.durl ?? [];
+      if (durls.length !== 1) continue;
+      const durl = durls[0];
       if (!durl) continue;
       const actualQuality = data.data?.quality ?? qn;
       const desc = descByQuality.get(actualQuality);
@@ -431,6 +563,47 @@ export class BilibiliProvider implements VideoProvider {
     return streams;
   }
 
+  private dashStreams(
+    bvid: string,
+    response: BilibiliPlayUrlResponse,
+  ): VideoStream[] {
+    const dash = response.data?.dash;
+    const audio = bestDashAudio(dash?.audio ?? []);
+    const videos = (dash?.video ?? [])
+      .flatMap((item) => {
+        const representation = dashVideoRepresentation(item);
+        return representation ? [{ item, representation }] : [];
+      })
+      .sort(
+        (a, b) =>
+          (b.representation.height ?? 0) - (a.representation.height ?? 0),
+      );
+    const streams: VideoStream[] = [];
+    const seenLabels = new Set<string>();
+    for (const { item, representation } of videos) {
+      const label = dashVideoLabel(item, representation);
+      if (seenLabels.has(label)) continue;
+      seenLabels.add(label);
+      const manifest = createDashManifestReference({
+        version: 1,
+        durationSeconds: dash?.duration,
+        minBufferTimeSeconds: dash?.minBufferTime ?? dash?.min_buffer_time,
+        video: representation,
+        audio,
+      });
+      streams.push({
+        id: `bili-${bvid}-${item.id ?? representation.height ?? streams.length}-dash`,
+        url: manifest,
+        originalUrl: manifest,
+        mimeType: DASH_MANIFEST_MIME_TYPE,
+        quality: label,
+        supportsRange: true,
+      });
+      if (streams.length >= 4) break;
+    }
+    return streams;
+  }
+
   /** 请求单一清晰度的 playurl(fnval=0 → 旧版 MP4 直链)。 */
   private async fetchPlayUrl(
     bvid: string,
@@ -441,6 +614,22 @@ export class BilibiliProvider implements VideoProvider {
       bvid,
       cid: String(cid),
       fnval: "0",
+      qn: String(qn),
+      fourk: "1",
+    });
+    return this.getJson<BilibiliPlayUrlResponse>(playUrl);
+  }
+
+  /** 请求 DASH(fMP4)播放信息,由服务端生成 MPD 并通过 /asset 做 Range 代理。 */
+  private async fetchDashPlayUrl(
+    bvid: string,
+    cid: number,
+    qn: number,
+  ): Promise<BilibiliPlayUrlResponse> {
+    const playUrl = await this.signedURL("/x/player/wbi/playurl", {
+      bvid,
+      cid: String(cid),
+      fnval: "16",
       qn: String(qn),
       fourk: "1",
     });

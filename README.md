@@ -36,7 +36,7 @@
 
 ## 点播解析与流式播放
 
-- Bilibili 普通视频优先走已有公开接口解析 MP4 点播地址。
+- Bilibili 普通视频优先走公开接口解析 DASH(fMP4) 或单文件 MP4 点播地址；DASH 清单和媒体分片都通过服务端签名代理，播放器按 Range 流式拉取，不需要整文件下载。
 - YouTube 普通视频通过内部 `vod_extractor` 服务解析点播地址；本地运行可设置 `VOD_EXTRACTOR_URL=http://127.0.0.1:8790/extract`，或安装 `yt-dlp` 并设置 `VOD_EXTRACTOR_BIN=/path/to/yt-dlp` 作为 fallback。
 - `/api/asset` 只接受服务端签发的代理 URL，不会先下载完整文件，而是把 App 的 HTTP Range 请求直接转发给上游 CDN，再把响应流式返回给 Media3/ExoPlayer，支持边下边播和 seek。
 - 后端会按 URL + Range 缓存点播片段和图片响应，默认缓存目录 `/cache`，总上限 50GB，可用 `BACKEND_CACHE_DIR` 和 `BACKEND_CACHE_MAX_BYTES` 覆盖。

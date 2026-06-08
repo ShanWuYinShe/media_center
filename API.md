@@ -88,7 +88,7 @@ type PlaybackOption = {
   kind: "vod";
   label: string;
   url: string;
-  mimeType: "video/mp4" | "video/webm";
+  mimeType: "video/mp4" | "video/webm" | "application/dash+xml";
 };
 ```
 
@@ -268,6 +268,7 @@ Query：
 
 - 未识别字段应忽略，方便服务端后续扩展。
 - `playbackKind` 和 `kind` 当前只会是 `vod`，但 App 应按枚举处理。
+- `mimeType=application/dash+xml` 表示服务端生成的 DASH 清单；App 应交给支持 DASH 的播放器处理，清单和媒体分片都会通过 `/asset` Range 代理流式读取。
 - `thumbnailUrl`、`year`、`durationSeconds` 可能缺失。
 - `playbackOptions` 可能为空或请求返回 `NO_PLAYABLE_STREAM`，App 应展示“暂不可播放”。
 - 不要依赖 `id` 的内部格式；它可能包含 `:`、`-`、`_` 等字符。

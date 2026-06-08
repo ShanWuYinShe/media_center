@@ -111,6 +111,14 @@ export class HttpResponseCache {
   ): NodeJS.ReadableStream {
     const passthrough = new PassThrough();
     if (this.inflight.has(key)) {
+      source.on("error", (error) => {
+        passthrough.destroy(error);
+      });
+      passthrough.on("close", () => {
+        if (!source.destroyed) {
+          source.destroy();
+        }
+      });
       source.pipe(passthrough);
       return passthrough;
     }
@@ -133,11 +141,23 @@ export class HttpResponseCache {
     const tmpBody = this.bodyPath(`${key}.tmp`);
     const writer = createWriteStream(tmpBody);
     let completed = false;
+    let sourceEnded = false;
+    let cleanedUp = false;
+    const cleanupAbortedWrite = () => {
+      if (cleanedUp) {
+        return;
+      }
+      cleanedUp = true;
+      writer.destroy();
+      this.inflight.delete(key);
+      unlink(tmpBody).catch(() => undefined);
+    };
     source.on("data", (chunk: Buffer) => {
       writer.write(chunk);
       passthrough.write(chunk);
     });
     source.on("end", () => {
+      sourceEnded = true;
       writer.end();
       passthrough.end();
     });
@@ -157,8 +177,11 @@ export class HttpResponseCache {
       unlink(tmpBody).catch(() => undefined);
     });
     passthrough.on("close", () => {
-      if (!completed && !source.destroyed) {
-        source.destroy();
+      if (!completed && !sourceEnded) {
+        if (!source.destroyed) {
+          source.destroy();
+        }
+        cleanupAbortedWrite();
       }
     });
   }
