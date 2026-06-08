@@ -65,7 +65,9 @@ export function buildServer() {
     });
   });
 
-  app.get("/health", async () => ({ ok: true }));
+  const healthHandler = async () => ({ ok: true });
+  app.get("/health", healthHandler);
+  app.get("/api/health", healthHandler);
 
   app.get("/api/categories", async () => ({
     items: contentCategories.map(({ id, title, description }) => ({
