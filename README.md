@@ -16,6 +16,8 @@ npm start
 
 默认监听 `http://localhost:8787`。
 
+本地调试可直接连接服务端，不需要 nginx；线上通过 workwork admin 生成分类配置和 nginx 反代配置，默认公开前缀为 `/api/media`。
+
 ## 视频类型
 
 项目把视频分成两类：
@@ -46,14 +48,21 @@ ANDROID_HOME="$HOME/Library/Android/sdk" \
 ./gradlew :app:assembleDebug -PMEDIA_SERVER_URL=http://服务端IP:8787
 ```
 
+如果连接 workwork nginx 代理后的线上服务，传入带前缀的 API 地址：
+
+```bash
+./gradlew :app:assembleDebug -PMEDIA_SERVER_URL=https://你的域名/api/media
+```
+
 ## 工具链约定
 
 JS/Web 前端项目优先使用 Bun（`bun install`、`bun run`、`bun test`）。当前 `media_app` 是 Android TV 原生客户端，构建仍使用 Gradle/Android Studio 工具链；如果后续新增 Web 管理台或 H5 前端，应默认采用 Bun。
 
 ## API 契约
 
-- `GET /api/categories`：返回五个一级分类，不包含内部搜索词。
-- `GET /api/search?q=关键词&category=dota-zone&page=1&pageSize=20`：返回已验证可播放的 `vod` 视频摘要。
+- `GET /api/categories`：返回一级分类，不包含内部搜索词。
+- `GET /api/categories/:id/videos?page=1&pageSize=20`：返回服务端缓存的分类视频列表。
+- `GET /api/search?q=关键词&page=1&pageSize=20`：返回已验证可播放的 `vod` 视频摘要。
 - `GET /api/videos/:id`：返回视频详情和播放选项。
 - `GET /api/videos/:id/playback`：返回 App 可直接播放的点播媒体地址。
 

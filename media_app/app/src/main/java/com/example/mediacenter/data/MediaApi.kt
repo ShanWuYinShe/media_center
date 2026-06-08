@@ -26,8 +26,11 @@ class MediaApi(
         explicitNulls = false
     },
 ) {
+    private val apiRoot = baseUrl.toHttpUrl()
+    private val baseUrlIncludesApiPrefix = apiRoot.pathSegments.any { it.isNotEmpty() }
+
     suspend fun search(query: String, page: Int = 1, pageSize: Int = 18): SearchResponse = get(
-        pathSegments = listOf("api", "search"),
+        pathSegments = listOf("search"),
         query = mapOf(
             "q" to query,
             "page" to page.toString(),
@@ -40,24 +43,27 @@ class MediaApi(
         page: Int = 1,
         pageSize: Int = 18,
     ): SearchResponse = get(
-        pathSegments = listOf("api", "categories", categoryId, "videos"),
+        pathSegments = listOf("categories", categoryId, "videos"),
         query = mapOf(
             "page" to page.toString(),
             "pageSize" to pageSize.toString(),
         ),
     )
 
-    suspend fun categories(): CategoryResponse = get(pathSegments = listOf("api", "categories"))
+    suspend fun categories(): CategoryResponse = get(pathSegments = listOf("categories"))
 
     suspend fun details(id: String): VideoDetails = get(
-        pathSegments = listOf("api", "videos", id),
+        pathSegments = listOf("videos", id),
     )
 
     private suspend inline fun <reified T> get(
         pathSegments: List<String>,
         query: Map<String, String> = emptyMap(),
     ): T {
-        val builder = baseUrl.toHttpUrl().newBuilder()
+        val builder = apiRoot.newBuilder()
+        if (!baseUrlIncludesApiPrefix) {
+            builder.addPathSegment("api")
+        }
         pathSegments.forEach(builder::addPathSegment)
         query.forEach { (key, value) -> builder.addQueryParameter(key, value) }
         val request = Request.Builder().url(builder.build()).get().build()

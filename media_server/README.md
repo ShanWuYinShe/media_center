@@ -24,6 +24,13 @@
 
 内置一级专区为电影、电视剧、纪录片、红色经典和 Dota 专区。Dota 分类以 Dota1 / 魔兽争霸 3 / DotA Allstars 录像和完整对局为主，兼顾 Dota2 / TI。
 
+## 配置与部署
+
+- 本地开发默认直接读取内置 `src/contentCategories.json`，监听 `http://127.0.0.1:8787`，不需要 nginx。
+- 线上由 workwork admin 管理分类和代理设置。admin 会生成运行时分类文件并把它挂载到容器内 `/config/contentCategories.json`，服务端通过 `CONTENT_CATEGORIES_FILE=/config/contentCategories.json` 读取。
+- 如果不通过 workwork，也可以手动设置 `CONTENT_CATEGORIES_FILE=/path/to/contentCategories.json`（兼容别名 `MEDIA_SERVER_CONTENT_CATEGORIES_FILE`）覆盖内置分类；JSON 结构与 `src/contentCategories.json` 相同。
+- `HOST` / `PORT` 控制服务监听地址；nginx 公开前缀由反代设置 `X-Forwarded-Prefix`，本服务会据此重写图片和播放代理 URL。
+
 ## 点播解析与流式播放
 
 - Bilibili 普通视频优先走已有公开接口解析 MP4 点播地址。

@@ -14,4 +14,10 @@ ANDROID_HOME="$HOME/Library/Android/sdk" \
 ./gradlew :app:assembleDebug -PMEDIA_SERVER_URL=http://服务端IP:8787
 ```
 
+`MEDIA_SERVER_URL` 可以是服务根地址（App 会自动请求 `/api/*`），也可以直接带线上 API 前缀。通过 workwork nginx 部署时使用：
+
+```bash
+./gradlew :app:assembleDebug -PMEDIA_SERVER_URL=https://你的域名/api/media
+```
+
 首页会从服务端读取内容分类，默认展示服务端返回的第一个分类。内置一级专区包括电影、电视剧、纪录片、红色经典和 Dota 专区。App 只消费服务端返回的统一视频 ID、`videoKind=vod` 和点播播放地址，不处理直播、视频来源、网页播放或外部打开。

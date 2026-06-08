@@ -1,21 +1,12 @@
-import { z } from "zod";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+  categoriesConfigSchema,
   contentCategories,
   findContentCategory,
+  loadContentCategories,
 } from "../src/contentCategories.js";
-
-const categoryConfigSchema = z.object({
-  id: z.string().min(1),
-  title: z.string().min(1),
-  description: z.string().min(1),
-  searchQuery: z.string().trim().min(1).optional(),
-  keywords: z.array(z.string().min(1)).min(1),
-  excludes: z.array(z.string().min(1)).optional(),
-});
-
-const categoriesConfigSchema = z.object({
-  categories: z.array(categoryConfigSchema).min(1),
-});
 
 test("默认配置加载后,每个分类都有完整的对外字段", () => {
   expect(contentCategories.length).toBeGreaterThan(0);
@@ -87,6 +78,39 @@ test("excludes 配置保留为内部过滤规则,不会污染搜索 query", () =
   });
   expect(config.categories[0].searchQuery).toBe("foo");
   expect(config.categories[0].excludes).toEqual(["baz", "qux"]);
+});
+
+test("可以从运行时 JSON 文件加载分类配置", () => {
+  const dir = mkdtempSync(join(tmpdir(), "media-categories-"));
+  const path = join(dir, "contentCategories.json");
+  writeFileSync(
+    path,
+    JSON.stringify({
+      categories: [
+        {
+          id: "local-test",
+          title: "本地测试",
+          description: "由运行时配置提供",
+          searchQuery: "本地 搜索",
+          keywords: ["本地", "搜索"],
+          excludes: ["预告"],
+        },
+      ],
+    }),
+  );
+
+  const categories = loadContentCategories(path);
+
+  expect(categories).toEqual([
+    {
+      id: "local-test",
+      title: "本地测试",
+      description: "由运行时配置提供",
+      query: "本地 搜索",
+      keywords: ["本地", "搜索"],
+      excludes: ["预告"],
+    },
+  ]);
 });
 
 test("配置缺关键词或关键词为空数组时被 Zod 拒绝", () => {
