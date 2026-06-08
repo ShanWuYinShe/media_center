@@ -54,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -166,7 +167,7 @@ private fun SearchPill(onClick: () -> Unit) {
 }
 
 @Composable
-private fun SearchIcon(color: Color, size: androidx.compose.ui.unit.Dp) {
+fun SearchIcon(color: Color, size: androidx.compose.ui.unit.Dp) {
     androidx.compose.foundation.Canvas(modifier = Modifier.size(size)) {
         val stroke = 1.6.dp.toPx()
         val r = this.size.minDimension * 0.32f
@@ -367,13 +368,26 @@ fun CategoryChip(
     //     因为它跟其他失焦 chip **大小一致**,只颜色不同。
     val focusedScale = 1.0f
     val focusedElevation = 0.dp
+    // 边框三态:
+    //   · 焦点               → 近白 halo 边(2.5dp),最强,代表"正在操作"
+    //   · 失焦 + selected    → Apple Blue 描边(1.5dp),持续标记"当前分类",
+    //                          这样焦点移到视频列表后,用户一眼能看出在看哪个分类
+    //   · 失焦 + 未选中      → 无边
     val borderColor by animateColorAsState(
-        targetValue = if (focused) AppleTvColors.GlassBorderFocused else Color.Transparent,
+        targetValue = when {
+            focused -> AppleTvColors.GlassBorderFocused
+            selected -> AppleTvColors.AppleBlue
+            else -> Color.Transparent
+        },
         animationSpec = tween(durationMillis = 180),
         label = "chipFocusBorder",
     )
     val borderWidth by animateDpAsState(
-        targetValue = if (focused) 2.5.dp else 0.dp,
+        targetValue = when {
+            focused -> 2.5.dp
+            selected -> 1.5.dp
+            else -> 0.dp
+        },
         animationSpec = tween(durationMillis = 180),
         label = "chipFocusBorderWidth",
     )
@@ -436,6 +450,9 @@ fun CategoryRail(
     // onUpFromPoster 回调里能直接用 selectedCategoryId 找 FocusRequester
     // 请求焦点,绕过 LazyRow 默认的 focusRestorer 行为。
     focuserRegister: ((String, FocusRequester) -> Unit)? = null,
+    // chip 按 UP 时的显式焦点目标(通常是放大镜搜索按钮),保证分类↔搜索
+    // 可回溯,不依赖空间位置猜测。
+    upTarget: FocusRequester? = null,
 ) {
     LazyRow(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -460,7 +477,15 @@ fun CategoryRail(
                 selected = category.id == selectedCategoryId,
                 onClick = { onSelectCategory(category) },
                 onFocused = { onCategoryFocused(category) },
-                modifier = Modifier.focusRequester(focusRequester),
+                modifier = Modifier
+                    .focusRequester(focusRequester)
+                    .then(
+                        if (upTarget != null) {
+                            Modifier.focusProperties { up = upTarget }
+                        } else {
+                            Modifier
+                        },
+                    ),
             )
         }
     }
@@ -695,93 +720,127 @@ fun PosterGrid(
 ) {
     // 追踪当前焦点所在 item 的 index,用于判断"第一行按 UP"场景
     var focusedIndex by remember { mutableStateOf(-1) }
+    var endReached by remember(items.size, canLoadMore) { mutableStateOf(false) }
     val shouldLoadMore by remember(items.size, canLoadMore, loadingMore, state) {
         derivedStateOf {
             val lastVisible = state.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            val userHasScrolled = state.firstVisibleItemIndex > 0 ||
-                state.firstVisibleItemScrollOffset > 0
             canLoadMore &&
                 !loadingMore &&
-                userHasScrolled &&
                 items.isNotEmpty() &&
                 lastVisible >= items.lastIndex - 6
         }
     }
+    val endVisible by remember(items.size, canLoadMore, loadingMore, state) {
+        derivedStateOf {
+            val lastVisible = state.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            !canLoadMore &&
+                !loadingMore &&
+                items.isNotEmpty() &&
+                lastVisible >= items.lastIndex
+        }
+    }
+    val showEndOfList = !canLoadMore && !loadingMore && items.isNotEmpty() && endReached
 
     LaunchedEffect(shouldLoadMore) {
         if (shouldLoadMore) {
             onLoadMore()
         }
     }
-
-    LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 130.dp),
-        contentPadding = PaddingValues(horizontal = 56.dp, vertical = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-        modifier = modifier
-            .fillMaxSize()
-            .focusGroup()
-            .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown || event.key != Key.DirectionUp) {
-                    return@onPreviewKeyEvent false
-                }
-                if (onUpFromFirstRow == null || focusedIndex < 0) {
-                    return@onPreviewKeyEvent false
-                }
-                // 根据可见 items 计算列数,判断焦点是否在第一行
-                val visibleItems = state.layoutInfo.visibleItemsInfo
-                if (visibleItems.isEmpty()) return@onPreviewKeyEvent false
-                val minY = visibleItems.minOf { it.offset.y }
-                val columnCount = visibleItems.count { it.offset.y == minY }
-                if (focusedIndex < columnCount) {
-                    onUpFromFirstRow()
-                    true
-                } else {
-                    false
-                }
-            },
-        state = state,
-    ) {
-        items(count = items.size, key = { items[it].id }) { index ->
-            val video = items[index]
-            val focusRequester = remember { FocusRequester() }
-            LaunchedEffect(pendingFocusVideoId, video.id) {
-                if (pendingFocusVideoId == video.id) {
-                    requestFocusWhenReady(focusRequester, "video ${video.id}")
-                    onPendingFocusHandled(video.id)
-                }
-            }
-            PosterCard(
-                video = video,
-                onClick = { onSelect(video) },
-                onFocused = {
-                    focusedIndex = index
-                    onVideoFocused(video)
-                },
-                focusModifier = Modifier.focusRequester(focusRequester),
-            )
+    LaunchedEffect(endVisible) {
+        if (endVisible) {
+            endReached = true
         }
-        // 瀑布流底部指示器:
-        //   · loadingMore  → 旋转 spinner + “正在加载更多…”
-        //   · 还能加载更多 → 静态“下滑加载更多”提示(让用户知道列表未到底)
-        //   · 到底了       → “已经到底啦”
-        if (loadingMore || canLoadMore) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                LoadMoreIndicator(loadingMore = loadingMore)
+    }
+
+    Column(modifier = modifier.fillMaxSize()) {
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = 130.dp),
+            contentPadding = PaddingValues(
+                start = 56.dp,
+                end = 56.dp,
+                top = 16.dp,
+                bottom = 32.dp,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .focusGroup()
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown || event.key != Key.DirectionUp) {
+                        return@onPreviewKeyEvent false
+                    }
+                    if (onUpFromFirstRow == null || focusedIndex < 0) {
+                        return@onPreviewKeyEvent false
+                    }
+                    // 根据可见 items 计算列数,判断焦点是否在第一行
+                    val visibleItems = state.layoutInfo.visibleItemsInfo
+                    if (visibleItems.isEmpty()) return@onPreviewKeyEvent false
+                    val minY = visibleItems.minOf { it.offset.y }
+                    val columnCount = visibleItems.count { it.offset.y == minY }
+                    if (focusedIndex < columnCount) {
+                        onUpFromFirstRow()
+                        true
+                    } else {
+                        false
+                    }
+                },
+            state = state,
+        ) {
+            items(count = items.size, key = { items[it].id }) { index ->
+                val video = items[index]
+                val focusRequester = remember { FocusRequester() }
+                LaunchedEffect(pendingFocusVideoId, video.id) {
+                    if (pendingFocusVideoId == video.id) {
+                        requestFocusWhenReady(focusRequester, "video ${video.id}")
+                        onPendingFocusHandled(video.id)
+                    }
+                }
+                PosterCard(
+                    video = video,
+                    onClick = { onSelect(video) },
+                    onFocused = {
+                        focusedIndex = index
+                        onVideoFocused(video)
+                    },
+                    focusModifier = Modifier.focusRequester(focusRequester),
+                )
             }
-        } else if (items.isNotEmpty()) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                EndOfListIndicator()
+            // 仍可加载时保留滚动尾部提示;加载中/已到底改用下方状态栏,
+            // 避免文案被网格底部裁切。
+            if (!loadingMore && canLoadMore) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    LoadMoreIndicator(loadingMore = false)
+                }
+            }
+        }
+
+        if (loadingMore || showEndOfList) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(88.dp)
+                    .padding(bottom = 24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (loadingMore) {
+                    LoadMoreIndicator(loadingMore = true)
+                } else {
+                    EndOfListIndicator()
+                }
             }
         }
     }
 }
 
 @Composable
-private fun LoadMoreIndicator(loadingMore: Boolean) {
+private fun LoadMoreIndicator(
+    loadingMore: Boolean,
+    modifier: Modifier = Modifier,
+) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 20.dp),
         horizontalArrangement = Arrangement.Center,

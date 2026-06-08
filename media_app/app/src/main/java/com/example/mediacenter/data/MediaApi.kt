@@ -1,9 +1,12 @@
 package com.example.mediacenter.data
 
 import java.io.IOException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.Json
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -34,14 +37,11 @@ class MediaApi(
 
     suspend fun searchCategory(
         categoryId: String,
-        query: String,
         page: Int = 1,
         pageSize: Int = 18,
     ): SearchResponse = get(
-        pathSegments = listOf("api", "search"),
+        pathSegments = listOf("api", "categories", categoryId, "videos"),
         query = mapOf(
-            "category" to categoryId,
-            "q" to query,
             "page" to page.toString(),
             "pageSize" to pageSize.toString(),
         ),
@@ -56,7 +56,7 @@ class MediaApi(
     private suspend inline fun <reified T> get(
         pathSegments: List<String>,
         query: Map<String, String> = emptyMap(),
-    ): T = withContext(Dispatchers.IO) {
+    ): T {
         val builder = baseUrl.toHttpUrl().newBuilder()
         pathSegments.forEach(builder::addPathSegment)
         query.forEach { (key, value) -> builder.addQueryParameter(key, value) }
@@ -68,12 +68,7 @@ class MediaApi(
         var lastError: IOException? = null
         while (true) {
             try {
-                return@withContext client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        throw IOException("HTTP ${response.code}: ${response.peekBody(512).string()}")
-                    }
-                    json.decodeFromString<T>(response.requiredBody())
-                }
+                return json.decodeFromString<T>(execute(request))
             } catch (error: IOException) {
                 lastError = error
                 if (attempt >= MAX_RETRIES) break
@@ -83,6 +78,36 @@ class MediaApi(
             }
         }
         throw lastError ?: IOException("未知网络错误")
+    }
+
+    private suspend fun execute(request: Request): String = suspendCancellableCoroutine { continuation ->
+        val call = client.newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, error: IOException) {
+                if (continuation.isActive) {
+                    continuation.resumeWithException(error)
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                try {
+                    response.use {
+                        if (!it.isSuccessful) {
+                            throw IOException("HTTP ${it.code}: ${it.peekBody(512).string()}")
+                        }
+                        val body = it.requiredBody()
+                        if (continuation.isActive) {
+                            continuation.resume(body)
+                        }
+                    }
+                } catch (error: IOException) {
+                    if (continuation.isActive) {
+                        continuation.resumeWithException(error)
+                    }
+                }
+            }
+        })
     }
 
     private fun Response.requiredBody(): String {

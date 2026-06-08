@@ -59,12 +59,18 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     private var searchJob: Job? = null
     private var loadMoreJob: Job? = null
     private var detailsJob: Job? = null
+    // 在列表末尾按"下一个"时,记录续播来源 id:loadMore 拉到新一页后,
+    // 在其 onSuccess 里自动续播该来源的下一条,避免自动续播在分页边界"断档"。
+    private var pendingAutoAdvanceFromId: String? = null
 
     init {
         loadCategoriesAndSearch()
     }
 
-    fun search(query: String, categoryId: String? = mutableState.value.selectedCategoryId) {
+    fun search(
+        query: String,
+        categoryId: String? = if (query.isBlank()) mutableState.value.selectedCategoryId else null,
+    ) {
         // 防御:服务端要求 q / category 至少一个,空 + null 直接拒绝避免反复 400。
         if (query.isBlank() && categoryId == null) {
             mutableState.update {
@@ -75,6 +81,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         detailsJob?.cancel()
         loadMoreJob?.cancel()
         searchJob?.cancel()
+        pendingAutoAdvanceFromId = null
         searchJob = viewModelScope.launch {
             mutableState.update {
                 it.copy(
@@ -137,8 +144,21 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                             page = nextPage,
                         )
                     }
+                    // 若是"末尾按下一个/自动续播触发的 loadMore",新页到手后
+                    // 继续把焦点视频续播下去,补上分页边界的断档。
+                    val pendingId = pendingAutoAdvanceFromId
+                    if (pendingId != null) {
+                        pendingAutoAdvanceFromId = null
+                        val newItems = mutableState.value.items
+                        val i = newItems.indexOfFirst { it.id == pendingId }
+                        if (i >= 0 && i + 1 < newItems.size) {
+                            playVideoAt(i + 1, newItems)
+                        }
+                    }
                 }
                 .onFailure { error ->
+                    // 续播依赖的分页加载失败:清掉待续播标记,避免悬挂。
+                    pendingAutoAdvanceFromId = null
                     mutableState.update {
                         it.copy(loadingMore = false, error = error.message ?: "加载更多失败")
                     }
@@ -180,7 +200,8 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
 
     /**
      * 播放“下一个”:在当前分类列表里找到正在播放视频的下一条,
-     * 拉取其详情并以默认(最高)清晰度直接开播。已是最后一条时尝试加载更多。
+     * 拉取其详情并以默认(最高)清晰度直接开播。已是最后一条且还有下一页时,
+     * 先加载更多,新页到手后自动续播,保证分页边界不会断档。
      */
     fun playNext() {
         val current = mutableState.value
@@ -190,13 +211,27 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         if (idx < 0) return
         val nextIndex = idx + 1
         if (nextIndex >= items.size) {
-            // 已到当前已加载列表末尾:触发加载更多,用户可稍后再次按下一个
-            loadMore()
+            // 已到当前已加载列表末尾:若还有下一页,记下续播来源 id;新页到手后
+            // 在 loadMore.onSuccess 里自动续播(补上分页边界断档)。若此刻已有
+            // loadMore(预取)在跑,就复用它,不重复发起。
+            if (current.canLoadMore) {
+                pendingAutoAdvanceFromId = curId
+                if (!current.loadingMore) loadMore()
+            }
             return
         }
-        val nextVideo = items[nextIndex]
+        playVideoAt(nextIndex, items)
+    }
+
+    /**
+     * 拉取列表中第 [index] 条视频的详情并以默认(最高)清晰度直接开播。
+     * 失败时**清空 playing**:让 UI 从播放页退回详情页,而不是把用户困在
+     * 一帧"已结束/卡死"的播放画面上(播放页本身不渲染错误态)。
+     */
+    private fun playVideoAt(index: Int, items: List<VideoSummary>) {
+        val nextVideo = items[index]
         // 临近列表末尾时顺便预取下一页,保证“下一个”能持续可用
-        if (nextIndex >= items.size - 3) loadMore()
+        if (index >= items.size - 3) loadMore()
         detailsJob?.cancel()
         detailsJob = viewModelScope.launch {
             mutableState.update { it.copy(loading = true, error = null) }
@@ -205,7 +240,13 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     val option = details.playbackOptions.firstOrNull()
                     if (option == null) {
                         mutableState.update {
-                            it.copy(loading = false, error = "该视频暂无可播放清晰度")
+                            it.copy(
+                                loading = false,
+                                selected = details,
+                                playingVideo = nextVideo,
+                                playing = null,
+                                error = "该视频暂无可播放清晰度",
+                            )
                         }
                     } else {
                         mutableState.update {
@@ -220,7 +261,11 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                 }
                 .onFailure { error ->
                     mutableState.update {
-                        it.copy(loading = false, error = error.message ?: "播放下一个失败")
+                        it.copy(
+                            loading = false,
+                            playing = null,
+                            error = error.message ?: "播放下一个失败",
+                        )
                     }
                 }
         }
@@ -232,11 +277,18 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         if (mutableState.value.categories.isEmpty()) {
             loadCategoriesAndSearch()
         } else {
-            search(mutableState.value.query, mutableState.value.selectedCategoryId)
+            search(mutableState.value.query)
         }
     }
 
     fun back() {
+        // 取消可能"迟到回写"的任务,否则:在播放页按 ↓(下一个)后立刻按 BACK,
+        // back() 把 playing 清空(回到详情),但仍在跑的 detailsJob 完成后又把
+        // playing 重新写成非空 → 用户被强行拽回播放页。这与"BACK 漏拦截"同类:
+        // BACK 的效果被异步写默默撤销。同理清掉待续播标记,避免 loadMore 完成后
+        // 触发自动续播再次跳回播放页。
+        detailsJob?.cancel()
+        pendingAutoAdvanceFromId = null
         mutableState.update {
             when {
                 it.playing != null -> it.copy(playing = null)
@@ -271,7 +323,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                 val nextId = validId ?: categories.firstOrNull()?.id
                 current.copy(categories = categories, selectedCategoryId = nextId)
             }
-            search(mutableState.value.query, mutableState.value.selectedCategoryId)
+            search(mutableState.value.query)
         }
     }
 }

@@ -1,5 +1,6 @@
 package com.example.mediacenter.ui
 
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -28,6 +29,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -38,6 +41,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.mapSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -48,6 +52,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -60,11 +65,15 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.annotation.OptIn
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
@@ -85,6 +94,7 @@ import com.example.mediacenter.ui.components.ErrorState
 import com.example.mediacenter.ui.components.LoadingState
 import com.example.mediacenter.ui.components.PosterGrid
 import com.example.mediacenter.ui.components.PrimaryPillButton
+import com.example.mediacenter.ui.components.SearchIcon
 import com.example.mediacenter.ui.components.SearchModeTopBar
 import com.example.mediacenter.ui.components.SecondaryPillButton
 import com.example.mediacenter.ui.components.tvFocusableLite
@@ -122,21 +132,7 @@ fun MediaCenterApp(
 
     AppleTvTheme {
         Surface(
-            modifier = Modifier
-                .fillMaxSize()
-                .onPreviewKeyEvent { event ->
-                    if (event.type != KeyEventType.KeyDown || event.key != Key.Back) {
-                        return@onPreviewKeyEvent false
-                    }
-                    // 关键修复:仅在 Player/Detail 屏幕拦截 Back,Home 屏幕放行,
-                    // 让事件冒泡到 OnBackPressedDispatcher → Activity.finish()。
-                    if (state.playing != null || state.selected != null) {
-                        onBack()
-                        true
-                    } else {
-                        false
-                    }
-                },
+            modifier = Modifier.fillMaxSize(),
             color = AppleTvColors.DeepSpace,
         ) {
             when {
@@ -158,6 +154,8 @@ fun MediaCenterApp(
                 }
                 state.selected != null -> DetailScreen(
                     details = state.selected,
+                    error = state.error,
+                    onRetry = onRetry,
                     onPlay = onPlay,
                     onBack = onBack,
                 )
@@ -168,6 +166,7 @@ fun MediaCenterApp(
                     onSelect = onSelect,
                     onLoadMore = onLoadMore,
                     onRetry = onRetry,
+                    onBack = onBack,
                     homeFocusState = homeFocusState,
                     categoryRailState = categoryRailState,
                     posterGridState = posterGridState,
@@ -255,6 +254,7 @@ private fun HomeScreen(
     onSelect: (VideoSummary) -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
+    onBack: () -> Unit,
     homeFocusState: HomeFocusState,
     categoryRailState: LazyListState,
     posterGridState: LazyGridState,
@@ -268,6 +268,14 @@ private fun HomeScreen(
     // 保存每个分类 chip 的 FocusRequester,海报区 UP 时直接调
     // selectedCategoryId 对应的那一个 → 焦点回到当前选中的分类。
     val categoryFocusers = remember { mutableMapOf<String, FocusRequester>() }
+    // 放大镜搜索按钮的 FocusRequester:分类 chip 按 UP 时显式回到放大镜,
+    // 配合放大镜按 DOWN 回到选中分类 → 搜索↔分类双向可回溯。
+    val searchIconFocuser = remember { FocusRequester() }
+
+    LaunchedEffect(state.categories) {
+        val categoryIds = state.categories.mapTo(mutableSetOf()) { it.id }
+        categoryFocusers.keys.retainAll(categoryIds)
+    }
 
     LaunchedEffect(state.selectedCategoryId) {
         if (state.selectedCategoryId != previousCategoryId) {
@@ -375,35 +383,64 @@ private fun HomeScreen(
         }
     }
 
-    // Back 键分两个独立 BackHandler(后注册先调用,但 enabled 互斥所以不会同时拦截):
-    //   1) searchVisible → 关 SearchPanel(回到分类浏览);不放行 Back 走 Activity.finish。
-    //   2) inSearchMode(已有结果)→ 退出整个搜索模式(回到 first 分类)。
-    //   3) 否则让 Back 走默认 Activity.finish()。
-    BackHandler(enabled = searchVisible) { closeSearch() }
-    BackHandler(enabled = inSearchMode) { exitSearchMode() }
+    // 焦点从视频区回退到"当前选中的分类"chip(可回溯:视频列表的来源就是分类,
+    // 反向操作就回到分类)。等一帧(withFrameNanos)确保目标 chip 已完成布局,
+    // 再 requestFocus,避免对未挂载节点请求焦点失败。
+    fun focusSelectedCategory() {
+        val targetId = state.selectedCategoryId
+            ?.takeIf { id -> state.categories.any { it.id == id } }
+            ?: state.categories.firstOrNull()?.id
+            ?: return
+        homeFocusState.markCategoryFocused(targetId)
+        categoryFocusers[targetId]?.let { fr ->
+            focusScope.launch {
+                withFrameNanos { }
+                runCatching { fr.requestFocus() }
+            }
+        }
+    }
+
+    // Back 键拦截:用 BackHandler(注册到 Activity 的 OnBackPressedDispatcher),
+    // **不依赖 Compose 焦点**。这是关键:SearchPanel 打开时焦点在输入框,且
+    // 系统 IME 介入后焦点会离开 Compose 树,导致挂在 Column 上的 onPreviewKeyEvent
+    // 收不到 Back 事件 → 事件透传到 Activity.finish → app 退到系统桌面。
+    // BackHandler 走 dispatcher,焦点在哪都能拦到。
+    //
+    // Back 行为(Player / Detail 屏由各自屏幕处理,不在此):
+    //   1) searchVisible=true(搜索面板展开)→ closeSearch()(回 app 主页)
+    //   2) inSearchMode=true(已搜过,显示结果)→ exitSearchMode()(回 app 主页)
+    //   3) 其他(分类浏览)→ enabled=false,不拦截,放行 Activity.finish 退出 app
+    BackHandler(enabled = searchVisible || inSearchMode) {
+        when {
+            searchVisible -> closeSearch()
+            inSearchMode -> exitSearchMode()
+        }
+    }
+
+    // 视频区按 BACK:把焦点回退到"当前选中的分类"chip,而不是退出 app。
+    // 这与"第一行海报按 UP 回分类"是同一回退目标,保证视频↔分类可回溯。
+    // 仅在分类浏览态(非搜索面板 / 非搜索结果)且焦点确实在视频区时拦截;
+    // 焦点在分类区时不拦截 → 放行 Activity.finish,用户可退出 app。
+    BackHandler(
+        enabled = !searchVisible && !inSearchMode && homeFocusState.area == HomeFocusAreaVideo,
+    ) {
+        focusSelectedCategory()
+    }
 
     AppleTvBackground {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize(),
+        ) {
             // 顶栏分三态(全部跟内容区语义对齐):
-            //   1) searchVisible=true            → 只显示 SearchPill;
-            //      **分类条完全隐藏**,因为内容区是 SearchPanel,跟分类无关,
-            //      之前显示分类条 + selected 蓝底是误导。
+            //   1) searchVisible=true            → 隐藏顶栏内容,SearchPanel 独占
             //   2) inSearchMode=true(已搜过)    → SearchModeTopBar(关键词 + ×)
-            //   3) 默认(分类浏览)                → SearchPill + CategoryRail
+            //   3) 默认(分类浏览)                → 右上角放大镜图标(独立一行)+ 分类条
             if (searchVisible) {
-                // 只留"搜索"按钮作为顶栏元素,水平居左;分类条让位给 SearchPanel。
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 56.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    SecondaryPillButton(
-                        text = "搜索",
-                        onClick = { /* 已在搜索面板,忽略 */ },
-                        onFocused = { /* 已在搜索面板 */ },
-                    )
-                }
+                // 搜索面板已自带标题和输入框,顶栏不再放重复且不可用的"搜索"
+                // 胶囊(原来那个按钮点了无反应、还能抢焦点,纯属误导)。
+                // 仅留出与其它顶栏一致的垂直间距,避免面板上跳。
+                Spacer(Modifier.height(60.dp))
             } else if (inSearchMode) {
                 SearchModeTopBar(
                     query = state.query,
@@ -413,19 +450,32 @@ private fun HomeScreen(
                     onTapQuery = { searchVisible = true },
                 )
             } else {
+                // 搜索入口:右上角圆形放大镜图标,**与分类条分离**(不再和分类
+                // 挤在同一行),更接近 tvOS 首页的"内容导航 + 角落搜索"布局。
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 56.dp, vertical = 12.dp),
+                        .padding(start = 56.dp, end = 56.dp, top = 12.dp, bottom = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    SecondaryPillButton(
-                        text = "搜索",
-                        // 选中(获得焦点)即视为确认:直接展开搜索页,无需再按 OK。
+                    Spacer(Modifier.weight(1f))
+                    SearchIconButton(
                         onClick = { searchVisible = true },
-                        onFocused = { searchVisible = true },
+                        modifier = Modifier.focusRequester(searchIconFocuser),
+                        // 按 DOWN 回到当前选中分类的 chip(可回溯)。延迟到焦点
+                        // 搜索时解析,确保此刻分类 chip 的 FocusRequester 已注册。
+                        resolveDownTarget = {
+                            state.selectedCategoryId?.let { categoryFocusers[it] }
+                        },
                     )
-                    Spacer(Modifier.width(12.dp))
+                }
+                // 分类条:整行独占,放大镜不再占用左侧空间。
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 56.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     CategoryRail(
                         categories = state.categories,
                         selectedCategoryId = state.selectedCategoryId,
@@ -439,6 +489,8 @@ private fun HomeScreen(
                             }
                         },
                         focuserRegister = { id, fr -> categoryFocusers[id] = fr },
+                        // 分类 chip 按 UP 显式回到放大镜搜索按钮(可回溯)。
+                        upTarget = searchIconFocuser,
                         onCategoryFocused = { category ->
                             // 焦点回到分类条:退出搜索页,回到分类浏览。
                             searchVisible = false
@@ -471,7 +523,9 @@ private fun HomeScreen(
                         state.loading && state.items.isEmpty() -> LoadingState(
                             modifier = Modifier.align(Alignment.Center),
                         )
-                        state.items.isEmpty() -> EmptyState(message = "当前分类暂无内容")
+                        state.items.isEmpty() -> EmptyState(
+                            message = if (inSearchMode) "没有找到相关内容" else "当前分类暂无内容",
+                        )
                         else -> PosterGrid(
                             items = state.items,
                             onSelect = onSelect,
@@ -492,21 +546,43 @@ private fun HomeScreen(
                                 )
                             },
                             // 第一行海报按 UP 时,强制把焦点引到当前选中的分类 chip
-                            onUpFromFirstRow = {
-                                state.selectedCategoryId?.let { id ->
-                                    homeFocusState.markCategoryFocused(id)
-                                    categoryFocusers[id]?.let { fr ->
-                                        focusScope.launch {
-                                            withFrameNanos { }
-                                            runCatching { fr.requestFocus() }
-                                        }
-                                    }
-                                }
-                            },
+                            onUpFromFirstRow = { focusSelectedCategory() },
                         )
+                    }
+                    if (state.loading && state.items.isNotEmpty()) {
+                        LoadingScrim(modifier = Modifier.align(Alignment.Center))
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun LoadingScrim(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .clip(AppleTvShapes.Button)
+            .background(AppleTvColors.DeepSpace.copy(alpha = 0.72f))
+            .border(1.dp, AppleTvColors.GlassBorder, AppleTvShapes.Button)
+            .padding(horizontal = 28.dp, vertical = 18.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            androidx.compose.material3.CircularProgressIndicator(
+                color = AppleTvColors.AppleBlue,
+                strokeWidth = 2.5.dp,
+                modifier = Modifier.size(24.dp),
+            )
+            Text(
+                text = "正在加载…",
+                color = AppleTvColors.TextPrimary,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+            )
         }
     }
 }
@@ -526,6 +602,47 @@ private val SEARCH_HOT_KEYWORDS = listOf(
     "国产", "港片", "好莱坞", "纪录", "战争", "动画",
 )
 
+// 圆形放大镜搜索按钮(图标-only),用于首页右上角。焦点态白底高亮。
+//
+// resolveDownTarget:可回溯导航 —— 按 DOWN 时**显式**把焦点交给"当前选中的
+// 分类 chip",而不是让系统按空间位置(放大镜在右上角)挑最近的那个 chip。
+// 这样"分类按 UP 上来 → 放大镜按 DOWN 下去"是同一个 chip,焦点可回溯;
+// 也避免落到错误 chip 触发自动切换分类。
+@Composable
+private fun SearchIconButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    resolveDownTarget: () -> FocusRequester? = { null },
+) {
+    var focused by remember { mutableStateOf(false) }
+    val bg = if (focused) Color.White else AppleTvColors.GlassFill
+    val iconColor = if (focused) AppleTvColors.DeepSpace else AppleTvColors.TextPrimary
+
+    Box(
+        modifier = modifier
+            .size(54.dp)
+            .clip(CircleShape)
+            .background(bg)
+            .border(
+                width = 1.dp,
+                color = if (focused) Color.Transparent else AppleTvColors.GlassBorder,
+                shape = CircleShape,
+            )
+            .focusProperties {
+                resolveDownTarget()?.let { down = it }
+            }
+            .tvFocusableLite(
+                shape = CircleShape,
+                focusedScale = 1.08f,
+                onClick = onClick,
+                onFocusChange = { focused = it },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        SearchIcon(color = iconColor, size = 22.dp)
+    }
+}
+
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun SearchPanel(
@@ -535,108 +652,136 @@ private fun SearchPanel(
 ) {
     var query by remember(initialQuery) { mutableStateOf(initialQuery) }
 
+    // 焦点图(显式、可预测):
+    //   输入框 --DOWN--> 搜索 ; 搜索 <-LEFT/RIGHT-> 取消 ; 搜索/取消 --UP--> 输入框 ;
+    //   搜索/取消 --DOWN--> 第一个热门关键词 ; 关键词 --UP--> 搜索。
+    val inputFocuser = remember { FocusRequester() }
     val searchButtonFocuser = remember { FocusRequester() }
     val cancelButtonFocuser = remember { FocusRequester() }
+    val firstChipFocuser = remember { FocusRequester() }
+
+    var inputFocused by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 56.dp, vertical = 12.dp),
     ) {
-        // 标题:清楚说明当前在搜索模式
         Text(
             text = "搜索",
             color = AppleTvColors.TextPrimary,
-            fontSize = 32.sp,
+            fontSize = 30.sp,
             fontWeight = FontWeight.SemiBold,
             letterSpacing = (-0.4).sp,
-            modifier = Modifier.padding(start = 4.dp, bottom = 16.dp),
+            modifier = Modifier.padding(start = 2.dp, bottom = 16.dp),
         )
 
-        Box(
+        // 输入框:放大镜 + 文本 + 焦点高亮边框。焦点落到输入框时整条高亮
+        // (蓝色边框 + 略亮底色),让用户一眼看出"现在能打字"。
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(AppleTvShapes.Card)
-                .background(AppleTvColors.GlassFillStrong)
-                .padding(horizontal = 28.dp, vertical = 24.dp),
+                .clip(AppleTvShapes.Button)
+                .background(
+                    if (inputFocused) AppleTvColors.GlassFillStrong else AppleTvColors.GlassFill
+                )
+                .border(
+                    width = if (inputFocused) 2.dp else 1.dp,
+                    color = if (inputFocused) AppleTvColors.AppleBlue else AppleTvColors.GlassBorder,
+                    shape = AppleTvShapes.Button,
+                )
+                .padding(horizontal = 22.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Column {
-                // 输入框区域:大号、明确提示文字
-                BasicTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    singleLine = true,
-                    textStyle = TextStyle(
-                        color = AppleTvColors.TextPrimary,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = (-0.2).sp,
-                    ),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(AppleTvColors.AppleBlue),
-                    modifier = Modifier.fillMaxWidth(),
-                    decorationBox = { inner ->
-                        if (query.isEmpty()) {
-                            Text(
-                                text = "输入关键词,或从下方选一个",
-                                color = AppleTvColors.TextTertiary,
-                                fontSize = 24.sp,
-                            )
+            SearchIcon(
+                color = if (inputFocused) AppleTvColors.TextPrimary else AppleTvColors.TextTertiary,
+                size = 22.dp,
+            )
+            BasicTextField(
+                value = query,
+                onValueChange = { query = it },
+                singleLine = true,
+                textStyle = TextStyle(
+                    color = AppleTvColors.TextPrimary,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = (-0.2).sp,
+                ),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(AppleTvColors.AppleBlue),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { onSearch(query) }),
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(inputFocuser)
+                    .onFocusChanged { inputFocused = it.isFocused }
+                    // BasicTextField 自己会吞掉 DPAD_DOWN(单行也常吞),用 preview
+                    // 在它处理前拦截:DOWN → 跳到"搜索"按钮(主操作)。
+                    .onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown &&
+                            event.key == Key.DirectionDown
+                        ) {
+                            runCatching { searchButtonFocuser.requestFocus() }
+                            true
+                        } else {
+                            false
                         }
-                        inner()
+                    },
+                decorationBox = { inner ->
+                    if (query.isEmpty()) {
+                        Text(
+                            text = "输入关键词",
+                            color = AppleTvColors.TextTertiary,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
                     }
-                )
-                // 焦点接续节点:BasicTextField 把 DOWN 吞了,这里放 hidden
-                // focusable spacer 把 DOWN 焦点路由回"搜索"按钮(主操作)。
-                Box(
-                    modifier = Modifier
-                        .size(1.dp)
-                        .focusable()
-                        .focusProperties { down = searchButtonFocuser },
-                )
-                Spacer(Modifier.height(20.dp))
-                // 主操作 + 取消
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    modifier = Modifier.focusGroup(),
-                ) {
-                    PrimaryPillButton(
-                        text = "搜索",
-                        onClick = { onSearch(query) },
-                        modifier = Modifier
-                            .focusRequester(searchButtonFocuser)
-                            .focusProperties {
-                                left = cancelButtonFocuser
-                                right = cancelButtonFocuser
-                            },
-                    )
-                    SecondaryPillButton(
-                        text = "取消",
-                        onClick = onDismiss,
-                        modifier = Modifier
-                            .focusRequester(cancelButtonFocuser)
-                            .focusProperties {
-                                left = searchButtonFocuser
-                                right = searchButtonFocuser
-                            },
-                    )
-                }
-            }
+                    inner()
+                },
+            )
         }
 
-        // 热门关键词 chip 入口:无输入时让用户有可点的方向,不至于面对
-        // 空输入框。点击 = 立即用该关键词搜(直接走 onSearch + onDismiss
-        // 同 closeSearch 路径)。
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(20.dp))
+
+        // 主操作 + 取消
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.focusGroup(),
+        ) {
+            PrimaryPillButton(
+                text = "搜索",
+                onClick = { onSearch(query) },
+                modifier = Modifier
+                    .focusRequester(searchButtonFocuser)
+                    .focusProperties {
+                        up = inputFocuser
+                        right = cancelButtonFocuser
+                        down = firstChipFocuser
+                    },
+            )
+            SecondaryPillButton(
+                text = "取消",
+                onClick = onDismiss,
+                modifier = Modifier
+                    .focusRequester(cancelButtonFocuser)
+                    .focusProperties {
+                        up = inputFocuser
+                        left = searchButtonFocuser
+                        down = firstChipFocuser
+                    },
+            )
+        }
+
+        // 热门关键词:无输入时给用户明确的可点方向。
+        Spacer(Modifier.height(28.dp))
         Text(
             text = "热门关键词",
             color = AppleTvColors.TextTertiary,
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
             letterSpacing = (0.5).sp,
-            modifier = Modifier.padding(start = 4.dp, bottom = 12.dp),
+            modifier = Modifier.padding(start = 2.dp, bottom = 12.dp),
         )
-        // chip 用 flow layout 不容易做(没现成组件),退而用 LazyRow 横向滚动,
-        // 配合 focusGroup + focusRequester 让横向焦点跳转顺畅。
         androidx.compose.foundation.lazy.LazyRow(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier
@@ -648,16 +793,23 @@ private fun SearchPanel(
                 HotKeywordChip(
                     text = keyword,
                     onClick = { onSearch(keyword) },
+                    // 第一个 chip 作为"按钮行向下"的落点,并把 UP 路由回搜索按钮。
+                    modifier = if (index == 0) {
+                        Modifier
+                            .focusRequester(firstChipFocuser)
+                            .focusProperties { up = searchButtonFocuser }
+                    } else {
+                        Modifier.focusProperties { up = searchButtonFocuser }
+                    },
                 )
             }
         }
     }
 
-    // 面板首次进入(从无到有):焦点落到"搜索"按钮(主操作),用户第一动作按 OK 即搜。
-    // 已经在编辑中(同一面板 key 复用)时不重复抢焦点,避免打断 IME 输入。
+    // 面板首次进入:焦点落到输入框(用户第一动作就是打字 / 弹出键盘)。
     LaunchedEffect(Unit) {
         withFrameNanos { }
-        runCatching { searchButtonFocuser.requestFocus() }
+        runCatching { inputFocuser.requestFocus() }
     }
 }
 
@@ -665,13 +817,14 @@ private fun SearchPanel(
 private fun HotKeywordChip(
     text: String,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var focused by remember { mutableStateOf(false) }
     val bg = if (focused) AppleTvColors.AppleBlue else AppleTvColors.GlassFill
     val textColor = if (focused) AppleTvColors.TextPrimary else AppleTvColors.TextSecondary
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .height(40.dp)
             .clip(AppleTvShapes.Chip)
             .background(bg)
@@ -705,9 +858,15 @@ private fun HotKeywordChip(
 @Composable
 private fun DetailScreen(
     details: VideoDetails,
+    error: String?,
+    onRetry: () -> Unit,
     onPlay: (PlaybackOption) -> Unit,
     onBack: () -> Unit,
 ) {
+    // Back 键:返回上一层(详情 → 主页)。用 BackHandler 注册到 Activity 的
+    // OnBackPressedDispatcher,**不依赖 Compose 焦点**,保证焦点在任何子节点
+    // (海报、播放按钮…)时 BACK 都能被本屏消费,而不会透传到 Activity.finish
+    // 直接退出到系统桌面。enabled 恒为 true:详情屏永远应当拦截 BACK 回主页。
     BackHandler(enabled = true) { onBack() }
 
     AppleTvBackground {
@@ -799,8 +958,39 @@ private fun DetailScreen(
                     options = details.playbackOptions,
                     onPlay = onPlay,
                 )
+                if (error != null) {
+                    Spacer(Modifier.height(24.dp))
+                    DetailErrorBanner(message = error, onRetry = onRetry)
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun DetailErrorBanner(
+    message: String,
+    onRetry: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(AppleTvShapes.Button)
+            .background(AppleTvColors.GlassFillStrong)
+            .border(1.dp, AppleTvColors.GlassBorder, AppleTvShapes.Button)
+            .padding(horizontal = 18.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text(
+            text = message,
+            color = AppleTvColors.TextPrimary,
+            fontSize = 14.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        SecondaryPillButton(text = "重试", onClick = onRetry)
     }
 }
 
@@ -912,6 +1102,9 @@ private fun PlayerScreen(
     var position by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
     var isPlaying by remember { mutableStateOf(true) }
+    val currentHasNext by rememberUpdatedState(hasNext)
+    val currentOnPlayNext by rememberUpdatedState(onPlayNext)
+    val currentOnBack by rememberUpdatedState(onBack)
 
     // 控制覆盖层自动闪烁:每次用户按键亮起,3 秒后淡出
     var controlsVisible by remember { mutableStateOf(true) }
@@ -941,8 +1134,8 @@ private fun PlayerScreen(
                     duration = player.duration.coerceAtLeast(0)
                 }
                 // 播放到结尾自动续播下一个(若有)
-                if (state == Player.STATE_ENDED && hasNext) {
-                    onPlayNext()
+                if (state == Player.STATE_ENDED && currentHasNext) {
+                    currentOnPlayNext()
                 }
             }
         }
@@ -951,6 +1144,22 @@ private fun PlayerScreen(
             player.removeListener(listener)
             player.release()
         }
+    }
+
+    // 生命周期感知:app 退到后台(按 HOME / 切到别的应用 → ON_STOP)时退出播放页。
+    // 只 pause 不够:Composition 可能仍保留,remember 的 ExoPlayer 会继续持有
+    // Media3/native decoder/buffer 资源。这里触发 onBack 让 PlayerScreen 离开组合,
+    // 复用上方 onDispose 统一 removeListener + release。
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, player) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                player.pause()
+                currentOnBack()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // 当覆盖层可见时,每 300ms 刷新进度条位置
@@ -966,6 +1175,11 @@ private fun PlayerScreen(
         withFrameNanos { }
         playerFocusRequester.requestFocus()
     }
+    // Back 键:返回上一层(播放 → 详情)。用 BackHandler 注册到 Activity 的
+    // OnBackPressedDispatcher,**不依赖 Compose 焦点**。这点很关键:播放屏的
+    // BACK 之前既没在根 Surface 处理、根 Box.onPreviewKeyEvent 也不处理 BACK,
+    // 导致事件透传到 Activity.finish → 直接退出到系统桌面。改用 BackHandler 后,
+    // 只要本屏在前台就稳定消费 BACK,逐层回退(播放 → 详情 → 主页)。
     BackHandler(enabled = true) { onBack() }
 
     fun togglePlaybackAndShowControls() {

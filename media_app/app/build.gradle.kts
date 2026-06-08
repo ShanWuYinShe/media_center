@@ -30,6 +30,16 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    // androidx.graphics:graphics-path 自带的预编译 libandroidx.graphics.path.so
+    // 无法被 NDK strip(已处理过),构建时会刷出 "Unable to strip ... packaging
+    // them as they are" 警告。显式保留其符号、跳过 strip,消除该无害警告。
+    packaging {
+        jniLibs {
+            keepDebugSymbols += "**/libandroidx.graphics.path.so"
+        }
+    }
+
     buildToolsVersion = "37.0.0"
     compileSdkMinor = 0
 }

@@ -11,10 +11,12 @@ class MediaRepository(private val api: MediaApi) {
         page: Int,
         pageSize: Int,
     ): SearchResponse {
-        val response = if (categoryId == null) {
+        val response = if (query.isNotBlank()) {
             api.search(query, page = page, pageSize = pageSize)
+        } else if (categoryId != null) {
+            api.searchCategory(categoryId, page = page, pageSize = pageSize)
         } else {
-            api.searchCategory(categoryId, query, page = page, pageSize = pageSize)
+            error("请选择一个分类或输入关键词")
         }
         return response.copy(items = response.items.filter { it.videoKind == "vod" })
     }
