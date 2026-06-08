@@ -191,10 +191,57 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     }
 
     fun play(stream: PlaybackOption) {
-        mutableState.update { state ->
-            val video = state.playingVideo
-                ?: state.selected?.let { sel -> state.items.find { it.id == sel.id } }
-            state.copy(playing = stream, playingVideo = video ?: state.playingVideo)
+        val current = mutableState.value
+        val selected = current.selected
+        val video = current.playingVideo
+            ?: selected?.let { sel -> current.items.find { it.id == sel.id } }
+        if (selected == null) {
+            mutableState.update { state ->
+                state.copy(playing = stream, playingVideo = video ?: state.playingVideo)
+            }
+            return
+        }
+        detailsJob?.cancel()
+        detailsJob = viewModelScope.launch {
+            mutableState.update { it.copy(loading = true, error = null) }
+            runCatchingCancellable { repository.playbackOptions(selected.id) }
+                .onSuccess { options ->
+                    val freshStream = options.firstOrNull { it.id == stream.id }
+                        ?: options.firstOrNull { it.label == stream.label }
+                        ?: options.firstOrNull()
+                    mutableState.update { state ->
+                        if (state.selected?.id != selected.id) {
+                            state.copy(loading = false)
+                        } else if (freshStream == null) {
+                            state.copy(
+                                loading = false,
+                                playing = null,
+                                error = "该视频暂无可播放清晰度",
+                            )
+                        } else {
+                            state.copy(
+                                loading = false,
+                                selected = state.selected?.copy(playbackOptions = options)
+                                    ?: selected.copy(playbackOptions = options),
+                                playing = freshStream,
+                                playingVideo = video ?: state.playingVideo,
+                            )
+                        }
+                    }
+                }
+                .onFailure { error ->
+                    mutableState.update { state ->
+                        if (state.selected?.id != selected.id) {
+                            state.copy(loading = false)
+                        } else {
+                            state.copy(
+                                loading = false,
+                                playing = null,
+                                error = error.message ?: "刷新播放地址失败",
+                            )
+                        }
+                    }
+                }
         }
     }
 

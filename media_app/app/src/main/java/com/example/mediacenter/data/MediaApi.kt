@@ -56,6 +56,10 @@ class MediaApi(
         pathSegments = listOf("videos", id),
     )
 
+    suspend fun playback(id: String): PlaybackOptionsResponse = get(
+        pathSegments = listOf("videos", id, "playback"),
+    )
+
     private suspend inline fun <reified T> get(
         pathSegments: List<String>,
         query: Map<String, String> = emptyMap(),

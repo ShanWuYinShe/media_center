@@ -26,4 +26,8 @@ class MediaRepository(private val api: MediaApi) {
         require(details.videoKind == "vod") { "当前只支持普通视频点播" }
         return details
     }
+
+    suspend fun playbackOptions(videoId: String): List<PlaybackOption> {
+        return api.playback(videoId).items.filter { it.kind == "vod" }
+    }
 }

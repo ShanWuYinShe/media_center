@@ -51,6 +51,11 @@ data class VideoDetails(
 )
 
 @Serializable
+data class PlaybackOptionsResponse(
+    val items: List<PlaybackOption> = emptyList(),
+)
+
+@Serializable
 data class PlaybackOption(
     val id: String,
     val kind: String,
