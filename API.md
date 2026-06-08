@@ -1,16 +1,16 @@
 # Media Server API
 
-本文档描述 Android TV App 需要对接的公开 API。App 不需要知道内容来自 Bilibili、YouTube 或其他 Provider，也不要直接访问第三方媒体 URL；所有图片和点播地址都会被服务端改写为 `/asset` 代理地址。
+本文档描述 Android TV App 需要对接的公开 API。App 不需要知道内容来自 Bilibili、YouTube 或其他 Provider，也不要直接访问第三方媒体 URL；所有图片和点播地址都会被服务端改写为带签名的 `/asset` 代理地址。
 
 机器可读版本见 [`openapi.json`](./openapi.json)。
 
 ## Base URL
 
-App 应把配置值当作 **API base URL**，也就是下面端点表中路径的前缀。Media Server 在 workwork 中只运行在 Docker 内部网络，App 不直接连接 `media_server:8787` 或宿主机 8787，必须通过 nginx 公开前缀访问。
+App 应把配置值当作 **API base URL**，也就是下面端点表中路径的前缀。当前默认服务端 URL 是 `https://yinghuoren.com/api/media`。
 
 | 场景 | API base URL 示例 |
 |------|-------------------|
-| workwork nginx 反代 | `https://你的域名/api/media` |
+| 默认线上服务 | `https://yinghuoren.com/api/media` |
 
 默认公开前缀是 `/api/media`，可在 workwork 管理台 Media Center 页面调整。App 不需要也不应该知道内部 upstream。
 
@@ -21,7 +21,7 @@ App 应把配置值当作 **API base URL**，也就是下面端点表中路径�
 - 视频类型：当前只公开 `vod` 点播；`live` 不搜索、不展示、不播放。
 - 视频 ID：`id` 是服务端生成的不透明字符串，App 必须原样保存，并在放入 URL path 时执行 URL encode。
 - 分页：`page` 从 `1` 开始；`pageSize` 范围是 `1..40`，默认 `20`。
-- 图片和播放 URL：`thumbnailUrl`、`playbackOptions[].url` 都是服务端 `/asset?url=...` 代理地址，App 应直接使用它们。
+- 图片和播放 URL：`thumbnailUrl`、`playbackOptions[].url` 都是服务端签发的 `/asset?url=...&sig=...` 代理地址，App 应直接使用它们，不要自行拼接。
 - Range：播放代理支持 HTTP Range。Media3/ExoPlayer 正常发起 Range 请求即可。
 
 ## 错误响应
@@ -159,7 +159,7 @@ Query：
       "description": "视频简介",
       "year": "2024",
       "creators": ["示例频道"],
-      "thumbnailUrl": "https://你的域名/api/media/asset?url=...",
+      "thumbnailUrl": "https://yinghuoren.com/api/media/asset?url=...&sig=...",
       "durationSeconds": 7200,
       "playbackKind": "vod"
     }
@@ -194,7 +194,7 @@ Query：
   "title": "示例视频",
   "description": "视频简介",
   "creators": ["示例频道"],
-  "thumbnailUrl": "https://你的域名/api/media/asset?url=...",
+  "thumbnailUrl": "https://yinghuoren.com/api/media/asset?url=...&sig=...",
   "durationSeconds": 630,
   "playbackKind": "vod",
   "playbackOptions": [
@@ -202,7 +202,7 @@ Query：
       "id": "youtube-detailid-18",
       "kind": "vod",
       "label": "360p",
-      "url": "https://你的域名/api/media/asset?url=...",
+      "url": "https://yinghuoren.com/api/media/asset?url=...&sig=...",
       "mimeType": "video/mp4"
     }
   ]
@@ -222,20 +222,21 @@ Query：
       "id": "youtube-detailid-18",
       "kind": "vod",
       "label": "360p",
-      "url": "https://你的域名/api/media/asset?url=...",
+      "url": "https://yinghuoren.com/api/media/asset?url=...&sig=...",
       "mimeType": "video/mp4"
     }
   ]
 }
 ```
 
-### `GET /asset?url={encodedUrl}`
+### `GET /asset?url={encodedUrl}&sig={signature}`
 
 媒体和图片代理端点。App 通常不需要手工拼接这个端点，只需要使用 API 返回的 `thumbnailUrl` 和 `playbackOptions[].url`。
 
 请求：
 
 - `url`：必填，原始 HTTP/HTTPS 资源 URL，必须 URL encode。
+- `sig`：必填，服务端签发的 HMAC 签名。App 不需要理解签名算法，只需原样使用 API 返回的完整 URL。
 - `Range`：可选；播放器发送 Range 时服务端会透传给上游。
 
 响应：
@@ -246,7 +247,7 @@ Query：
 
 ### `GET /health`
 
-服务健康检查。该端点面向容器健康检查，App 一般不需要调用；线上公开 API 以 nginx 前缀下的端点为准。
+服务健康检查。公开服务端 URL 下可直接请求 `/health`。
 
 响应：
 

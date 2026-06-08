@@ -7,8 +7,8 @@
   },
   "servers": [
     {
-      "url": "https://your-domain.example/api/media",
-      "description": "workwork nginx reverse proxy"
+      "url": "https://yinghuoren.com/api/media",
+      "description": "Default public API base URL"
     }
   ],
   "paths": {
@@ -142,6 +142,29 @@
         }
       }
     },
+    "/health": {
+      "get": {
+        "summary": "Service health check",
+        "operationId": "healthCheck",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["ok"],
+                  "properties": {
+                    "ok": { "type": "boolean", "const": true }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/asset": {
       "get": {
         "summary": "Proxy a media or thumbnail asset",
@@ -152,7 +175,14 @@
             "in": "query",
             "required": true,
             "schema": { "type": "string", "format": "uri" },
-            "description": "Original asset URL. Usually supplied by API responses; apps should not construct it manually."
+            "description": "Original asset URL. Supplied inside signed API responses; apps should not construct it manually."
+          },
+          {
+            "name": "sig",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+            "description": "Server-issued HMAC signature for the original asset URL."
           },
           {
             "name": "Range",

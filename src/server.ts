@@ -1,5 +1,8 @@
 import cors from "@fastify/cors";
 import Fastify, { type FastifyRequest } from "fastify";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { lookup } from "node:dns/promises";
+import net from "node:net";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import { contentCategories, findContentCategory } from "./contentCategories.js";
@@ -24,7 +27,13 @@ const pageQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(40).default(20),
 });
 const videoParamsSchema = z.object({ id: z.string().min(1) });
-const assetQuerySchema = z.object({ url: z.string().url() });
+const assetQuerySchema = z.object({
+  url: z.string().url(),
+  sig: z.string().regex(/^[a-f0-9]{64}$/i),
+});
+const ASSET_SIGNING_KEY =
+  process.env.MEDIA_ASSET_SIGNING_KEY?.trim() || randomBytes(32).toString("hex");
+const MAX_ASSET_REDIRECTS = 5;
 
 export function buildServer() {
   const app = Fastify({ logger: true, trustProxy: true });
@@ -119,7 +128,11 @@ export function buildServer() {
    * - 图片同样通过流式转发返回
    */
   app.get("/api/asset", async (request, reply) => {
-    const { url } = assetQuerySchema.parse(request.query);
+    const { url, sig } = assetQuerySchema.parse(request.query);
+    if (!verifyAssetSignature(url, sig)) {
+      throw new ApiError("BAD_REQUEST", "资源代理签名无效。", 400);
+    }
+    const target = await validateAssetProxyTarget(url);
     const range =
       typeof request.headers.range === "string"
         ? request.headers.range
@@ -135,14 +148,13 @@ export function buildServer() {
       return reply.send(cached.stream);
     }
 
-    const upstreamHeaders = upstreamRequestHeaders(url, range);
     let upstream: Response;
     try {
-      upstream = await fetchWithTimeout(fetch, url, {
-        redirect: "follow",
-        headers: upstreamHeaders,
-      });
+      upstream = await fetchAssetTarget(target, range);
     } catch (error) {
+      if (error instanceof ApiError) {
+        throw error;
+      }
       throw new ApiError(
         "PROVIDER_UNAVAILABLE",
         "无法连接上游点播媒体地址。",
@@ -184,8 +196,34 @@ export function buildServer() {
   return { app, categoryCache };
 }
 
+async function fetchAssetTarget(
+  target: URL,
+  range: string | string[] | undefined,
+): Promise<Response> {
+  let current = target;
+  for (let redirectCount = 0; redirectCount <= MAX_ASSET_REDIRECTS; redirectCount += 1) {
+    const response = await fetchWithTimeout(fetch, current, {
+      redirect: "manual",
+      headers: upstreamRequestHeaders(current, range),
+    });
+    if (!isRedirectResponse(response.status)) {
+      return response;
+    }
+    const location = response.headers.get("location");
+    if (!location) {
+      return response;
+    }
+    current = await validateAssetProxyTarget(new URL(location, current).toString());
+  }
+  throw new ApiError("PROVIDER_UNAVAILABLE", "点播媒体地址重定向次数过多。", 502);
+}
+
+function isRedirectResponse(status: number): boolean {
+  return status >= 300 && status < 400;
+}
+
 function upstreamRequestHeaders(
-  url: string,
+  url: URL,
   range: string | string[] | undefined,
 ): Record<string, string> {
   const headers: Record<string, string> = {
@@ -195,7 +233,7 @@ function upstreamRequestHeaders(
   if (typeof range === "string") {
     headers.Range = range;
   }
-  const host = new URL(url).hostname;
+  const host = url.hostname;
   if (host.endsWith(".bilivideo.com") || host.endsWith(".bilibili.com")) {
     headers.Referer = "https://www.bilibili.com";
   } else if (
@@ -291,6 +329,121 @@ function walk(value: unknown, apiBase: string): unknown {
   return value;
 }
 
+export function wrapAssetUrl(apiBase: string, original: string): string {
+  return `${apiBase}/asset?url=${encodeURIComponent(original)}&sig=${assetSignature(original)}`;
+}
+
 function wrapUrl(apiBase: string, original: string): string {
-  return `${apiBase}/asset?url=${encodeURIComponent(original)}`;
+  return wrapAssetUrl(apiBase, original);
+}
+
+function assetSignature(url: string): string {
+  return createHmac("sha256", ASSET_SIGNING_KEY).update(url).digest("hex");
+}
+
+function verifyAssetSignature(url: string, sig: string): boolean {
+  const expected = Buffer.from(assetSignature(url), "hex");
+  const actual = Buffer.from(sig, "hex");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+async function validateAssetProxyTarget(rawUrl: string): Promise<URL> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new ApiError("BAD_REQUEST", "资源地址不合法。", 400);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new ApiError("BAD_REQUEST", "资源代理只支持 HTTP/HTTPS 地址。", 400);
+  }
+  const hostname = hostnameForChecks(parsed.hostname);
+  if (isBlockedHostname(hostname)) {
+    throw new ApiError("BAD_REQUEST", "资源地址不允许访问本地或内网目标。", 400);
+  }
+  if (isBlockedAddress(hostname)) {
+    throw new ApiError("BAD_REQUEST", "资源地址不允许访问本地或内网目标。", 400);
+  }
+  let addresses: { address: string }[];
+  try {
+    addresses = await lookup(hostname, { all: true, verbatim: true });
+  } catch (error) {
+    throw new ApiError("PROVIDER_UNAVAILABLE", "资源地址无法解析。", 502, error);
+  }
+  if (addresses.length === 0 || addresses.some(({ address }) => isBlockedAddress(address))) {
+    throw new ApiError("BAD_REQUEST", "资源地址不允许访问本地或内网目标。", 400);
+  }
+  return parsed;
+}
+
+function hostnameForChecks(hostname: string): string {
+  return hostname.replace(/^\[(.*)]$/, "$1");
+}
+
+function isBlockedHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    host === "metadata.google.internal"
+  );
+}
+
+function isBlockedAddress(address: string): boolean {
+  const ipVersion = net.isIP(address);
+  if (ipVersion === 4) {
+    return isBlockedIPv4(address);
+  }
+  if (ipVersion === 6) {
+    return isBlockedIPv6(address);
+  }
+  return false;
+}
+
+function isBlockedIPv4(address: string): boolean {
+  const parts = address.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
+    return true;
+  }
+  const [a, b] = parts;
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    a >= 224
+  );
+}
+
+function isBlockedIPv6(address: string): boolean {
+  const normalized = address.toLowerCase();
+  const mappedIPv4 = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mappedIPv4) {
+    return isBlockedIPv4(mappedIPv4[1]);
+  }
+  const mappedHexIPv4 = normalized.match(/^(?:::ffff:|0:0:0:0:0:ffff:)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mappedHexIPv4) {
+    const high = Number.parseInt(mappedHexIPv4[1], 16);
+    const low = Number.parseInt(mappedHexIPv4[2], 16);
+    const mappedAddress = [
+      (high >> 8) & 0xff,
+      high & 0xff,
+      (low >> 8) & 0xff,
+      low & 0xff,
+    ].join(".");
+    return isBlockedIPv4(mappedAddress);
+  }
+  return (
+    normalized === "::" ||
+    normalized === "::1" ||
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    normalized.startsWith("fe80:") ||
+    normalized.startsWith("ff")
+  );
 }
