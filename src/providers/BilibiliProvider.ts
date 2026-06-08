@@ -318,13 +318,17 @@ function dashRepresentation(
   return {
     id: String(item.id ?? `${kind}-${item.bandwidth ?? 0}`),
     url,
-    codecs: item.codecs,
+    codecs: nonEmptyString(item.codecs),
     bandwidth: positiveInteger(item.bandwidth),
     width: positiveInteger(item.width),
     height: positiveInteger(item.height),
-    frameRate: item.frameRate ?? item.frame_rate,
-    initialization: segmentBase?.Initialization ?? segmentBase?.initialization,
-    indexRange: segmentBase?.indexRange ?? segmentBase?.index_range,
+    frameRate: nonEmptyString(item.frameRate ?? item.frame_rate),
+    initialization: nonEmptyString(
+      segmentBase?.Initialization ?? segmentBase?.initialization,
+    ),
+    indexRange: nonEmptyString(
+      segmentBase?.indexRange ?? segmentBase?.index_range,
+    ),
   };
 }
 
@@ -344,6 +348,11 @@ function positiveInteger(value: number | undefined): number | undefined {
   return value !== undefined && Number.isInteger(value) && value > 0
     ? value
     : undefined;
+}
+
+function nonEmptyString(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
 }
 
 /** 解析 "HH:MM:SS" 或 "MM:SS" 为秒数 */

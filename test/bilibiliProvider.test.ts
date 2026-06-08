@@ -195,6 +195,7 @@ test("Bilibili DASH 清单作为流式播放项返回", async () => {
                 bandwidth: 128000,
                 mimeType: "audio/mp4",
                 codecs: "mp4a.40.2",
+                frameRate: "",
                 SegmentBase: {
                   Initialization: "0-800",
                   indexRange: "801-900",
