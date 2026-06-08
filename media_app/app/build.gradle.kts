@@ -1,3 +1,6 @@
+import java.net.URI
+import java.net.URISyntaxException
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -16,9 +19,25 @@ android {
         versionName = "1.0"
 
         val serverBaseUrl = providers.gradleProperty("MEDIA_SERVER_URL")
-            .orElse("http://10.0.2.2:8787")
-            .get()
-        buildConfigField("String", "MEDIA_SERVER_URL", "\"$serverBaseUrl\"")
+            .orElse(providers.environmentVariable("MEDIA_SERVER_URL"))
+            .orElse("https://yinghuoren.com/api/media")
+            .map { it.trim().trimEnd('/') }
+            .orNull
+            ?: error("MEDIA_SERVER_URL default is missing")
+        val serverUri = try {
+            URI(serverBaseUrl)
+        } catch (error: URISyntaxException) {
+            throw GradleException("MEDIA_SERVER_URL must be a valid URL", error)
+        }
+        if (serverUri.scheme?.lowercase() != "https" || serverUri.host.isNullOrBlank()) {
+            throw GradleException(
+                "MEDIA_SERVER_URL must be an absolute HTTPS URL, e.g. https://yinghuoren.com/api/media",
+            )
+        }
+        val escapedServerBaseUrl = serverBaseUrl
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        buildConfigField("String", "MEDIA_SERVER_URL", "\"$escapedServerBaseUrl\"")
     }
 
     buildFeatures {

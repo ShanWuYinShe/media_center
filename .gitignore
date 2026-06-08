@@ -1,13 +1,6 @@
 # =========================================================
-# Media Center 根目录 .gitignore
+# Media Center Android App 根目录 .gitignore
 # =========================================================
-
-# ----- Node.js / TypeScript -----
-**/node_modules/
-**/dist/
-**/coverage/
-**/.vite/
-**/*.tsbuildinfo
 
 # ----- Gradle / Android -----
 **/.gradle/
@@ -41,7 +34,3 @@ $RECYCLE.BIN/
 .env
 .env.local
 .env.*.local
-
-# ----- vitest 缓存 -----
-**/node_modules/.vite/
-**/vitest-results.json
