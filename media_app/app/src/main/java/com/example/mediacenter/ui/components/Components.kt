@@ -578,15 +578,14 @@ fun PosterCard(
                 ),
             contentAlignment = Alignment.BottomStart,
         ) {
-            if (video.thumbnailUrl != null) {
+            PosterPlaceholder(title = video.title)
+            if (!video.thumbnailUrl.isNullOrBlank()) {
                 AsyncImage(
                     model = video.thumbnailUrl,
                     contentDescription = video.title,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                 )
-            } else {
-                PosterPlaceholder(title = video.title)
             }
             // 底部渐变:让标题文字在海报上可读
             Box(
