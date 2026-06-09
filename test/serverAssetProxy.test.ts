@@ -6,6 +6,7 @@ import { afterAll, expect, test } from "vitest";
 const cacheDir = mkdtempSync(join(tmpdir(), "media-server-cache-"));
 process.env.BACKEND_CACHE_DIR = cacheDir;
 process.env.MEDIA_ASSET_SIGNING_KEY = "test-signing-key";
+process.env.ASSET_PROXY_MAX_RETRIES = "2";
 const { buildServer, wrapAssetUrl, wrapDashManifestUrl } =
   await import("../src/server.js");
 const { createDashManifestReference } =
@@ -17,6 +18,7 @@ afterAll(async () => {
   rmSync(cacheDir, { recursive: true, force: true });
   delete process.env.BACKEND_CACHE_DIR;
   delete process.env.MEDIA_ASSET_SIGNING_KEY;
+  delete process.env.ASSET_PROXY_MAX_RETRIES;
 });
 
 test("asset 代理拒绝未签名请求", async () => {

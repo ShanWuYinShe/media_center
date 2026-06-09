@@ -73,13 +73,13 @@ const ASSET_REFERENCE_KEY = createHash("sha256")
   .digest();
 const MAX_ASSET_REDIRECTS = 5;
 // 上游图源/点播源偶发瞬时故障(连接重置、超时、网关 5xx),会让 asset 代理直接
-// 抛 502,客户端表现为封面整批加载失败。对幂等的 GET 做有限指数退避重试,可吸收
-// 这类抖动而不放大上游压力。
+// 抛 502,客户端表现为封面整批加载失败。对幂等的 GET 做有耐心的指数退避重试,把
+// 这类抖动/拥塞吸收成"延迟"而非"错误",同时不放大上游压力。
 const ASSET_PROXY_MAX_RETRIES = positiveInteger(
   process.env.ASSET_PROXY_MAX_RETRIES,
-  2,
+  4,
 );
-const ASSET_PROXY_RETRY_BACKOFF_MS = [200, 600] as const;
+const ASSET_PROXY_RETRY_BACKOFF_MS = [200, 500, 1000, 2000] as const;
 const RETRYABLE_UPSTREAM_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const assetReferencePayloadSchema = z.object({
   v: z.literal(1),
@@ -685,7 +685,7 @@ async function fetchAssetTarget(
         throw error;
       }
       lastError = error;
-      await sleep(ASSET_PROXY_RETRY_BACKOFF_MS[attempt]);
+      await sleep(assetProxyBackoffFor(attempt));
       continue;
     }
     if (
@@ -694,7 +694,7 @@ async function fetchAssetTarget(
     ) {
       // 丢弃上游瞬时错误响应体,避免连接挂起,然后退避重试。
       await response.body?.cancel().catch(() => undefined);
-      await sleep(ASSET_PROXY_RETRY_BACKOFF_MS[attempt]);
+      await sleep(assetProxyBackoffFor(attempt));
       continue;
     }
     return response;
@@ -702,6 +702,12 @@ async function fetchAssetTarget(
   throw lastError instanceof Error
     ? lastError
     : new ApiError("UPSTREAM_UNAVAILABLE", "无法连接上游点播媒体地址。", 502);
+}
+
+function assetProxyBackoffFor(attempt: number): number {
+  return ASSET_PROXY_RETRY_BACKOFF_MS[
+    Math.min(attempt, ASSET_PROXY_RETRY_BACKOFF_MS.length - 1)
+  ];
 }
 
 async function attemptFetchAssetTarget(
