@@ -287,6 +287,50 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         }
     }
 
+    fun playbackFailed(message: String) {
+        mutableState.update {
+            if (it.playing == null) {
+                it.copy(error = message)
+            } else {
+                it.copy(playing = null, error = message)
+            }
+        }
+    }
+
+    fun refreshSelectedPlayback() {
+        val selected = mutableState.value.selected ?: return
+        detailsJob?.cancel()
+        detailsJob = viewModelScope.launch {
+            mutableState.update { it.copy(loading = true, error = null) }
+            runCatchingCancellable { repository.playbackOptions(selected.id) }
+                .onSuccess { options ->
+                    mutableState.update { state ->
+                        if (state.selected?.id != selected.id) {
+                            state.copy(loading = false)
+                        } else {
+                            state.copy(
+                                loading = false,
+                                selected = state.selected.copy(playbackOptions = options),
+                                error = if (options.isEmpty()) "该视频暂无可播放清晰度" else null,
+                            )
+                        }
+                    }
+                }
+                .onFailure { error ->
+                    mutableState.update { state ->
+                        if (state.selected?.id != selected.id) {
+                            state.copy(loading = false)
+                        } else {
+                            state.copy(
+                                loading = false,
+                                error = error.message ?: "刷新播放地址失败",
+                            )
+                        }
+                    }
+                }
+        }
+    }
+
     /**
      * 播放“下一个”:在当前分类列表里找到正在播放视频的下一条,
      * 拉取其详情并以默认(最高)清晰度直接开播。已是最后一条且还有下一页时,

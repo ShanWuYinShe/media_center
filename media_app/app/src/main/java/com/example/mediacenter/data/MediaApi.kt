@@ -7,11 +7,12 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.Json
 import okhttp3.Call
 import okhttp3.Callback
-import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import java.util.concurrent.TimeUnit
+import kotlinx.serialization.Serializable
 
 class MediaApi(
     private val baseUrl: String,
@@ -26,8 +27,9 @@ class MediaApi(
         explicitNulls = false
     },
 ) {
-    private val apiRoot = baseUrl.toHttpUrl()
-    private val baseUrlIncludesApiPrefix = apiRoot.pathSegments.any { it.isNotEmpty() }
+    private val apiRoot = HttpUrl.parse(baseUrl)
+        ?: throw IllegalArgumentException("MEDIA_SERVER_URL must be a valid URL")
+    private val baseUrlIncludesApiPrefix = apiRoot.pathSegments().any { it.isNotEmpty() }
 
     suspend fun search(query: String, page: Int = 1, pageSize: Int = 18): SearchResponse = get(
         pathSegments = listOf("search"),
@@ -103,15 +105,15 @@ class MediaApi(
             override fun onResponse(call: Call, response: Response) {
                 try {
                     response.use {
-                        if (!it.isSuccessful) {
-                            throw IOException("HTTP ${it.code}: ${it.peekBody(512).string()}")
-                        }
                         val body = it.requiredBody()
+                        if (!it.isSuccessful) {
+                            throw apiException(it.code(), body)
+                        }
                         if (continuation.isActive) {
                             continuation.resume(body)
                         }
                     }
-                } catch (error: IOException) {
+                } catch (error: Throwable) {
                     if (continuation.isActive) {
                         continuation.resumeWithException(error)
                     }
@@ -121,7 +123,18 @@ class MediaApi(
     }
 
     private fun Response.requiredBody(): String {
-        return body?.string() ?: throw IOException("响应体为空")
+        return body()?.string() ?: throw IOException("响应体为空")
+    }
+
+    private fun apiException(statusCode: Int, body: String): ApiException {
+        val apiError = runCatching {
+            json.decodeFromString<ApiErrorEnvelope>(body).error
+        }.getOrNull()
+        return ApiException(
+            statusCode = statusCode,
+            errorCode = apiError?.code,
+            errorMessage = apiError?.message ?: "HTTP $statusCode",
+        )
     }
 
     private companion object {
@@ -129,3 +142,23 @@ class MediaApi(
         val RETRY_BACKOFF_MS = longArrayOf(500L, 1500L)
     }
 }
+
+class ApiException(
+    val statusCode: Int,
+    val errorCode: String?,
+    errorMessage: String,
+) : Exception(errorMessage)
+
+internal val Throwable.isNoPlayableStream: Boolean
+    get() = this is ApiException && errorCode == "NO_PLAYABLE_STREAM"
+
+@Serializable
+private data class ApiErrorEnvelope(
+    val error: ApiErrorBody? = null,
+)
+
+@Serializable
+private data class ApiErrorBody(
+    val code: String? = null,
+    val message: String? = null,
+)

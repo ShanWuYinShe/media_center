@@ -36,10 +36,22 @@ class MediaRepository(
     ): VideoDetails {
         val cache = detailsCacheFor(cacheScope)
         cache?.get(video)?.let { return it }
-        val details = api.details(video.id)
+        val details = try {
+            api.details(video.id)
+        } catch (error: Throwable) {
+            if (error.isNoPlayableStream) {
+                val unavailableDetails = video.toUnavailableDetails()
+                cache?.put(unavailableDetails)
+                return unavailableDetails
+            }
+            throw error
+        }
         require(details.videoKind == "vod") { "当前只支持普通视频点播" }
-        cache?.put(details)
-        return details
+        val normalizedDetails = details.copy(
+            thumbnailUrl = details.thumbnailUrl ?: video.thumbnailUrl,
+        )
+        cache?.put(normalizedDetails)
+        return normalizedDetails
     }
 
     suspend fun prefetchDetails(
@@ -50,7 +62,11 @@ class MediaRepository(
     }
 
     suspend fun playbackOptions(videoId: String): List<PlaybackOption> {
-        return api.playback(videoId).items.filter { it.kind == "vod" }
+        return try {
+            api.playback(videoId).items.filter { it.kind == "vod" }
+        } catch (error: Throwable) {
+            if (error.isNoPlayableStream) emptyList() else throw error
+        }
     }
 
     private fun detailsCacheFor(cacheScope: VideoDetailsCacheScope): VideoDetailsCache? {
@@ -58,5 +74,20 @@ class MediaRepository(
             VideoDetailsCacheScope.Category -> categoryDetailsCache
             VideoDetailsCacheScope.Search -> searchDetailsCache
         }
+    }
+
+    private fun VideoSummary.toUnavailableDetails(): VideoDetails {
+        return VideoDetails(
+            id = id,
+            videoKind = videoKind,
+            title = title,
+            description = description,
+            year = year,
+            creators = creators,
+            thumbnailUrl = thumbnailUrl,
+            durationSeconds = durationSeconds,
+            playbackKind = playbackKind,
+            playbackOptions = emptyList(),
+        )
     }
 }

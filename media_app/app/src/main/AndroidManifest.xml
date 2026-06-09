@@ -8,6 +8,7 @@
         android:required="false" />
 
     <application
+        android:name="androidx.multidex.MultiDexApplication"
         android:allowBackup="false"
         android:banner="@drawable/banner"
         android:dataExtractionRules="@xml/data_extraction_rules"
