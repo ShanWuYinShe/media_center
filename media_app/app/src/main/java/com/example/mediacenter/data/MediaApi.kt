@@ -76,10 +76,13 @@ class MediaApi(
         query.forEach { (key, value) -> builder.addQueryParameter(key, value) }
         val request = Request.Builder().url(builder.build()).get().build()
 
-        // 对 IOException 做最多 2 次指数退避重试：覆盖冷启动握手抖动,
-        // 但不掩盖业务/反序列化错误(后者不抛 IOException)。
+        // 重试覆盖两类瞬时故障：
+        //   1. IOException —— 冷启动握手抖动、连接重置等网络层错误。
+        //   2. 瞬时 5xx(502/503/504 等)—— 服务端/网关在拥塞时返回的临时错误。
+        //      与服务端"拥塞应降级为变慢而非报错"的原则、以及缩略图加载器的重试口径
+        //      保持一致;业务类 4xx 与反序列化错误不重试,立即上抛。
         var attempt = 0
-        var lastError: IOException? = null
+        var lastError: Throwable? = null
         while (true) {
             try {
                 val body = execute(request)
@@ -90,6 +93,11 @@ class MediaApi(
                 lastError = error
                 if (attempt >= MAX_RETRIES) break
                 // 退避 500ms / 1500ms,总附加等待 ≤ 2s,不会让用户感觉卡顿。
+                kotlinx.coroutines.delay(RETRY_BACKOFF_MS[attempt])
+                attempt++
+            } catch (error: ApiException) {
+                if (!error.isTransient || attempt >= MAX_RETRIES) throw error
+                lastError = error
                 kotlinx.coroutines.delay(RETRY_BACKOFF_MS[attempt])
                 attempt++
             }
@@ -152,7 +160,12 @@ class ApiException(
     val statusCode: Int,
     val errorCode: String?,
     errorMessage: String,
-) : Exception(errorMessage)
+) : Exception(errorMessage) {
+    // 与缩略图加载器(ThumbnailHttpException.isTransient)口径一致：
+    // 408/425/429 与 5xx 视为瞬时,可重试;其余 4xx 为业务错误,不重试。
+    val isTransient: Boolean
+        get() = statusCode == 408 || statusCode == 425 || statusCode == 429 || statusCode in 500..599
+}
 
 internal val Throwable.isNoPlayableStream: Boolean
     get() = this is ApiException && errorCode == "NO_PLAYABLE_STREAM"

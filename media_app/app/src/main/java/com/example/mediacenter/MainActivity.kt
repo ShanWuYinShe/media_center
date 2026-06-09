@@ -72,6 +72,7 @@ import kotlin.math.max
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -2058,7 +2059,7 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun fetchBitmap(url: String, maxWidthPx: Int, maxHeightPx: Int): Bitmap? {
         return try {
-            val bytes = fetchThumbnailBytes(url)
+            val bytes = fetchThumbnailBytesWithRetry(url)
             withContext(Dispatchers.Default) {
                 decodeSampledBitmap(bytes, maxWidthPx, maxHeightPx)
             }
@@ -2073,6 +2074,25 @@ class MainActivity : ComponentActivity() {
         } catch (error: OutOfMemoryError) {
             Log.e("MediaCenterImage", "Thumbnail decode exceeded memory budget", error)
             null
+        }
+    }
+
+    // asset 代理回源偶发瞬时 5xx(典型为 Cloudflare error code: 502),对瞬时失败做
+    // 有限指数退避重试,缓存命中后通常即可恢复,避免直接降级为占位图。
+    private suspend fun fetchThumbnailBytesWithRetry(url: String): ByteArray {
+        var attempt = 0
+        while (true) {
+            try {
+                return fetchThumbnailBytes(url)
+            } catch (error: ThumbnailHttpException) {
+                if (!error.isTransient || attempt >= MaxThumbnailRetries) throw error
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: IOException) {
+                if (attempt >= MaxThumbnailRetries) throw error
+            }
+            delay(ThumbnailRetryBackoffMs[attempt])
+            attempt++
         }
     }
 
@@ -2114,7 +2134,7 @@ class MainActivity : ComponentActivity() {
     private fun Response.readBoundedThumbnailBytes(): ByteArray {
         return use { response ->
             if (!response.isSuccessful) {
-                throw IOException("Thumbnail HTTP ${response.code()}")
+                throw ThumbnailHttpException(response.code())
             }
             val body = response.body() ?: throw IOException("Thumbnail response body is empty")
             val contentLength = body.contentLength()
@@ -2507,6 +2527,13 @@ private const val PlaybackUserAgent =
     "Mozilla/5.0 (Linux; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 private const val MaxPlaybackRetries = 3
 private const val MaxThumbnailBytes = 6 * 1024 * 1024
+// 瞬时 5xx/网络抖动最多重试 2 次,退避 400ms / 1200ms,总附加等待 ≤ 1.6s。
+private const val MaxThumbnailRetries = 2
+private val ThumbnailRetryBackoffMs = longArrayOf(400L, 1200L)
+
+private class ThumbnailHttpException(val code: Int) : IOException("Thumbnail HTTP $code") {
+    val isTransient: Boolean get() = code == 408 || code == 425 || code == 429 || code in 500..599
+}
 private const val ViewTypeVideo = 1
 private const val ViewTypeFooter = 2
 private const val FooterStableId = Long.MIN_VALUE
