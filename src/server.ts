@@ -8,8 +8,10 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
+import { lookup as dnsLookupCallback } from "node:dns";
 import { lookup } from "node:dns/promises";
 import net from "node:net";
+import { Agent } from "undici";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import {
@@ -147,7 +149,6 @@ export function buildServer() {
         error: {
           code: "BAD_REQUEST",
           message: "请求参数不合法。",
-          issues: error.issues,
         },
       });
     }
@@ -607,6 +608,51 @@ function truncateMiddle(value: string, maxLength: number): string {
   return `${value.slice(0, headLength)}...${value.slice(-tailLength)}`;
 }
 
+type ResolvedAddress = { address: string; family: number };
+
+// validatingLookup resolves a hostname and refuses the connection if ANY
+// resolved address points at a loopback/private/internal target. Installing it
+// on the dispatcher's connector closes the DNS-rebinding (TOCTOU) window: the
+// address validated here is the exact address undici connects to, so a domain
+// cannot pass the pre-flight check and then re-resolve to an internal IP.
+function validatingLookup(
+  hostname: string,
+  options: { all?: boolean } & Record<string, unknown>,
+  callback: (
+    err: NodeJS.ErrnoException | null,
+    address: string | ResolvedAddress[],
+    family?: number,
+  ) => void,
+): void {
+  dnsLookupCallback(hostname, { ...options, all: true }, (err, addresses) => {
+    if (err) {
+      callback(err, "", 0);
+      return;
+    }
+    const resolved = addresses as ResolvedAddress[];
+    if (
+      resolved.length === 0 ||
+      resolved.some(({ address }) => isBlockedAddress(address))
+    ) {
+      const blockedErr = Object.assign(
+        new Error("resolved address is not allowed"),
+        { code: "EAI_BLOCKED" },
+      ) as NodeJS.ErrnoException;
+      callback(blockedErr, "", 0);
+      return;
+    }
+    if (options.all) {
+      callback(null, resolved);
+    } else {
+      callback(null, resolved[0].address, resolved[0].family);
+    }
+  });
+}
+
+const assetProxyDispatcher = new Agent({
+  connect: { lookup: validatingLookup as never },
+});
+
 async function fetchAssetTarget(
   target: URL,
   range: string | string[] | undefined,
@@ -620,7 +666,8 @@ async function fetchAssetTarget(
     const response = await fetchWithTimeout(fetch, current, {
       redirect: "manual",
       headers: upstreamRequestHeaders(current, range),
-    });
+      dispatcher: assetProxyDispatcher,
+    } as RequestInit);
     if (!isRedirectResponse(response.status)) {
       return response;
     }
