@@ -1,15 +1,17 @@
 # Media Server
 
-合规公开视频聚合服务。公开 API 只返回 Android TV App 可直接播放的普通视频点播地址，不要求客户端知道视频来自 Bilibili、YouTube、Internet Archive 或其他 Provider。
+Go 实现的媒体聚合服务。当前只聚合 **Bilibili**，面向 Android TV App 暴露分类、搜索、详情和播放选项 API。
 
-## 视频类型
+## 当前架构
 
-- `vod`：普通视频 / 点播视频。当前唯一支持的播放类型。
-- `live`：直播视频。当前不搜索、不整理、不解析、不播放。
+- 后端的职责是：**聚合元数据、生成不透明视频 ID、补充 App 直连上游所需请求头**。
+- 对 App **可直接访问**的国内资源，后端**不默认反代媒体流量**；`thumbnailUrl` 和 `playbackOptions[].url` 会直接返回上游 URL。
+- App 必须把响应里的 `thumbnailHeaders` / `playbackOptions[].headers` 原样带到图片和播放请求里。
+- 后续若启用海外/受限来源，可以继续沿用同一套 API：对 App 不能直连的资源返回后端 URL，对能直连的资源返回直连 URL。
 
 ## API
 
-完整 App 对接文档见 [`API.md`](./API.md)，机器可读 OpenAPI 见 [`openapi.json`](./openapi.json)。
+完整 App 对接说明见 [`API.md`](./API.md)。
 
 - `GET /health`
 - `GET /api/health`
@@ -19,45 +21,17 @@
 - `GET /api/videos/:id`
 - `GET /api/videos/:id/playback`
 
-在 workwork 的 nginx 反代后，公开路径使用服务分类前缀 `/api/media/*`，例如 `/api/media/categories` 会转发到本服务内部的 `/api/categories`。nginx 会设置 `X-Forwarded-Prefix: /api/media`，因此响应里的图片和播放代理地址也会生成到 `/api/media/asset`。
-
-分类浏览走 `/api/categories/:id/videos`，结果由服务端定期维护缓存快照，默认预刷新 100 页；客户端请求超过当前缓存深度时，服务端会继续扩展该分类的视频流。
-
-`/api/search` 只用于搜索页的临时关键词搜索，不缓存响应。分类和搜索接口只返回公开点播候选摘要，不提前批量解析播放地址；App 在进入详情或播放前再通过 `/api/videos/:id` / `/api/videos/:id/playback` 获取最新播放选项。若 Bilibili 播放接口触发风控，服务端会按标题尝试 YouTube 补源，并保留原视频 ID 返回可流式播放选项。App 不需要也不应该处理 provider、sourceUrl、playback option id、网页播放或外部打开。
-
-内置一级专区为电影、电视剧、纪录片、红色经典和 Dota 专区。Dota 分类以 Dota1 / 魔兽争霸 3 / DotA Allstars 录像和完整对局为主，兼顾 Dota2 / TI。
+在 workwork 的 nginx 反代后，公开路径仍然是 `/api/media/*`；例如 App 请求 `/api/media/categories`，nginx 会转发到本服务内部的 `/api/categories`。
 
 ## 配置与部署
 
-- workwork 部署中 Media Server 只在 Docker 内部网络提供服务，App 必须通过 nginx 公开前缀访问。
-- 由 workwork admin 管理来源、分类和代理设置。admin 会生成运行时配置文件并把它挂载到容器内 `/config/contentCategories.json`，服务端通过 `CONTENT_CATEGORIES_FILE=/config/contentCategories.json` 读取。
-- 如果不通过 workwork，也可以手动设置 `CONTENT_CATEGORIES_FILE=/path/to/contentCategories.json`（兼容别名 `MEDIA_SERVER_CONTENT_CATEGORIES_FILE`）覆盖内置分类；JSON 结构与 `src/contentCategories.json` 相同。
-- `HOST` / `PORT` 控制服务监听地址；nginx 公开前缀由反代设置 `X-Forwarded-Prefix`，本服务会据此重写图片和播放代理 URL。
-- `MEDIA_ASSET_SIGNING_KEY` 用于签发 opaque 视频 ID、图片 URL、播放 URL 和 DASH 清单 URL；生产环境建议显式配置。未配置时服务会在 `BACKEND_CACHE_DIR` 下生成持久密钥，避免容器重启后旧 opaque ID 立即失效。可选 `MEDIA_PUBLIC_ID_KEY` 可单独覆盖视频 ID 加密密钥。
+- `CONTENT_CATEGORIES_FILE`：运行时分类配置。workwork admin 会生成并挂载到 `/config/contentCategories.json`。
+- `PROVIDER_FETCH_TIMEOUT_MS`：Bilibili 元数据和 `playurl` 请求超时，默认 15 秒。
+- `MEDIA_SERVER_SIGNING_KEY`：用于签发不透明视频 ID / 播放选项 ID。未配置时启动时随机生成；也兼容旧变量 `MEDIA_ASSET_SIGNING_KEY` 作为 fallback。
+- `HOST` / `PORT`：监听地址，默认 `0.0.0.0:8787`。
 
-## 来源定位
+## 当前来源策略
 
-- **Bilibili**：中文覆盖最好，适合 Dota、中文纪录片、用户上传内容和偏中文口味的搜索；播放地址接口可能返回 `v_voucher` 风控，是当前中文内容的高覆盖但高风险来源。
-- **YouTube**：可作为补源，但中文覆盖和稳定性不如 Bilibili；搜索页面和 yt-dlp 解析都可能遇到反 bot/登录校验，默认关闭。
-- **Internet Archive**：通过官方 `advancedsearch` / `metadata` API 和公开下载直链接入，风控风险最低；但中文内容覆盖弱，只适合作为公版老片、历史影像和英文纪录片补充，不适合作为你的中文主源。
-
-目前没有同时满足“中文覆盖足够好、分类偏好匹配、官方稳定播放接口、无风控”的单一公开视频站点。央视/CNTV 中文内容合规性更强，但公开视频播放接口不是面向公众稳定开放的标准 API，若后续接入应作为实验源并默认关闭。
-
-## 点播解析与流式播放
-
-- Bilibili 普通视频优先走公开接口解析 DASH(fMP4) 或单文件 MP4 点播地址；DASH 清单和媒体分片都通过服务端签名代理，播放器按 Range 流式拉取，不需要整文件下载。Bilibili 只返回 `v_voucher` 风控响应时，且 YouTube 来源已启用时，服务端会用该视频标题搜索 YouTube 公开视频作为补源；若 YouTube 补源也被反 bot 或上游错误拦截，会短时熔断补源并返回原 Bilibili 风控错误，避免把 cookies 变成线上必需依赖。熔断时间可用 `YOUTUBE_FALLBACK_COOLDOWN_MS` 配置。
-- YouTube 普通视频通过内部 `vod_extractor` 服务解析点播地址；本地运行可设置 `VOD_EXTRACTOR_URL=http://127.0.0.1:8790/extract`，或安装 `yt-dlp` 并设置 `VOD_EXTRACTOR_BIN=/path/to/yt-dlp` 作为 fallback。若 YouTube 要求登录/反 bot 校验，可先通过 `VOD_EXTRACTOR_EXTRACTOR_ARGS` 尝试 yt-dlp 的 YouTube 客户端/PO token 参数；cookies 文件 `.wework/vod_extractor/youtube-cookies.txt` 仅作为临时兜底，不作为生产稳定性保证。
-- Internet Archive 条目通过官方 metadata 文件列表选择 MP4/WebM 点播文件，再交由 `/api/asset` 代理。
-- `/api/asset` 只接受服务端签发的代理 URL，不会先下载完整文件，而是把 App 的 HTTP Range 请求直接转发给上游 CDN，再把响应流式返回给 Media3/ExoPlayer，支持边下边播和 seek。
-- 后端会按 URL + Range 缓存点播片段和图片响应，默认缓存目录 `/cache`，总上限 50GB，可用 `BACKEND_CACHE_DIR` 和 `BACKEND_CACHE_MAX_BYTES` 覆盖。
-- 上游 HTTP 请求默认 10 秒超时（`PROVIDER_FETCH_TIMEOUT_MS`），Provider 搜索默认 15 秒超时（`PROVIDER_SEARCH_TIMEOUT_MS`），直接详情/点播解析默认 35 秒超时（`DETAIL_RESOLVE_TIMEOUT_MS`），避免单个来源卡住整个 API。
-
-### 媒体出口代理（`MEDIA_ASSET_PROXY_URL`）
-
-- **解决的问题**：当服务器出口 IP 被 Bilibili 视频 CDN（`*.bilivideo.com`）风控/拒绝/地域封锁时，`/api/asset` 拉取媒体分片会持续返回 502（图片 CDN `*.hdslb.com` 不受影响，所以缩略图正常、播放分片失败）。表现为 App 端 ExoPlayer 在 DASH `InitializationChunk.load` 阶段抛 `Response code: 502`。换一个 Bilibili 接受的出口（住宅/国内 IP）即可恢复播放。
-- `MEDIA_ASSET_PROXY_URL`：可选。配置后，仅命中 `MEDIA_ASSET_PROXY_HOSTS` 的上游媒体请求会通过该出口代理转发；其余资源（图片等）仍走直连，避免给代理压不必要的流量。支持 `http://`、`https://`、`socks5://` 三种协议，URL 中可带 `user:pass@` 认证信息。配置非法时服务端会打印告警并自动回退到直连，不影响启动。
-- `MEDIA_ASSET_PROXY_HOSTS`：可选，逗号分隔的 host 后缀列表，默认 `.bilivideo.com,.bilivideo.cn`。只有原始目标 host 命中其中之一时才走代理；选定的 dispatcher 会在该次 asset 请求的所有重定向跳转（如 upos→PCDN）中复用，确保整条媒体链路都经过代理。
-- **安全**：代理只改变出口路径，不放宽 SSRF 校验——`/api/asset` 仍只接受服务端签名的代理 URL，并在请求前及每一跳重定向时解析 DNS、拒绝私网地址。
-- **opt-in**：不设置 `MEDIA_ASSET_PROXY_URL` 时行为与之前完全一致，纯增量、零风险。部署修复时只需把它指向一个 Bilibili 接受的住宅/国内出口并重新部署。
-
-后续扩展其他来源时，请通过官方 API、已授权数据源或合规开源解析工具实现 `VideoProvider`，不要接入盗版站点、绕过 DRM 或未授权下载。
+- 当前配置只启用 **bilibili**。
+- 分类/搜索结果会做关键词、排除词、时长与标题规则过滤，尽量保留完整长视频、减少解说/混剪/短片污染。
+- 播放选项当前返回 **Bilibili 直连 MP4 URL**；后端在播放前实时刷新 URL，避免客户端长期缓存失效地址。

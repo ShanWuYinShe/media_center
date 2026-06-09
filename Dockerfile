@@ -1,32 +1,30 @@
-FROM node:22-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
-RUN npm ci --no-audit --no-fund
+COPY go.mod ./
+RUN go mod download
 
-COPY tsconfig.json ./
-COPY src ./src
-RUN npm run build && npm prune --omit=dev
+COPY *.go ./
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/media_server .
 
-FROM node:22-alpine
+FROM alpine:3.22
 
 WORKDIR /app
 
-RUN mkdir -p /cache /config \
-    && chown -R node:node /cache /config
+RUN apk add --no-cache ca-certificates wget \
+    && adduser -D -u 10001 appuser \
+    && mkdir -p /config \
+    && chown -R appuser:appuser /app /config
 
 ENV HOST=0.0.0.0 \
     PORT=8787 \
-    BACKEND_CACHE_DIR=/cache \
-    BACKEND_CACHE_MAX_BYTES=53687091200
+    CONTENT_CATEGORIES_FILE=/config/contentCategories.json
 
-COPY --from=builder --chown=node:node /app/package.json ./package.json
-COPY --from=builder --chown=node:node /app/node_modules ./node_modules
-COPY --from=builder --chown=node:node /app/dist ./dist
+COPY --from=builder /out/media_server /app/media_server
 
-VOLUME ["/cache", "/config"]
+VOLUME ["/config"]
 EXPOSE 8787
 
-USER node
-CMD ["node", "dist/src/index.js"]
+USER appuser
+CMD ["/app/media_server"]
