@@ -52,4 +52,12 @@
 - 后端会按 URL + Range 缓存点播片段和图片响应，默认缓存目录 `/cache`，总上限 50GB，可用 `BACKEND_CACHE_DIR` 和 `BACKEND_CACHE_MAX_BYTES` 覆盖。
 - 上游 HTTP 请求默认 10 秒超时（`PROVIDER_FETCH_TIMEOUT_MS`），Provider 搜索默认 15 秒超时（`PROVIDER_SEARCH_TIMEOUT_MS`），直接详情/点播解析默认 35 秒超时（`DETAIL_RESOLVE_TIMEOUT_MS`），避免单个来源卡住整个 API。
 
+### 媒体出口代理（`MEDIA_ASSET_PROXY_URL`）
+
+- **解决的问题**：当服务器出口 IP 被 Bilibili 视频 CDN（`*.bilivideo.com`）风控/拒绝/地域封锁时，`/api/asset` 拉取媒体分片会持续返回 502（图片 CDN `*.hdslb.com` 不受影响，所以缩略图正常、播放分片失败）。表现为 App 端 ExoPlayer 在 DASH `InitializationChunk.load` 阶段抛 `Response code: 502`。换一个 Bilibili 接受的出口（住宅/国内 IP）即可恢复播放。
+- `MEDIA_ASSET_PROXY_URL`：可选。配置后，仅命中 `MEDIA_ASSET_PROXY_HOSTS` 的上游媒体请求会通过该出口代理转发；其余资源（图片等）仍走直连，避免给代理压不必要的流量。支持 `http://`、`https://`、`socks5://` 三种协议，URL 中可带 `user:pass@` 认证信息。配置非法时服务端会打印告警并自动回退到直连，不影响启动。
+- `MEDIA_ASSET_PROXY_HOSTS`：可选，逗号分隔的 host 后缀列表，默认 `.bilivideo.com,.bilivideo.cn`。只有原始目标 host 命中其中之一时才走代理；选定的 dispatcher 会在该次 asset 请求的所有重定向跳转（如 upos→PCDN）中复用，确保整条媒体链路都经过代理。
+- **安全**：代理只改变出口路径，不放宽 SSRF 校验——`/api/asset` 仍只接受服务端签名的代理 URL，并在请求前及每一跳重定向时解析 DNS、拒绝私网地址。
+- **opt-in**：不设置 `MEDIA_ASSET_PROXY_URL` 时行为与之前完全一致，纯增量、零风险。部署修复时只需把它指向一个 Bilibili 接受的住宅/国内出口并重新部署。
+
 后续扩展其他来源时，请通过官方 API、已授权数据源或合规开源解析工具实现 `VideoProvider`，不要接入盗版站点、绕过 DRM 或未授权下载。

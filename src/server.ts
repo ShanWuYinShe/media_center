@@ -9,7 +9,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import net from "node:net";
-import { Agent } from "undici";
+import { Agent, ProxyAgent, Socks5ProxyAgent, type Dispatcher } from "undici";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import {
@@ -670,15 +670,126 @@ const assetProxyDispatcher = new Agent({
   connect: { lookup: validatingLookup as never },
 });
 
+// 线上服务器的出口 IP 常被部分上游媒体 CDN(典型如 B 站 *.bilivideo.com)做风控/
+// 地域封锁,导致 asset 代理抓取视频分片整批 502,而图片 CDN(*.hdslb.com)不受影响。
+// 配置 MEDIA_ASSET_PROXY_URL(http/https/socks5)后,命中 MEDIA_ASSET_PROXY_HOSTS 的
+// 上游媒体抓取改走该出口代理(住宅/境内出口);其余资源(如封面图)仍直连,避免给代理
+// 增加无谓压力。未配置时行为完全不变。
+//
+// SSRF 防护:目标 host 仍在抓取前由 validateAssetProxyTarget 解析并拒绝私网/本地目标,
+// 每个重定向跳转也会重新校验。走代理只改变出口路径,不放宽目标校验;代理本身是运维
+// 配置的受信任出口。
+export const DEFAULT_ASSET_PROXY_HOST_SUFFIXES = [
+  ".bilivideo.com",
+  ".bilivideo.cn",
+];
+
+export function parseAssetProxyHostSuffixes(raw: string | undefined): string[] {
+  const value = raw?.trim();
+  if (!value) {
+    return DEFAULT_ASSET_PROXY_HOST_SUFFIXES;
+  }
+  const suffixes = value
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0);
+  return suffixes.length > 0 ? suffixes : DEFAULT_ASSET_PROXY_HOST_SUFFIXES;
+}
+
+export function hostNeedsUpstreamProxy(
+  hostname: string,
+  suffixes: string[],
+): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  return suffixes.some((suffix) => {
+    if (suffix.startsWith(".")) {
+      return host === suffix.slice(1) || host.endsWith(suffix);
+    }
+    return host === suffix || host.endsWith(`.${suffix}`);
+  });
+}
+
+function buildUpstreamProxyDispatcher(
+  rawUrl: string | undefined,
+): Dispatcher | undefined {
+  const value = rawUrl?.trim();
+  if (!value) {
+    return undefined;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    console.warn(
+      `[media] MEDIA_ASSET_PROXY_URL 不是合法 URL,已忽略出口代理配置: ${value}`,
+    );
+    return undefined;
+  }
+  const protocol = parsed.protocol.toLowerCase();
+  try {
+    if (
+      protocol === "socks5:" ||
+      protocol === "socks:" ||
+      protocol === "socks5h:"
+    ) {
+      const username = parsed.username
+        ? decodeURIComponent(parsed.username)
+        : undefined;
+      const password = parsed.password
+        ? decodeURIComponent(parsed.password)
+        : undefined;
+      return new Socks5ProxyAgent(`socks5://${parsed.host}`, {
+        ...(username ? { username } : {}),
+        ...(password ? { password } : {}),
+      });
+    }
+    if (protocol === "http:" || protocol === "https:") {
+      return new ProxyAgent(value);
+    }
+  } catch (error) {
+    console.warn(
+      `[media] 初始化出口代理失败,已忽略 MEDIA_ASSET_PROXY_URL: ${String(error)}`,
+    );
+    return undefined;
+  }
+  console.warn(
+    `[media] MEDIA_ASSET_PROXY_URL 仅支持 http/https/socks5 代理,已忽略: ${protocol}`,
+  );
+  return undefined;
+}
+
+const upstreamProxyHostSuffixes = parseAssetProxyHostSuffixes(
+  process.env.MEDIA_ASSET_PROXY_HOSTS,
+);
+const upstreamProxyDispatcher = buildUpstreamProxyDispatcher(
+  process.env.MEDIA_ASSET_PROXY_URL,
+);
+if (upstreamProxyDispatcher) {
+  console.info(
+    `[media] 已启用上游 asset 出口代理,命中以下 host 后缀的媒体抓取将走代理: ${upstreamProxyHostSuffixes.join(", ")}`,
+  );
+}
+
+function dispatcherForAssetTarget(target: URL): Dispatcher {
+  if (
+    upstreamProxyDispatcher &&
+    hostNeedsUpstreamProxy(target.hostname, upstreamProxyHostSuffixes)
+  ) {
+    return upstreamProxyDispatcher;
+  }
+  return assetProxyDispatcher;
+}
+
 async function fetchAssetTarget(
   target: URL,
   range: string | string[] | undefined,
 ): Promise<Response> {
+  const dispatcher = dispatcherForAssetTarget(target);
   let lastError: unknown;
   for (let attempt = 0; attempt <= ASSET_PROXY_MAX_RETRIES; attempt += 1) {
     let response: Response;
     try {
-      response = await attemptFetchAssetTarget(target, range);
+      response = await attemptFetchAssetTarget(target, range, dispatcher);
     } catch (error) {
       // 目标校验失败(本地/私网等)是确定性拒绝,不重试;网络/超时类错误才重试。
       if (error instanceof ApiError || attempt >= ASSET_PROXY_MAX_RETRIES) {
@@ -713,6 +824,7 @@ function assetProxyBackoffFor(attempt: number): number {
 async function attemptFetchAssetTarget(
   target: URL,
   range: string | string[] | undefined,
+  dispatcher: Dispatcher,
 ): Promise<Response> {
   let current = target;
   for (
@@ -723,7 +835,7 @@ async function attemptFetchAssetTarget(
     const response = await fetchWithTimeout(fetch, current, {
       redirect: "manual",
       headers: upstreamRequestHeaders(current, range),
-      dispatcher: assetProxyDispatcher,
+      dispatcher,
     } as RequestInit);
     if (!isRedirectResponse(response.status)) {
       return response;
