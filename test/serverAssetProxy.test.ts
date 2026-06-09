@@ -195,3 +195,82 @@ test("asset 代理转发 Bilibili 防盗链请求头", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("asset 代理对上游瞬时 502 自动重试后返回成功", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return new Response("error code: 502", {
+        status: 502,
+        headers: { "content-type": "text/plain" },
+      });
+    }
+    return new Response("image-bytes", {
+      status: 200,
+      headers: { "content-length": "11", "content-type": "image/jpeg" },
+    });
+  };
+  try {
+    const response = await app.inject({
+      method: "GET",
+      url: wrapAssetUrl("/api", "https://example.com/retry-thumb.jpg"),
+    });
+
+    expect(calls).toBe(2);
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("image/jpeg");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("asset 代理对上游网络异常自动重试后返回成功", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw new TypeError("network reset");
+    }
+    return new Response("image-bytes", {
+      status: 200,
+      headers: { "content-length": "11", "content-type": "image/jpeg" },
+    });
+  };
+  try {
+    const response = await app.inject({
+      method: "GET",
+      url: wrapAssetUrl("/api", "https://example.com/retry-network.jpg"),
+    });
+
+    expect(calls).toBe(2);
+    expect(response.statusCode).toBe(200);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("asset 代理上游持续 502 时耗尽重试并透传错误状态", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response("error code: 502", {
+      status: 502,
+      headers: { "content-type": "text/plain" },
+    });
+  };
+  try {
+    const response = await app.inject({
+      method: "GET",
+      url: wrapAssetUrl("/api", "https://example.com/retry-exhausted.jpg"),
+    });
+
+    expect(calls).toBe(3);
+    expect(response.statusCode).toBe(502);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

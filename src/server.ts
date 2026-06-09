@@ -69,6 +69,15 @@ const ASSET_REFERENCE_KEY = createHash("sha256")
   .update(`media-asset-reference:${ASSET_SIGNING_KEY}`)
   .digest();
 const MAX_ASSET_REDIRECTS = 5;
+// 上游图源/点播源偶发瞬时故障(连接重置、超时、网关 5xx),会让 asset 代理直接
+// 抛 502,客户端表现为封面整批加载失败。对幂等的 GET 做有限指数退避重试,可吸收
+// 这类抖动而不放大上游压力。
+const ASSET_PROXY_MAX_RETRIES = positiveInteger(
+  process.env.ASSET_PROXY_MAX_RETRIES,
+  2,
+);
+const ASSET_PROXY_RETRY_BACKOFF_MS = [200, 600] as const;
+const RETRYABLE_UPSTREAM_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const assetReferencePayloadSchema = z.object({
   v: z.literal(1),
   kind: z.literal("asset"),
@@ -657,6 +666,40 @@ async function fetchAssetTarget(
   target: URL,
   range: string | string[] | undefined,
 ): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= ASSET_PROXY_MAX_RETRIES; attempt += 1) {
+    let response: Response;
+    try {
+      response = await attemptFetchAssetTarget(target, range);
+    } catch (error) {
+      // 目标校验失败(本地/私网等)是确定性拒绝,不重试;网络/超时类错误才重试。
+      if (error instanceof ApiError || attempt >= ASSET_PROXY_MAX_RETRIES) {
+        throw error;
+      }
+      lastError = error;
+      await sleep(ASSET_PROXY_RETRY_BACKOFF_MS[attempt]);
+      continue;
+    }
+    if (
+      RETRYABLE_UPSTREAM_STATUSES.has(response.status) &&
+      attempt < ASSET_PROXY_MAX_RETRIES
+    ) {
+      // 丢弃上游瞬时错误响应体,避免连接挂起,然后退避重试。
+      await response.body?.cancel().catch(() => undefined);
+      await sleep(ASSET_PROXY_RETRY_BACKOFF_MS[attempt]);
+      continue;
+    }
+    return response;
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new ApiError("UPSTREAM_UNAVAILABLE", "无法连接上游点播媒体地址。", 502);
+}
+
+async function attemptFetchAssetTarget(
+  target: URL,
+  range: string | string[] | undefined,
+): Promise<Response> {
   let current = target;
   for (
     let redirectCount = 0;
@@ -684,6 +727,15 @@ async function fetchAssetTarget(
     "点播媒体地址重定向次数过多。",
     502,
   );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function positiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 function isRedirectResponse(status: number): boolean {
