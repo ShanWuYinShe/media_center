@@ -67,3 +67,26 @@ test("分类分页超过当前快照时按请求继续扩展", async () => {
   expect(page3.items.map((video) => video.id)).toEqual(["v5", "v6"]);
   expect(requestedCounts).toEqual([2, 6]);
 });
+
+test("分类分页过滤已知无效条目", async () => {
+  const cache = new CategoryResultCache(
+    {
+      async searchItems(_query, targetCount) {
+        return Array.from({ length: targetCount }, (_, index) =>
+          item(`v${index + 1}`),
+        );
+      },
+      filterListItems(items) {
+        return items.filter((video) => video.id !== "v2");
+      },
+    },
+    [category],
+    { defaultPages: 1, defaultPageSize: 3 },
+  );
+
+  await cache.refreshDefaultPages();
+  const page = await cache.getPage(category, 1, 3);
+
+  expect(page.total).toBe(2);
+  expect(page.items.map((video) => video.id)).toEqual(["v1", "v3"]);
+});

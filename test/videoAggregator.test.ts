@@ -136,6 +136,37 @@ test("详情接口拒绝没有点播播放地址的视频", async () => {
   ).rejects.toThrow("暂无可由 App 直接播放的点播媒体地址");
 });
 
+test("确认不可播的视频不会继续出现在搜索列表", async () => {
+  const provider: VideoProvider = {
+    name: "bilibili",
+    async search(query, page, pageSize): Promise<SearchResult> {
+      return {
+        query,
+        page,
+        pageSize,
+        total: 2,
+        items: [summary("empty", true), summary("playable", true)],
+      };
+    },
+    async getDetails(id) {
+      return details(id, id === "playable" ? [playableStream] : []);
+    },
+    async getStreams() {
+      return [playableStream];
+    },
+  };
+  const aggregator = new VideoAggregator([provider]);
+
+  await expect(
+    aggregator.getDetails(encoded("bilibili", "empty")),
+  ).rejects.toThrow("暂无可由 App 直接播放的点播媒体地址");
+  const result = await aggregator.search("测试", 1, 2);
+
+  expect(result.items.map((item) => item.id)).toEqual([
+    encoded("bilibili", "playable"),
+  ]);
+});
+
 test("Bilibili 风控时用 YouTube 补源并保留原视频 ID", async () => {
   const bilibiliProvider: VideoProvider = {
     name: "bilibili",

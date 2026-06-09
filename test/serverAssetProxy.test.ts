@@ -160,3 +160,38 @@ test("DASH 清单端点拒绝旧版明文 payload 参数", async () => {
 
   expect(response.statusCode).toBe(400);
 });
+
+test("asset 代理转发 Bilibili 防盗链请求头", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ url: string; headers?: HeadersInit }> = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push({ url: String(input), headers: init?.headers });
+    return new Response("partial", {
+      status: 206,
+      headers: {
+        "content-length": "7",
+        "content-range": "bytes 0-6/100",
+        "content-type": "video/mp4",
+      },
+    });
+  };
+  try {
+    const response = await app.inject({
+      method: "GET",
+      url: wrapAssetUrl("/api", "https://www.bilibili.com/video.m4s"),
+      headers: { range: "bytes=0-6" },
+    });
+
+    expect(response.statusCode).toBe(206);
+    expect(requests[0]).toMatchObject({
+      url: "https://www.bilibili.com/video.m4s",
+      headers: {
+        Range: "bytes=0-6",
+        Referer: "https://www.bilibili.com",
+        Origin: "https://www.bilibili.com",
+      },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

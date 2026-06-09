@@ -39,6 +39,10 @@ const DEFAULT_YOUTUBE_FALLBACK_COOLDOWN_MS = positiveNumber(
   process.env.YOUTUBE_FALLBACK_COOLDOWN_MS,
   30 * 60_000,
 );
+const DEFAULT_INVALID_VIDEO_CACHE_TTL_MS = positiveNumber(
+  process.env.INVALID_VIDEO_CACHE_TTL_MS,
+  24 * 60 * 60_000,
+);
 const VIDEO_ID_KEY = createHash("sha256")
   .update(`media-public-video-id:${VIDEO_ID_SECRET}`)
   .digest();
@@ -67,6 +71,10 @@ export class VideoAggregator {
   private readonly detailCache = new LRUCache<string, PublicVideoDetails>({
     max: 5_000,
     ttl: 60 * 60_000,
+  });
+  private readonly invalidVideoIds = new LRUCache<string, true>({
+    max: 20_000,
+    ttl: DEFAULT_INVALID_VIDEO_CACHE_TTL_MS,
   });
 
   private readonly providerSearchTimeoutMs: number;
@@ -161,14 +169,26 @@ export class VideoAggregator {
 
   async getDetails(videoId: string): Promise<PublicVideoDetails> {
     const { providerName, sourceId } = decodeVideoId(videoId);
-    const details = await this.resolveDetails(providerName, sourceId);
-    const publicDetails = this.toPublicDetails(details);
-    this.detailCache.set(videoId, publicDetails);
-    return publicDetails;
+    try {
+      const details = await this.resolveDetails(providerName, sourceId);
+      const publicDetails = this.toPublicDetails(details);
+      this.detailCache.set(videoId, publicDetails);
+      this.invalidVideoIds.delete(videoId);
+      return publicDetails;
+    } catch (error) {
+      if (isTerminalUnplayableError(error)) {
+        this.invalidVideoIds.set(videoId, true);
+      }
+      throw error;
+    }
   }
 
   async getPlaybackOptions(videoId: string): Promise<PlaybackOption[]> {
     return (await this.getDetails(videoId)).playbackOptions;
+  }
+
+  filterListItems(items: PublicVideoSummary[]): PublicVideoSummary[] {
+    return items.filter((item) => !this.invalidVideoIds.has(item.id));
   }
 
   private async collectProviderSearchResult(
@@ -254,6 +274,7 @@ export class VideoAggregator {
     const rankedCandidates = results.map((result) =>
       result.items
         .filter((item) => item.playable && item.videoKind === "vod")
+        .filter((item) => !this.isKnownInvalidVideo(item.provider, item.id))
         .map((item) => ({ item, score: relevanceScore(item, category) }))
         .filter(({ score }) => score >= 0)
         .sort((a, b) => b.score - a.score)
@@ -471,6 +492,13 @@ export class VideoAggregator {
     return provider;
   }
 
+  private isKnownInvalidVideo(
+    providerName: ProviderName,
+    sourceId: string,
+  ): boolean {
+    return this.invalidVideoIds.has(encodeVideoId(providerName, sourceId));
+  }
+
   private toPublicSummary(
     item: VideoDetails | SearchResult["items"][number],
   ): PublicVideoSummary {
@@ -514,6 +542,13 @@ function providerTimeoutError(provider: string, operation: string): ApiError {
     "UPSTREAM_TIMEOUT",
     `${provider} ${operation}响应超时。`,
     502,
+  );
+}
+
+function isTerminalUnplayableError(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    (error.code === "NO_PLAYABLE_STREAM" || error.code === "NOT_FOUND")
   );
 }
 

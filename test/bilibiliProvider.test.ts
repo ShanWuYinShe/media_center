@@ -79,6 +79,52 @@ test("详情和播放地址使用 WBI 签名接口", async () => {
   ).toBe(true);
 });
 
+test("Bilibili 搜索过滤无时长候选", async () => {
+  const provider = new BilibiliProvider(async (input) => {
+    const url = String(input);
+    if (url.includes("/x/web-interface/nav")) {
+      return jsonResponse({
+        code: 0,
+        data: {
+          wbi_img: {
+            img_url: `https://i0.hdslb.com/bfs/wbi/${"a".repeat(64)}.png`,
+            sub_url: `https://i0.hdslb.com/bfs/wbi/${"b".repeat(64)}.png`,
+          },
+        },
+      });
+    }
+    if (url.includes("/x/web-interface/wbi/search/type")) {
+      return jsonResponse({
+        code: 0,
+        data: {
+          numResults: 3,
+          result: [
+            {
+              bvid: "BVVALID",
+              title: "有效视频",
+              duration: "01:23",
+            },
+            {
+              bvid: "BVSHORT",
+              title: "无时长视频",
+              duration: "00:00",
+            },
+            {
+              bvid: "BVMISSINGDURATION",
+              title: "缺少时长视频",
+            },
+          ],
+        },
+      });
+    }
+    return jsonResponse({ code: -1 });
+  });
+
+  const result = await provider.search("测试", 1, 10);
+
+  expect(result.items.map((item) => item.id)).toEqual(["BVVALID"]);
+});
+
 test("多分段 Bilibili MP4 不作为单 URL 点播流返回", async () => {
   const provider = new BilibiliProvider(async (input) => {
     const url = String(input);
@@ -218,6 +264,109 @@ test("Bilibili DASH 清单作为流式播放项返回", async () => {
     supportsRange: true,
   });
   expect(isDashManifestReference(details.streams[0].url)).toBe(true);
+});
+
+test("Bilibili DASH 过滤 Range 探测失败的清晰度", async () => {
+  const provider = new BilibiliProvider(async (input, init) => {
+    const url = String(input);
+    if (url.includes("/x/web-interface/nav")) {
+      return jsonResponse({
+        code: 0,
+        data: {
+          wbi_img: {
+            img_url: `https://i0.hdslb.com/bfs/wbi/${"a".repeat(64)}.png`,
+            sub_url: `https://i0.hdslb.com/bfs/wbi/${"b".repeat(64)}.png`,
+          },
+        },
+      });
+    }
+    if (url.includes("/x/web-interface/wbi/view")) {
+      return jsonResponse({
+        code: 0,
+        data: {
+          bvid: "BVDASHFILTER",
+          title: "DASH 过滤测试",
+          desc: "简介",
+          cid: 790,
+          owner: { name: "UP" },
+        },
+      });
+    }
+    if (url.includes("/x/player/wbi/playurl") && url.includes("fnval=16")) {
+      return jsonResponse({
+        code: 0,
+        data: {
+          dash: {
+            duration: 120,
+            video: [
+              {
+                id: 80,
+                baseUrl: "https://example.test/video-480.m4s",
+                bandwidth: 1200000,
+                mimeType: "video/mp4",
+                codecs: "avc1.64001f",
+                width: 854,
+                height: 480,
+                SegmentBase: {
+                  Initialization: "0-1000",
+                  indexRange: "1001-1200",
+                },
+              },
+              {
+                id: 64,
+                baseUrl: "https://example.test/video-360.m4s",
+                bandwidth: 800000,
+                mimeType: "video/mp4",
+                codecs: "avc1.64001e",
+                width: 640,
+                height: 360,
+                SegmentBase: {
+                  Initialization: "0-900",
+                  indexRange: "901-1100",
+                },
+              },
+            ],
+            audio: [
+              {
+                id: 30280,
+                baseUrl: "https://example.test/audio.m4s",
+                bandwidth: 128000,
+                mimeType: "audio/mp4",
+                codecs: "mp4a.40.2",
+                SegmentBase: {
+                  Initialization: "0-800",
+                  indexRange: "801-900",
+                },
+              },
+            ],
+          },
+        },
+      });
+    }
+    if (url === "https://example.test/video-480.m4s") {
+      expect(init?.headers).toMatchObject({
+        Range: "bytes=0-1000",
+        Referer: "https://www.bilibili.com",
+        Origin: "https://www.bilibili.com",
+      });
+      return new Response(null, { status: 403 });
+    }
+    if (
+      url === "https://example.test/video-360.m4s" ||
+      url === "https://example.test/audio.m4s"
+    ) {
+      return new Response(null, { status: 206 });
+    }
+    return jsonResponse({ code: -1 });
+  });
+
+  const details = await provider.getDetails("BVDASHFILTER");
+
+  expect(details.streams).toHaveLength(1);
+  expect(details.streams[0]).toMatchObject({
+    mimeType: "application/dash+xml",
+    quality: "360P",
+  });
 });
 
 test("Bilibili v_voucher 风控响应转成上游不可用错误", async () => {

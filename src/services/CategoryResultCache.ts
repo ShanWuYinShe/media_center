@@ -7,6 +7,7 @@ import type {
 import type { VideoAggregator } from "./VideoAggregator.js";
 
 type CategorySearchSource = Pick<VideoAggregator, "searchItems">;
+type CategoryListFilter = Pick<VideoAggregator, "filterListItems">;
 
 type CategorySnapshot = {
   items: PublicVideoSummary[];
@@ -29,7 +30,7 @@ export class CategoryResultCache {
   private readonly extensionTasks = new Map<string, Promise<void>>();
 
   constructor(
-    private readonly source: CategorySearchSource,
+    private readonly source: CategorySearchSource & Partial<CategoryListFilter>,
     private readonly categories: ContentCategory[],
     private readonly options: CategoryResultCacheOptions = {},
   ) {}
@@ -42,7 +43,7 @@ export class CategoryResultCache {
     const end = page * pageSize;
     await this.ensureItems(category, end);
     const snapshot = this.snapshots.get(category.id);
-    const items = snapshot?.items ?? [];
+    const items = this.filterListItems(snapshot?.items ?? []);
     const start = (page - 1) * pageSize;
 
     return {
@@ -145,6 +146,10 @@ export class CategoryResultCache {
         updatedAt: this.now(),
       });
     }
+  }
+
+  private filterListItems(items: PublicVideoSummary[]): PublicVideoSummary[] {
+    return this.source.filterListItems?.(items) ?? items;
   }
 
   private defaultTargetCount(): number {

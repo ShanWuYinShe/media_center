@@ -114,6 +114,10 @@ type DashRepresentationBase = Omit<DashVideoRepresentation, "mimeType">;
 
 const PROVIDER: ProviderName = "bilibili";
 const API_BASE = "https://api.bilibili.com";
+const BILIBILI_WEB_ORIGIN = "https://www.bilibili.com";
+const BILIBILI_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const BILIBILI_DASH_PROBE_TIMEOUT_MS = 5_000;
 
 /**
  * 解说/盘点/预告类关键词 — 匹配到任一即过滤。
@@ -505,6 +509,7 @@ export class BilibiliProvider implements VideoProvider {
     const rawItems = data.data?.result ?? [];
     const items = rawItems
       .filter((item) => item.bvid)
+      .filter((item) => parseDuration(item.duration) > 0)
       .filter(
         (item) =>
           dotaQuery ||
@@ -590,7 +595,7 @@ export class BilibiliProvider implements VideoProvider {
   ): Promise<VideoStream[]> {
     const dashProbe = await this.fetchDashPlayUrl(bvid, cid, 80);
     throwIfVoucherOnlyPlayUrl(dashProbe);
-    const dashStreams = this.dashStreams(bvid, dashProbe);
+    const dashStreams = await this.dashStreams(bvid, dashProbe);
     if (dashStreams.length > 0) {
       return dashStreams;
     }
@@ -647,12 +652,15 @@ export class BilibiliProvider implements VideoProvider {
     return streams;
   }
 
-  private dashStreams(
+  private async dashStreams(
     bvid: string,
     response: BilibiliPlayUrlResponse,
-  ): VideoStream[] {
+  ): Promise<VideoStream[]> {
     const dash = response.data?.dash;
     const audio = bestDashAudio(dash?.audio ?? []);
+    if (audio && !(await this.isDashRepresentationPlayable(audio))) {
+      return [];
+    }
     const videos = (dash?.video ?? [])
       .flatMap((item) => {
         const representation = dashVideoRepresentation(item);
@@ -665,6 +673,9 @@ export class BilibiliProvider implements VideoProvider {
     const streams: VideoStream[] = [];
     const seenLabels = new Set<string>();
     for (const { item, representation } of videos) {
+      if (!(await this.isDashRepresentationPlayable(representation))) {
+        continue;
+      }
       const label = dashVideoLabel(item, representation);
       if (seenLabels.has(label)) continue;
       seenLabels.add(label);
@@ -686,6 +697,25 @@ export class BilibiliProvider implements VideoProvider {
       if (streams.length >= 4) break;
     }
     return streams;
+  }
+
+  private async isDashRepresentationPlayable(
+    representation: DashVideoRepresentation | DashAudioRepresentation,
+  ): Promise<boolean> {
+    try {
+      const response = await fetchWithTimeout(
+        this.fetcher,
+        representation.url,
+        {
+          headers: bilibiliMediaHeaders(dashProbeRange(representation)),
+        },
+        BILIBILI_DASH_PROBE_TIMEOUT_MS,
+      );
+      await response.body?.cancel();
+      return response.status === 200 || response.status === 206;
+    } catch {
+      return false;
+    }
   }
 
   /** 请求单一清晰度的 playurl(fnval=0 → 旧版 MP4 直链)。 */
@@ -757,11 +787,7 @@ export class BilibiliProvider implements VideoProvider {
   private async getJson<T>(url: URL): Promise<T> {
     try {
       const response = await fetchWithTimeout(this.fetcher, url.toString(), {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          Referer: "https://www.bilibili.com",
-        },
+        headers: bilibiliWebHeaders(),
       });
       if (!response.ok) {
         throw new ApiError(
@@ -782,4 +808,25 @@ export class BilibiliProvider implements VideoProvider {
       );
     }
   }
+}
+
+function bilibiliWebHeaders(): Record<string, string> {
+  return {
+    "User-Agent": BILIBILI_USER_AGENT,
+    Referer: BILIBILI_WEB_ORIGIN,
+  };
+}
+
+function bilibiliMediaHeaders(range: string): Record<string, string> {
+  return {
+    ...bilibiliWebHeaders(),
+    Origin: BILIBILI_WEB_ORIGIN,
+    Range: range,
+  };
+}
+
+function dashProbeRange(
+  representation: DashVideoRepresentation | DashAudioRepresentation,
+): string {
+  return `bytes=${representation.initialization ?? "0-0"}`;
 }

@@ -657,6 +657,7 @@ function upstreamRequestHeaders(
   const host = url.hostname;
   if (host.endsWith(".bilivideo.com") || host.endsWith(".bilibili.com")) {
     headers.Referer = "https://www.bilibili.com";
+    headers.Origin = "https://www.bilibili.com";
   } else if (
     host.endsWith(".googlevideo.com") ||
     host.endsWith(".youtube.com")
