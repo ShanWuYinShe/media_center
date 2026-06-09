@@ -255,11 +255,20 @@ class MainActivity : ComponentActivity() {
         val row = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(12), 0, dp(4))
+            setPadding(0, dp(18), 0, dp(10))
             clipChildren = false
             clipToPadding = false
         }
-        row.addView(View(this), LinearLayout.LayoutParams(0, dp(54), 1f))
+        val titleBlock = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        titleBlock.addView(label("媒体中心", 30f, Colors.TextPrimary, bold = true, maxLines = 1), linearMatch())
+        titleBlock.addView(
+            label("合规公开视频与授权内容 · 遥控器优先体验", 13f, Colors.TextTertiary, maxLines = 1),
+            LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(2)),
+        )
+        row.addView(titleBlock, LinearLayout.LayoutParams(0, dp(64), 1f))
         val searchButton = circleIconButton(
             icon = PillIcon.Search,
             onClick = {
@@ -279,7 +288,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         registerFocusTarget(HomeFocusTarget.Search, searchButton)
-        row.addView(searchButton, LinearLayout.LayoutParams(wrap(), dp(54)))
+        row.addView(searchButton, LinearLayout.LayoutParams(dp(54), dp(54)))
         return row
     }
 
@@ -695,7 +704,7 @@ class MainActivity : ComponentActivity() {
             setBackgroundColor(Colors.AppleBlue)
             alpha = 0f
         }
-        imageWrap.addView(focusIndicator, FrameLayout.LayoutParams(match(), dp(3), Gravity.BOTTOM))
+        imageWrap.addView(focusIndicator, FrameLayout.LayoutParams(match(), dp(5), Gravity.BOTTOM))
         card.addView(imageWrap, frameMatch())
 
         val title = label(video.title, 14f, Colors.TextPrimary, bold = true, maxLines = 1).apply {
@@ -711,6 +720,12 @@ class MainActivity : ComponentActivity() {
         }
         imageWrap.addView(textBlock, FrameLayout.LayoutParams(match(), wrap(), Gravity.BOTTOM))
         applyCardFocus(card) { focused ->
+            imageWrap.background = rounded(
+                if (focused) Colors.GlassFillStrong else Colors.SurfaceElevated,
+                14,
+                if (focused) 2 else 1,
+                if (focused) Colors.GlassBorderFocused else Colors.GlassBorder,
+            )
             if (focused) {
                 homeFocusArea = HomeFocusArea.Video
                 rememberedVideoFocusByCategory[homeCategoryKey(currentState)] = video.id
@@ -724,6 +739,8 @@ class MainActivity : ComponentActivity() {
         val row = LinearLayout(this).apply {
             gravity = Gravity.CENTER
             orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(24), 0, dp(24), 0)
+            background = rounded(Colors.GlassFill, 24, 1, Colors.GlassBorder)
         }
         if (loadingMore) {
             row.addView(ProgressBar(this), LinearLayout.LayoutParams(dp(22), dp(22)))
@@ -746,7 +763,7 @@ class MainActivity : ComponentActivity() {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(72), dp(54), dp(72), dp(54))
+            setPadding(dp(64), dp(48), dp(64), dp(48))
             clipChildren = false
         }
         screen.addView(row, frameMatch())
@@ -780,7 +797,7 @@ class MainActivity : ComponentActivity() {
             },
             frameMatch(),
         )
-        row.addView(hero, LinearLayout.LayoutParams(dp(520), dp(320)).withEndMargin(dp(56)))
+        row.addView(hero, LinearLayout.LayoutParams(dp(500), dp(308)).withEndMargin(dp(48)))
 
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -797,9 +814,9 @@ class MainActivity : ComponentActivity() {
             info.addView(label(metadata, 14f, Colors.TextTertiary, bold = true, maxLines = 1), linearMatch())
         }
         info.addView(label(details.title, 34f, Colors.TextPrimary, bold = true, maxLines = 2), linearMatch())
-        info.addView(label(details.description.ifBlank { "暂无简介" }, 17f, Colors.TextSecondary, maxLines = 5), linearMatch())
+        info.addView(label(details.description.ifBlank { "暂无简介" }, 17f, Colors.TextSecondary, maxLines = 3), linearMatch())
 
-        if (details.description.length > 160) {
+        if (details.description.length > 96) {
             info.addView(
                 pill("查看完整简介", selected = false, heightDp = 38, horizontalPaddingDp = 18) {
                     showDescriptionDialog(details.title, details.description)
@@ -950,11 +967,28 @@ class MainActivity : ComponentActivity() {
         val hideOverlay = Runnable {
             overlay.animate().alpha(0f).setDuration(400).start()
         }
+        fun shouldAutoHideOverlay(): Boolean {
+            return nextPlayer.playWhenReady && nextPlayer.playbackState != Player.STATE_ENDED
+        }
+        fun updateOverlayAutoHide() {
+            overlay.removeCallbacks(hideOverlay)
+            if (shouldAutoHideOverlay()) {
+                overlay.postDelayed(hideOverlay, 4_000)
+            }
+        }
+        fun syncOverlayVisibilityForPlaybackState() {
+            overlay.removeCallbacks(hideOverlay)
+            if (shouldAutoHideOverlay()) {
+                if (overlay.alpha > 0f) overlay.postDelayed(hideOverlay, 4_000)
+            } else {
+                overlay.animate().cancel()
+                overlay.alpha = 1f
+            }
+        }
         fun showOverlay() {
             overlay.animate().cancel()
             overlay.alpha = 1f
-            overlay.removeCallbacks(hideOverlay)
-            overlay.postDelayed(hideOverlay, 4_000)
+            updateOverlayAutoHide()
         }
         fun playFromCurrentPosition() {
             if (nextPlayer.playbackState == Player.STATE_ENDED) {
@@ -1031,6 +1065,15 @@ class MainActivity : ComponentActivity() {
         }
         screen.addView(playerView, frameMatch())
         screen.addView(overlay, frameMatch())
+        nextPlayer.addListener(object : Player.Listener {
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                syncOverlayVisibilityForPlaybackState()
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                syncOverlayVisibilityForPlaybackState()
+            }
+        })
         setContent(screen)
         screen.requestFocus()
         showOverlay()
@@ -1054,7 +1097,16 @@ class MainActivity : ComponentActivity() {
                 intArrayOf(Color.argb(166, 0, 0, 0), Color.TRANSPARENT),
             )
         }
-        top.addView(label("正在播放 · ${stream.label.ifBlank { "默认" }}", 18f, Color.WHITE, bold = true, maxLines = 1), linearMatch())
+        fun playbackStatusText(): String {
+            val status = when {
+                player.playbackState == Player.STATE_ENDED -> "已结束"
+                player.playWhenReady -> "播放中"
+                else -> "已暂停"
+            }
+            return "$status · ${stream.label.ifBlank { "默认" }}"
+        }
+        val playbackStatus = label(playbackStatusText(), 18f, Color.WHITE, bold = true, maxLines = 1)
+        top.addView(playbackStatus, linearMatch())
         overlay.addView(top, FrameLayout.LayoutParams(match(), wrap(), Gravity.TOP))
 
         val glyph = PlaybackGlyphView(this).apply {
@@ -1128,6 +1180,7 @@ class MainActivity : ComponentActivity() {
         }
         fun updatePlaybackGlyph() {
             glyph.setPlaying(player.playWhenReady && player.playbackState != Player.STATE_ENDED)
+            playbackStatus.text = playbackStatusText()
             center.visibility = View.VISIBLE
         }
         val listener = object : Player.Listener {
@@ -1254,13 +1307,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun centeredLoading(text: String): View {
-        val box = LinearLayout(this).apply {
+        val card = LinearLayout(this).apply {
             gravity = Gravity.CENTER
             orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(28), dp(18), dp(28), dp(18))
+            background = rounded(Colors.GlassFillStrong, 28, 1, Colors.GlassBorder)
         }
-        box.addView(ProgressBar(this), LinearLayout.LayoutParams(dp(42), dp(42)))
-        box.addView(label(text, 16f, Colors.TextSecondary, bold = true, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(14)))
-        return box
+        card.addView(ProgressBar(this), LinearLayout.LayoutParams(dp(42), dp(42)))
+        card.addView(label(text, 16f, Colors.TextSecondary, bold = true, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(14)))
+        return centeredCard(card)
     }
 
     private fun loadingScrim(): View {
@@ -1276,15 +1331,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun errorState(message: String, onRetry: () -> Unit): View {
-        val box = LinearLayout(this).apply {
+        val card = LinearLayout(this).apply {
             gravity = Gravity.CENTER
             orientation = LinearLayout.VERTICAL
+            setPadding(dp(34), dp(28), dp(34), dp(28))
+            background = rounded(Colors.SurfaceElevated, 28, 1, Colors.GlassBorder)
         }
-        box.addView(label(message, 18f, Colors.TextPrimary, bold = true, maxLines = 3), linearWrap())
+        card.addView(label(message, 18f, Colors.TextPrimary, bold = true, maxLines = 3), linearWrap())
         val retry = pill("重试", selected = true, heightDp = 50, horizontalPaddingDp = 32, onClick = onRetry)
-        box.addView(retry, LinearLayout.LayoutParams(wrap(), dp(50)).withTopMargin(dp(16)))
+        card.addView(retry, LinearLayout.LayoutParams(wrap(), dp(50)).withTopMargin(dp(16)))
         retry.post { retry.requestFocus() }
-        return box
+        return centeredCard(card)
     }
 
     private fun errorInline(message: String, onRetry: () -> Unit): View {
@@ -1299,8 +1356,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun emptyState(message: String): View {
-        return label(message, 18f, Colors.TextTertiary, bold = true, maxLines = 1).apply {
+        val card = LinearLayout(this).apply {
             gravity = Gravity.CENTER
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(34), dp(26), dp(34), dp(26))
+            background = rounded(Colors.GlassFill, 28, 1, Colors.GlassBorder)
+        }
+        card.addView(label(message, 18f, Colors.TextTertiary, bold = true, maxLines = 1), linearWrap())
+        card.addView(label("换个分类或关键词试试", 13f, Colors.TextTertiary, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withTopMargin(dp(8)))
+        return centeredCard(card)
+    }
+
+    private fun centeredCard(card: View): FrameLayout {
+        return FrameLayout(this).apply {
+            addView(card, FrameLayout.LayoutParams(wrap(), wrap(), Gravity.CENTER))
         }
     }
 
@@ -1514,7 +1583,7 @@ class MainActivity : ComponentActivity() {
     ) {
         fun update(focused: Boolean) {
             view.background = rounded(Color.TRANSPARENT, 18, if (focused) 3 else 0, if (focused) Colors.GlassBorderFocused else Color.TRANSPARENT)
-            view.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+            view.animate().scaleX(if (focused) 1.04f else 1f).scaleY(if (focused) 1.04f else 1f).setDuration(120).start()
         }
         update(false)
         view.setOnFocusChangeListener { _, focused ->
