@@ -177,7 +177,7 @@ export class InternetArchiveProvider implements VideoProvider {
       });
       if (!response.ok) {
         throw new ApiError(
-          "PROVIDER_UNAVAILABLE",
+          "UPSTREAM_UNAVAILABLE",
           "Internet Archive 返回了错误响应。",
           502,
           { status: response.status },
@@ -187,7 +187,7 @@ export class InternetArchiveProvider implements VideoProvider {
     } catch (error) {
       if (error instanceof ApiError) throw error;
       throw new ApiError(
-        "PROVIDER_UNAVAILABLE",
+        "UPSTREAM_UNAVAILABLE",
         "无法连接 Internet Archive。",
         502,
         error,

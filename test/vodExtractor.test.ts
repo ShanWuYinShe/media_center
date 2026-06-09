@@ -43,7 +43,7 @@ test("HTTP 点播解析器把服务失败转成 Provider 错误", async () => {
   await expect(
     extractor.extract("https://www.youtube.com/watch?v=x"),
   ).rejects.toMatchObject({
-    code: "PROVIDER_UNAVAILABLE",
+    code: "UPSTREAM_UNAVAILABLE",
     statusCode: 502,
   });
 });

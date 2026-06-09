@@ -1,6 +1,6 @@
 # Media Server API
 
-本文档描述 Android TV App 需要对接的公开 API。App 不需要知道内容来自 Bilibili、YouTube 或其他 Provider，也不要直接访问第三方媒体 URL；所有图片和点播地址都会被服务端改写为带签名的 `/asset` 代理地址。
+本文档描述 Android TV App 需要对接的公开 API。App 不需要知道内容来自哪个上游来源，也不要直接访问第三方媒体 URL；视频 ID、图片地址、点播地址和 DASH 清单地址都是服务端签发的不透明值。
 
 机器可读版本见 [`openapi.json`](./openapi.json)。
 
@@ -19,10 +19,10 @@ App 应把配置值当作 **API base URL**，也就是下面端点表中路径�
 - 编码：所有 JSON 请求/响应均使用 UTF-8。
 - 认证：Media Server 公开 API 当前不要求 App 认证；线上访问控制由外层 nginx/Cloudflare 策略决定。
 - 视频类型：当前只公开 `vod` 点播；`live` 不搜索、不展示、不播放。
-- 视频 ID：`id` 是服务端生成的不透明字符串，App 必须原样保存，并在放入 URL path 时执行 URL encode。
+- 视频 ID：视频 `id` 和 `playbackOptions[].id` 都是服务端生成的不透明字符串，不包含 App 可依赖的来源信息；视频 `id` 必须原样保存，并在放入 URL path 时执行 URL encode。
 - 分页：`page` 从 `1` 开始；`pageSize` 范围是 `1..40`，默认 `20`。
-- 图片和播放 URL：`thumbnailUrl`、`playbackOptions[].url` 都是服务端签发的 `/asset?url=...&sig=...` 代理地址，App 应直接使用它们，不要自行拼接。
-- 补源：当 Bilibili 播放接口触发 `v_voucher` 风控时，服务端会按原视频标题尝试 YouTube 公开视频补源；响应仍保留原列表项 ID，App 无需切换 Provider。
+- 图片和播放 URL：`thumbnailUrl`、`playbackOptions[].url` 都是服务端签发的 `/asset?ref=...&sig=...` 或 `/manifest/dash?ref=...&sig=...` 不透明代理地址。App 应直接使用它们，不要解析、改写或自行拼接，也不要根据 URL 推断上游来源。
+- 补源：当原上游播放地址暂不可用时，服务端会按原视频元数据尝试合规公开内容补源；响应仍保留原列表项 ID，App 无需感知来源切换。
 - Range：播放代理支持 HTTP Range。Media3/ExoPlayer 正常发起 Range 请求即可。
 
 ## 错误响应
@@ -39,11 +39,11 @@ App 应把配置值当作 **API base URL**，也就是下面端点表中路径�
 | HTTP 状态 | code | 含义 |
 |-----------|------|------|
 | 400 | `BAD_REQUEST` | 参数格式或范围不合法 |
-| 404 | `NOT_FOUND` | 分类、视频或 Provider 不存在 |
+| 404 | `NOT_FOUND` | 分类、视频或上游来源不存在 |
 | 422 | `NO_PLAYABLE_STREAM` | 视频不是可播放点播，或没有可播放流 |
 | 500 | `INTERNAL_ERROR` | 服务端内部错误 |
-| 502 | `PROVIDER_TIMEOUT` | 上游 Provider 或解析过程超时 |
-| 502 | `PROVIDER_UNAVAILABLE` | 上游 Provider、点播解析器或媒体地址不可用 |
+| 502 | `UPSTREAM_TIMEOUT` | 上游来源或解析过程超时 |
+| 502 | `UPSTREAM_UNAVAILABLE` | 上游来源、点播解析器或媒体地址不可用 |
 
 ## 数据模型
 
@@ -85,7 +85,7 @@ type VideoDetails = VideoSummary & {
 
 ```ts
 type PlaybackOption = {
-  id: string;
+  id: string; // 服务端生成的不透明播放选项 ID
   kind: "vod";
   label: string;
   url: string;
@@ -154,13 +154,13 @@ Query：
   "total": 20,
   "items": [
     {
-      "id": "bilibili:QlZ4eHh4",
+      "id": "v1.G4w8...S6xw",
       "videoKind": "vod",
       "title": "示例电影",
       "description": "视频简介",
       "year": "2024",
       "creators": ["示例频道"],
-      "thumbnailUrl": "https://yinghuoren.com/api/media/asset?url=...&sig=...",
+      "thumbnailUrl": "https://yinghuoren.com/api/media/asset?ref=...&sig=...",
       "durationSeconds": 7200,
       "playbackKind": "vod"
     }
@@ -190,20 +190,20 @@ Query：
 
 ```json
 {
-  "id": "youtube:ZGV0YWlsaWQ",
+  "id": "v1.N0xA...Jx9w",
   "videoKind": "vod",
   "title": "示例视频",
   "description": "视频简介",
   "creators": ["示例频道"],
-  "thumbnailUrl": "https://yinghuoren.com/api/media/asset?url=...&sig=...",
+  "thumbnailUrl": "https://yinghuoren.com/api/media/asset?ref=...&sig=...",
   "durationSeconds": 630,
   "playbackKind": "vod",
   "playbackOptions": [
     {
-      "id": "youtube-detailid-18",
+      "id": "v1.K4dm...wA",
       "kind": "vod",
       "label": "360p",
-      "url": "https://yinghuoren.com/api/media/asset?url=...&sig=...",
+      "url": "https://yinghuoren.com/api/media/asset?ref=...&sig=...",
       "mimeType": "video/mp4"
     }
   ]
@@ -220,24 +220,24 @@ Query：
 {
   "items": [
     {
-      "id": "youtube-detailid-18",
+      "id": "v1.K4dm...wA",
       "kind": "vod",
       "label": "360p",
-      "url": "https://yinghuoren.com/api/media/asset?url=...&sig=...",
+      "url": "https://yinghuoren.com/api/media/asset?ref=...&sig=...",
       "mimeType": "video/mp4"
     }
   ]
 }
 ```
 
-### `GET /asset?url={encodedUrl}&sig={signature}`
+### `GET /asset?ref={opaqueRef}&sig={signature}`
 
-媒体和图片代理端点。App 通常不需要手工拼接这个端点，只需要使用 API 返回的 `thumbnailUrl` 和 `playbackOptions[].url`。
+媒体和图片代理端点。App 不需要手工拼接这个端点，只需要使用 API 返回的 `thumbnailUrl` 和 `playbackOptions[].url`。
 
 请求：
 
-- `url`：必填，原始 HTTP/HTTPS 资源 URL，必须 URL encode。
-- `sig`：必填，服务端签发的 HMAC 签名。App 不需要理解签名算法，只需原样使用 API 返回的完整 URL。
+- `ref`：必填，服务端签发的不透明资源引用，App 不需要也不能解读。
+- `sig`：必填，服务端签发的签名。App 不需要理解签名算法，只需原样使用 API 返回的完整 URL。
 - `Range`：可选；播放器发送 Range 时服务端会透传给上游。
 
 响应：
@@ -245,6 +245,20 @@ Query：
 - 状态码通常是 `200` 或 `206`，取决于上游和 Range 请求。
 - 关键响应头：`Content-Type`、`Content-Length`、`Content-Range`、`Accept-Ranges`、`X-Cache`。
 - `X-Cache` 可能是 `HIT`、`MISS` 或 `BYPASS`。
+
+### `GET /manifest/dash?ref={opaqueRef}&sig={signature}`
+
+DASH 清单代理端点。`mimeType=application/dash+xml` 的 `playbackOptions[].url` 会指向这里；App 不需要手工拼接，只需把完整 URL 交给 Media3/ExoPlayer。
+
+请求：
+
+- `ref`：必填，服务端签发的不透明 DASH 清单引用，App 不需要也不能解读。
+- `sig`：必填，服务端签发的签名。App 只需原样使用 API 返回的完整 URL。
+
+响应：
+
+- `Content-Type: application/dash+xml`
+- 清单里的媒体分片 URL 仍然是服务端 `/asset?ref=...&sig=...` opaque URL。
 
 ### `GET /health`
 
@@ -269,7 +283,7 @@ Query：
 
 - 未识别字段应忽略，方便服务端后续扩展。
 - `playbackKind` 和 `kind` 当前只会是 `vod`，但 App 应按枚举处理。
-- `mimeType=application/dash+xml` 表示服务端生成的 DASH 清单；App 应交给支持 DASH 的播放器处理，清单和媒体分片都会通过 `/asset` Range 代理流式读取。
+- `mimeType=application/dash+xml` 表示服务端生成的 DASH 清单；App 应交给支持 DASH 的播放器处理，清单和媒体分片都会通过服务端 opaque URL 与 `/asset` Range 代理流式读取。
 - `thumbnailUrl`、`year`、`durationSeconds` 可能缺失。
 - `playbackOptions` 可能为空或请求返回 `NO_PLAYABLE_STREAM`，App 应展示“暂不可播放”。
-- 不要依赖 `id` 的内部格式；它可能包含 `:`、`-`、`_` 等字符。
+- 不要依赖视频 `id` 或 `playbackOptions[].id` 的内部格式；它们可能包含 `:`、`-`、`_` 等字符。

@@ -1,6 +1,13 @@
 import cors from "@fastify/cors";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
 import { lookup } from "node:dns/promises";
 import net from "node:net";
 import { Readable } from "node:stream";
@@ -23,6 +30,7 @@ import {
   isDashManifestReference,
   parseDashManifestPayload,
   renderDashMpd,
+  type DashMediaUrlRole,
 } from "./services/StreamManifests.js";
 import { VideoAggregator } from "./services/VideoAggregator.js";
 import { fetchWithTimeout } from "./services/fetchWithTimeout.js";
@@ -40,22 +48,45 @@ const pageQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(40).default(20),
 });
 const videoParamsSchema = z.object({ id: z.string().min(1) });
+const opaqueReferenceSchema = z
+  .string()
+  .min(1)
+  .max(128 * 1024)
+  .regex(/^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
 const assetQuerySchema = z.object({
-  url: z.string().url(),
+  ref: opaqueReferenceSchema,
   sig: z.string().regex(/^[a-f0-9]{64}$/i),
 });
 const dashManifestQuerySchema = z.object({
-  payload: z
-    .string()
-    .min(1)
-    .max(64 * 1024)
-    .regex(/^[A-Za-z0-9_-]+$/),
+  ref: opaqueReferenceSchema,
   sig: z.string().regex(/^[a-f0-9]{64}$/i),
 });
 const ASSET_SIGNING_KEY =
   process.env.MEDIA_ASSET_SIGNING_KEY?.trim() ||
   randomBytes(32).toString("hex");
+const ASSET_REFERENCE_KEY = createHash("sha256")
+  .update(`media-asset-reference:${ASSET_SIGNING_KEY}`)
+  .digest();
 const MAX_ASSET_REDIRECTS = 5;
+const assetReferencePayloadSchema = z.object({
+  v: z.literal(1),
+  kind: z.literal("asset"),
+  url: z.string().url(),
+  role: z.enum(["media", "initialization"]).optional(),
+});
+type AssetReferencePayload = z.infer<typeof assetReferencePayloadSchema>;
+const dashManifestReferencePayloadSchema = z.object({
+  v: z.literal(1),
+  kind: z.literal("dash-manifest"),
+  payload: z
+    .string()
+    .min(1)
+    .max(64 * 1024)
+    .regex(/^[A-Za-z0-9_-]+$/),
+});
+type DashManifestReferencePayload = z.infer<
+  typeof dashManifestReferencePayloadSchema
+>;
 
 export function buildServer() {
   const app = Fastify({
@@ -101,7 +132,7 @@ export function buildServer() {
       return reply.status(error.statusCode).send({
         error: {
           code: error.code,
-          message: error.message,
+          message: publicErrorMessage(error),
         },
       });
     }
@@ -178,10 +209,9 @@ export function buildServer() {
   });
 
   app.get("/api/manifest/dash", async (request, reply) => {
-    const { payload, sig } = dashManifestQuerySchema.parse(request.query);
-    if (!verifyDashManifestSignature(payload, sig)) {
-      throw new ApiError("BAD_REQUEST", "播放清单签名无效。", 400);
-    }
+    const { payload } = dashManifestPayloadFromQuery(
+      dashManifestQuerySchema.parse(request.query),
+    );
     let manifest;
     try {
       manifest = parseDashManifestPayload(payload);
@@ -194,22 +224,19 @@ export function buildServer() {
     ]);
     reply.header("Cache-Control", "private, max-age=300");
     reply.type(DASH_MANIFEST_MIME_TYPE);
-    return renderDashMpd(manifest, (rawUrl) =>
-      wrapAssetUrl(publicApiBase(request), rawUrl),
+    return renderDashMpd(manifest, (rawUrl, role) =>
+      wrapAssetUrl(publicApiBase(request), rawUrl, role),
     );
   });
 
   /**
    * 资源代理端点。
    * - 视频点播地址按 HTTP Range 直接转发给上游,播放器可边下边播和 seek
-   * - 不等待完整文件下载完成,也不把 App 暴露给 Bilibili/YouTube CDN 细节
+   * - 不等待完整文件下载完成,也不把 App 暴露给上游 CDN 细节
    * - 图片同样通过流式转发返回
    */
   app.get("/api/asset", async (request, reply) => {
-    const { url, sig } = assetQuerySchema.parse(request.query);
-    if (!verifyAssetSignature(url, sig)) {
-      throw new ApiError("BAD_REQUEST", "资源代理签名无效。", 400);
-    }
+    const url = assetUrlFromQuery(assetQuerySchema.parse(request.query));
     const target = await validateAssetProxyTarget(url);
     const range =
       typeof request.headers.range === "string"
@@ -240,7 +267,7 @@ export function buildServer() {
         throw error;
       }
       throw new ApiError(
-        "PROVIDER_UNAVAILABLE",
+        "UPSTREAM_UNAVAILABLE",
         "无法连接上游点播媒体地址。",
         502,
         error,
@@ -248,7 +275,7 @@ export function buildServer() {
     }
     if (!upstream.body) {
       throw new ApiError(
-        "PROVIDER_UNAVAILABLE",
+        "UPSTREAM_UNAVAILABLE",
         `上游点播媒体地址没有响应体: ${upstream.status}`,
         502,
       );
@@ -316,7 +343,11 @@ function requestLogContext(request: FastifyRequest): Record<string, unknown> {
       context.query = query;
     }
     if (path === "/api/asset") {
-      context.asset = assetTargetLogContext(parsed.searchParams.get("url"));
+      const rawUrl = parsed.searchParams.get("url");
+      context.asset = rawUrl
+        ? assetTargetLogContext(rawUrl)
+        : { opaqueRef: parsed.searchParams.has("ref") };
+      context.hasAssetReference = parsed.searchParams.has("ref");
       context.hasAssetSignature = parsed.searchParams.has("sig");
     }
   }
@@ -334,7 +365,7 @@ function logApiError(request: FastifyRequest, error: ApiError): void {
       code: error.code,
       message: error.message,
       statusCode: error.statusCode,
-      providerError: summarizeProviderError(error.providerError),
+      upstreamError: summarizeUpstreamError(error.upstreamError),
     },
   };
   if (error.statusCode >= 500) {
@@ -342,6 +373,17 @@ function logApiError(request: FastifyRequest, error: ApiError): void {
     return;
   }
   request.log.warn(payload, "api request failed");
+}
+
+function publicErrorMessage(error: ApiError): string {
+  switch (error.code) {
+    case "UPSTREAM_TIMEOUT":
+      return "上游来源响应超时。";
+    case "UPSTREAM_UNAVAILABLE":
+      return "上游来源暂不可用。";
+    default:
+      return error.message;
+  }
 }
 
 function logAssetProxyResponse(
@@ -430,7 +472,7 @@ function requestPath(url: string): string {
 function queryLogContext(params: URLSearchParams): Record<string, string> {
   const query: Record<string, string> = {};
   for (const [key, value] of params.entries()) {
-    if (key === "url" || key === "sig" || key === "payload") {
+    if (key === "url" || key === "ref" || key === "sig" || key === "payload") {
       continue;
     }
     query[key] = truncateMiddle(value, 160);
@@ -514,7 +556,7 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return value;
 }
 
-function summarizeProviderError(value: unknown): unknown {
+function summarizeUpstreamError(value: unknown): unknown {
   if (!value) {
     return undefined;
   }
@@ -589,7 +631,7 @@ async function fetchAssetTarget(
     );
   }
   throw new ApiError(
-    "PROVIDER_UNAVAILABLE",
+    "UPSTREAM_UNAVAILABLE",
     "点播媒体地址重定向次数过多。",
     502,
   );
@@ -715,8 +757,13 @@ function walk(value: unknown, apiBase: string): unknown {
   return value;
 }
 
-export function wrapAssetUrl(apiBase: string, original: string): string {
-  return `${apiBase}/asset?url=${encodeURIComponent(original)}&sig=${assetSignature(original)}`;
+export function wrapAssetUrl(
+  apiBase: string,
+  original: string,
+  role?: DashMediaUrlRole,
+): string {
+  const ref = assetReference(original, role);
+  return `${apiBase}/asset?ref=${encodeURIComponent(ref)}&sig=${assetReferenceSignature(ref)}`;
 }
 
 function wrapUrl(apiBase: string, original: string): string {
@@ -728,29 +775,118 @@ export function wrapDashManifestUrl(
   reference: string,
 ): string {
   const payload = dashManifestPayloadFromReference(reference);
-  return `${apiBase}/manifest/dash?payload=${payload}&sig=${dashManifestSignature(payload)}`;
+  const ref = dashManifestReference(payload);
+  return `${apiBase}/manifest/dash?ref=${encodeURIComponent(ref)}&sig=${dashManifestReferenceSignature(ref)}`;
 }
 
-function assetSignature(url: string): string {
-  return createHmac("sha256", ASSET_SIGNING_KEY).update(url).digest("hex");
+function assetReference(url: string, role?: DashMediaUrlRole): string {
+  return opaqueReference(
+    {
+      v: 1,
+      kind: "asset",
+      url,
+      ...(role ? { role } : {}),
+    } satisfies AssetReferencePayload,
+  );
 }
 
-function dashManifestSignature(payload: string): string {
+function dashManifestReference(payload: string): string {
+  return opaqueReference(
+    {
+      v: 1,
+      kind: "dash-manifest",
+      payload,
+    } satisfies DashManifestReferencePayload,
+  );
+}
+
+function opaqueReference(payload: unknown): string {
+  const encodedPayload = JSON.stringify(payload);
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", ASSET_REFERENCE_KEY, iv);
+  const encrypted = Buffer.concat([
+    cipher.update(encodedPayload, "utf8"),
+    cipher.final(),
+  ]);
+  const tag = cipher.getAuthTag();
+  return [
+    "v1",
+    iv.toString("base64url"),
+    encrypted.toString("base64url"),
+    tag.toString("base64url"),
+  ].join(".");
+}
+
+function assetReferenceSignature(ref: string): string {
   return createHmac("sha256", ASSET_SIGNING_KEY)
-    .update(`dash-manifest:${payload}`)
+    .update(`asset-reference:${ref}`)
     .digest("hex");
 }
 
-function verifyAssetSignature(url: string, sig: string): boolean {
-  const expected = Buffer.from(assetSignature(url), "hex");
+function dashManifestReferenceSignature(ref: string): string {
+  return createHmac("sha256", ASSET_SIGNING_KEY)
+    .update(`dash-manifest-reference:${ref}`)
+    .digest("hex");
+}
+
+function verifyAssetReferenceSignature(ref: string, sig: string): boolean {
+  const expected = Buffer.from(assetReferenceSignature(ref), "hex");
   const actual = Buffer.from(sig, "hex");
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-function verifyDashManifestSignature(payload: string, sig: string): boolean {
-  const expected = Buffer.from(dashManifestSignature(payload), "hex");
+function verifyDashManifestReferenceSignature(ref: string, sig: string): boolean {
+  const expected = Buffer.from(dashManifestReferenceSignature(ref), "hex");
   const actual = Buffer.from(sig, "hex");
   return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function assetUrlFromQuery(query: z.infer<typeof assetQuerySchema>): string {
+  if (!verifyAssetReferenceSignature(query.ref, query.sig)) {
+    throw new ApiError("BAD_REQUEST", "资源代理签名无效。", 400);
+  }
+  return parseAssetReference(query.ref).url;
+}
+
+function dashManifestPayloadFromQuery(
+  query: z.infer<typeof dashManifestQuerySchema>,
+): DashManifestReferencePayload {
+  if (!verifyDashManifestReferenceSignature(query.ref, query.sig)) {
+    throw new ApiError("BAD_REQUEST", "播放清单签名无效。", 400);
+  }
+  return dashManifestReferencePayloadSchema.parse(
+    parseOpaqueReference(query.ref, "播放清单引用无效。"),
+  );
+}
+
+function parseAssetReference(ref: string): AssetReferencePayload {
+  return assetReferencePayloadSchema.parse(
+    parseOpaqueReference(ref, "资源代理引用无效。"),
+  );
+}
+
+function parseOpaqueReference(ref: string, invalidMessage: string): unknown {
+  const parts = ref.split(".");
+  if (parts.length !== 4 || parts[0] !== "v1") {
+    throw new ApiError("BAD_REQUEST", invalidMessage, 400);
+  }
+  try {
+    const iv = Buffer.from(parts[1], "base64url");
+    const encrypted = Buffer.from(parts[2], "base64url");
+    const tag = Buffer.from(parts[3], "base64url");
+    if (iv.length !== 12 || tag.length !== 16) {
+      throw new Error("invalid asset reference shape");
+    }
+    const decipher = createDecipheriv("aes-256-gcm", ASSET_REFERENCE_KEY, iv);
+    decipher.setAuthTag(tag);
+    const decoded = Buffer.concat([
+      decipher.update(encrypted),
+      decipher.final(),
+    ]).toString("utf8");
+    return JSON.parse(decoded) as unknown;
+  } catch (error) {
+    throw new ApiError("BAD_REQUEST", invalidMessage, 400, error);
+  }
 }
 
 async function validateAssetProxyTarget(rawUrl: string): Promise<URL> {
@@ -783,7 +919,7 @@ async function validateAssetProxyTarget(rawUrl: string): Promise<URL> {
     addresses = await lookup(hostname, { all: true, verbatim: true });
   } catch (error) {
     throw new ApiError(
-      "PROVIDER_UNAVAILABLE",
+      "UPSTREAM_UNAVAILABLE",
       "资源地址无法解析。",
       502,
       error,

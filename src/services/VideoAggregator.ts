@@ -1,3 +1,10 @@
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+} from "node:crypto";
 import { LRUCache } from "lru-cache";
 import { ApiError } from "../errors.js";
 import type {
@@ -32,6 +39,13 @@ const DEFAULT_YOUTUBE_FALLBACK_COOLDOWN_MS = positiveNumber(
   process.env.YOUTUBE_FALLBACK_COOLDOWN_MS,
   30 * 60_000,
 );
+const VIDEO_ID_SECRET =
+  process.env.MEDIA_PUBLIC_ID_KEY?.trim() ||
+  process.env.MEDIA_ASSET_SIGNING_KEY?.trim() ||
+  randomBytes(32).toString("hex");
+const VIDEO_ID_KEY = createHash("sha256")
+  .update(`media-public-video-id:${VIDEO_ID_SECRET}`)
+  .digest();
 const YOUTUBE_FALLBACK_CANDIDATES = 5;
 const MIN_YOUTUBE_FALLBACK_SCORE = 0.32;
 
@@ -135,7 +149,7 @@ export class VideoAggregator {
     );
     if (results.length === 0) {
       throw new ApiError(
-        "PROVIDER_UNAVAILABLE",
+        "UPSTREAM_UNAVAILABLE",
         "所有视频来源暂时不可用。",
         502,
       );
@@ -431,7 +445,7 @@ export class VideoAggregator {
     }
     if (lastCandidateError) {
       throw new ApiError(
-        "PROVIDER_UNAVAILABLE",
+        "UPSTREAM_UNAVAILABLE",
         "B站播放地址触发风控，YouTube 补源暂不可用。",
         502,
         lastCandidateError,
@@ -501,7 +515,7 @@ function withTimeout<T>(
 
 function providerTimeoutError(provider: string, operation: string): ApiError {
   return new ApiError(
-    "PROVIDER_TIMEOUT",
+    "UPSTREAM_TIMEOUT",
     `${provider} ${operation}响应超时。`,
     502,
   );
@@ -521,8 +535,8 @@ function toPlaybackOptions(details: VideoDetails): PlaybackOption[] {
     );
   }
   if (details.streams.length > 0) {
-    return details.streams.map((stream) => ({
-      id: stream.id,
+    return details.streams.map((stream, index) => ({
+      id: encodePlaybackOptionId(details, stream, index),
       kind: "vod",
       label: stream.quality,
       url: stream.url,
@@ -561,28 +575,28 @@ function bilibiliPlaybackFallback(
   if (
     providerName !== "bilibili" ||
     !(error instanceof ApiError) ||
-    error.code !== "PROVIDER_UNAVAILABLE" ||
-    !isRecord(error.providerError) ||
-    error.providerError.reason !== "bilibili_voucher"
+    error.code !== "UPSTREAM_UNAVAILABLE" ||
+    !isRecord(error.upstreamError) ||
+    error.upstreamError.reason !== "bilibili_voucher"
   ) {
     return undefined;
   }
-  const title = stringValue(error.providerError.title);
-  const query = stringValue(error.providerError.fallbackSearchQuery) ?? title;
+  const title = stringValue(error.upstreamError.title);
+  const query = stringValue(error.upstreamError.fallbackSearchQuery) ?? title;
   if (!query) {
     return undefined;
   }
   return {
     query,
     title: title ?? query,
-    description: stringValue(error.providerError.description) ?? "",
-    creator: stringValue(error.providerError.creator),
-    thumbnailUrl: stringValue(error.providerError.thumbnailUrl),
-    durationSeconds: positiveFiniteNumber(error.providerError.durationSeconds),
+    description: stringValue(error.upstreamError.description) ?? "",
+    creator: stringValue(error.upstreamError.creator),
+    thumbnailUrl: stringValue(error.upstreamError.thumbnailUrl),
+    durationSeconds: positiveFiniteNumber(error.upstreamError.durationSeconds),
     sourceUrl:
-      stringValue(error.providerError.sourceUrl) ??
+      stringValue(error.upstreamError.sourceUrl) ??
       `https://www.bilibili.com/video/${sourceId}`,
-    year: stringValue(error.providerError.year),
+    year: stringValue(error.upstreamError.year),
   };
 }
 
@@ -812,24 +826,105 @@ function sourceQueryRelevanceScore(
   return Math.max(1, matchedTerms);
 }
 
-function encodeVideoId(providerName: string, sourceId: string): string {
-  return `${providerName}:${Buffer.from(sourceId, "utf8").toString("base64url")}`;
+export function encodeVideoId(
+  providerName: ProviderName,
+  sourceId: string,
+): string {
+  const payload = JSON.stringify({
+    v: 1,
+    provider: providerName,
+    id: sourceId,
+  });
+  const iv = createHmac("sha256", VIDEO_ID_SECRET)
+    .update(`video-id:${payload}`)
+    .digest()
+    .subarray(0, 12);
+  const cipher = createCipheriv("aes-256-gcm", VIDEO_ID_KEY, iv);
+  const encrypted = Buffer.concat([
+    cipher.update(payload, "utf8"),
+    cipher.final(),
+  ]);
+  const tag = cipher.getAuthTag();
+  return [
+    "v1",
+    iv.toString("base64url"),
+    encrypted.toString("base64url"),
+    tag.toString("base64url"),
+  ].join(".");
+}
+
+function encodePlaybackOptionId(
+  details: VideoDetails,
+  stream: VideoDetails["streams"][number],
+  index: number,
+): string {
+  const payload = JSON.stringify({
+    v: 1,
+    provider: details.provider,
+    id: details.id,
+    stream: stream.id,
+    index,
+  });
+  const iv = createHmac("sha256", VIDEO_ID_SECRET)
+    .update(`playback-option-id:${payload}`)
+    .digest()
+    .subarray(0, 12);
+  const cipher = createCipheriv("aes-256-gcm", VIDEO_ID_KEY, iv);
+  const encrypted = Buffer.concat([
+    cipher.update(payload, "utf8"),
+    cipher.final(),
+  ]);
+  const tag = cipher.getAuthTag();
+  return [
+    "v1",
+    iv.toString("base64url"),
+    encrypted.toString("base64url"),
+    tag.toString("base64url"),
+  ].join(".");
 }
 
 function decodeVideoId(videoId: string): {
-  providerName: string;
+  providerName: ProviderName;
   sourceId: string;
 } {
-  const separator = videoId.indexOf(":");
-  if (separator <= 0) {
+  const parts = videoId.split(".");
+  if (parts.length !== 4 || parts[0] !== "v1") {
     throw new ApiError("BAD_REQUEST", "视频 ID 不合法。", 400);
   }
-  return {
-    providerName: videoId.slice(0, separator),
-    sourceId: Buffer.from(videoId.slice(separator + 1), "base64url").toString(
-      "utf8",
-    ),
-  };
+  try {
+    const iv = Buffer.from(parts[1], "base64url");
+    const encrypted = Buffer.from(parts[2], "base64url");
+    const tag = Buffer.from(parts[3], "base64url");
+    if (iv.length !== 12 || tag.length !== 16) {
+      throw new Error("invalid video id shape");
+    }
+    const decipher = createDecipheriv("aes-256-gcm", VIDEO_ID_KEY, iv);
+    decipher.setAuthTag(tag);
+    const decoded = Buffer.concat([
+      decipher.update(encrypted),
+      decipher.final(),
+    ]).toString("utf8");
+    const payload = JSON.parse(decoded) as unknown;
+    if (!isVideoIdPayload(payload)) {
+      throw new Error("invalid video id payload");
+    }
+    return { providerName: payload.provider, sourceId: payload.id };
+  } catch (error) {
+    throw new ApiError("BAD_REQUEST", "视频 ID 不合法。", 400, error);
+  }
+}
+
+function isVideoIdPayload(
+  value: unknown,
+): value is { v: 1; provider: ProviderName; id: string } {
+  return (
+    isRecord(value) &&
+    value.v === 1 &&
+    typeof value.id === "string" &&
+    value.id.length > 0 &&
+    typeof value.provider === "string" &&
+    isProviderName(value.provider)
+  );
 }
 
 /**

@@ -330,7 +330,7 @@ export class YouTubeProvider implements VideoProvider {
       });
       if (!resp.ok) {
         throw new ApiError(
-          "PROVIDER_UNAVAILABLE",
+          "UPSTREAM_UNAVAILABLE",
           "YouTube 返回了错误响应。",
           502,
           { status: resp.status },
@@ -340,7 +340,7 @@ export class YouTubeProvider implements VideoProvider {
     } catch (error) {
       if (error instanceof ApiError) throw error;
       throw new ApiError(
-        "PROVIDER_UNAVAILABLE",
+        "UPSTREAM_UNAVAILABLE",
         "无法连接 YouTube。",
         502,
         error,
@@ -353,7 +353,7 @@ export class YouTubeProvider implements VideoProvider {
       const resp = await fetchWithTimeout(this.fetcher, url);
       if (!resp.ok) {
         throw new ApiError(
-          "PROVIDER_UNAVAILABLE",
+          "UPSTREAM_UNAVAILABLE",
           "YouTube oEmbed 返回了错误响应。",
           502,
           { status: resp.status },
@@ -363,7 +363,7 @@ export class YouTubeProvider implements VideoProvider {
     } catch (error) {
       if (error instanceof ApiError) throw error;
       throw new ApiError(
-        "PROVIDER_UNAVAILABLE",
+        "UPSTREAM_UNAVAILABLE",
         "无法连接 YouTube oEmbed API。",
         502,
         error,
@@ -400,7 +400,7 @@ export class YouTubeProvider implements VideoProvider {
       });
       if (!resp.ok) {
         throw new ApiError(
-          "PROVIDER_UNAVAILABLE",
+          "UPSTREAM_UNAVAILABLE",
           "YouTube 翻页接口返回了错误响应。",
           502,
           { status: resp.status },
@@ -410,7 +410,7 @@ export class YouTubeProvider implements VideoProvider {
     } catch (error) {
       if (error instanceof ApiError) throw error;
       throw new ApiError(
-        "PROVIDER_UNAVAILABLE",
+        "UPSTREAM_UNAVAILABLE",
         "无法连接 YouTube 翻页接口。",
         502,
         error,

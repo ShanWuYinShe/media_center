@@ -74,7 +74,7 @@ export class HttpVodExtractor implements VodExtractor {
       );
     } catch (error) {
       throw new ApiError(
-        "PROVIDER_UNAVAILABLE",
+        "UPSTREAM_UNAVAILABLE",
         "点播解析服务不可用或解析超时。",
         502,
         error,
@@ -84,7 +84,7 @@ export class HttpVodExtractor implements VodExtractor {
     const text = await readExtractorResponse(response);
     if (!response.ok) {
       throw new ApiError(
-        "PROVIDER_UNAVAILABLE",
+        "UPSTREAM_UNAVAILABLE",
         "点播解析服务返回失败。",
         502,
         { status: response.status, body: text },
@@ -99,7 +99,7 @@ export class HttpVodExtractor implements VodExtractor {
       return parsed as ExtractedVod;
     } catch (error) {
       throw new ApiError(
-        "PROVIDER_UNAVAILABLE",
+        "UPSTREAM_UNAVAILABLE",
         "点播解析服务返回了无法识别的数据。",
         502,
         error,
@@ -127,7 +127,7 @@ export class YtDlpVodExtractor implements VodExtractor {
           if (error) {
             reject(
               new ApiError(
-                "PROVIDER_UNAVAILABLE",
+                "UPSTREAM_UNAVAILABLE",
                 "点播解析器不可用或解析失败。请安装 yt-dlp，或通过 VOD_EXTRACTOR_BIN 指定兼容工具。",
                 502,
                 { error, stderr: stderrData },
@@ -144,7 +144,7 @@ export class YtDlpVodExtractor implements VodExtractor {
       return JSON.parse(stdout) as ExtractedVod;
     } catch (error) {
       throw new ApiError(
-        "PROVIDER_UNAVAILABLE",
+        "UPSTREAM_UNAVAILABLE",
         "点播解析器返回了无法识别的数据。",
         502,
         error,
@@ -160,7 +160,7 @@ async function readExtractorResponse(response: Response): Promise<string> {
     contentLength > MAX_EXTRACTOR_OUTPUT_BYTES
   ) {
     throw new ApiError(
-      "PROVIDER_UNAVAILABLE",
+      "UPSTREAM_UNAVAILABLE",
       "点播解析服务响应过大。",
       502,
     );
@@ -168,7 +168,7 @@ async function readExtractorResponse(response: Response): Promise<string> {
   const text = await response.text();
   if (text.length > MAX_EXTRACTOR_OUTPUT_BYTES) {
     throw new ApiError(
-      "PROVIDER_UNAVAILABLE",
+      "UPSTREAM_UNAVAILABLE",
       "点播解析服务响应过大。",
       502,
     );

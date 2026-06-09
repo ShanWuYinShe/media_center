@@ -1,4 +1,7 @@
-import { VideoAggregator } from "../src/services/VideoAggregator.js";
+import {
+  encodeVideoId,
+  VideoAggregator,
+} from "../src/services/VideoAggregator.js";
 import type {
   SearchResult,
   VideoDetails,
@@ -46,8 +49,8 @@ function details(
   };
 }
 
-function encoded(provider: string, id: string): string {
-  return `${provider}:${Buffer.from(id, "utf8").toString("base64url")}`;
+function encoded(provider: "bilibili" | "youtube", id: string): string {
+  return encodeVideoId(provider, id);
 }
 
 test("Bilibili 搜索结果不在列表阶段解析播放地址", async () => {
@@ -109,6 +112,8 @@ test("Bilibili 搜索结果不在列表阶段解析播放地址", async () => {
   expect(result.items[0]).not.toHaveProperty("provider");
   expect(result.items[0]).not.toHaveProperty("sourceUrl");
   expect(result.items[0]).not.toHaveProperty("playbackOptions");
+  expect(result.items[0].id).not.toContain("bilibili");
+  expect(result.items[0].id).not.toContain("youtube");
   expect(result.items[1].id).toBe(encoded("bilibili", "no-stream"));
 });
 
@@ -139,7 +144,7 @@ test("Bilibili 风控时用 YouTube 补源并保留原视频 ID", async () => {
     },
     async getDetails() {
       throw new ApiError(
-        "PROVIDER_UNAVAILABLE",
+        "UPSTREAM_UNAVAILABLE",
         "B站播放地址请求触发风控，请稍后重试。",
         502,
         {
@@ -197,8 +202,12 @@ test("Bilibili 风控时用 YouTube 补源并保留原视频 ID", async () => {
     creators: ["UP 主"],
     thumbnailUrl: "https://i.example.test/bili.jpg",
     durationSeconds: 3600,
-    playbackOptions: [{ id: "yt-stream", mimeType: "video/mp4" }],
+    playbackOptions: [{ mimeType: "video/mp4" }],
   });
+  expect(result.playbackOptions[0].id).toMatch(/^v1\./);
+  expect(result.playbackOptions[0].id).not.toBe("yt-stream");
+  expect(result.playbackOptions[0].id).not.toContain("youtube");
+  expect(result.playbackOptions[0].id).not.toContain("bilibili");
 });
 
 test("YouTube 补源失败后返回 Bilibili 风控错误并短时熔断", async () => {
@@ -210,7 +219,7 @@ test("YouTube 补源失败后返回 Bilibili 风控错误并短时熔断", async
     },
     async getDetails() {
       throw new ApiError(
-        "PROVIDER_UNAVAILABLE",
+        "UPSTREAM_UNAVAILABLE",
         "B站播放地址请求触发风控，请稍后重试。",
         502,
         {
@@ -244,7 +253,7 @@ test("YouTube 补源失败后返回 Bilibili 风控错误并短时熔断", async
     },
     async getDetails() {
       throw new ApiError(
-        "PROVIDER_UNAVAILABLE",
+        "UPSTREAM_UNAVAILABLE",
         "点播解析服务返回失败。",
         502,
         {
@@ -262,11 +271,11 @@ test("YouTube 补源失败后返回 Bilibili 风控错误并短时熔断", async
   const videoId = encoded("bilibili", "BVFAIL");
 
   await expect(aggregator.getDetails(videoId)).rejects.toMatchObject({
-    code: "PROVIDER_UNAVAILABLE",
+    code: "UPSTREAM_UNAVAILABLE",
     message: "B站播放地址请求触发风控，请稍后重试。",
   });
   await expect(aggregator.getDetails(videoId)).rejects.toMatchObject({
-    code: "PROVIDER_UNAVAILABLE",
+    code: "UPSTREAM_UNAVAILABLE",
     message: "B站播放地址请求触发风控，请稍后重试。",
   });
 
@@ -316,6 +325,10 @@ test("详情接口每次刷新播放地址避免过期缓存", async () => {
   expect(secondDetails.playbackOptions[0].url).toBe(
     "https://cdn.example.test/video-2.mp4",
   );
+  expect(firstDetails.playbackOptions[0].id).toBe(
+    secondDetails.playbackOptions[0].id,
+  );
+  expect(firstDetails.playbackOptions[0].id).not.toBe(playableStream.id);
 });
 
 test("搜索会扫描来源后续页以填满公开分页", async () => {

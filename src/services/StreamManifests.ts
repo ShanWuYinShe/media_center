@@ -36,6 +36,7 @@ export type DashAudioRepresentation = DashRepresentation & {
   mimeType: "audio/mp4";
 };
 export type DashManifest = z.infer<typeof dashManifestSchema>;
+export type DashMediaUrlRole = "media" | "initialization";
 
 export function createDashManifestReference(manifest: DashManifest): string {
   const payload = Buffer.from(
@@ -62,7 +63,7 @@ export function parseDashManifestPayload(payload: string): DashManifest {
 
 export function renderDashMpd(
   manifest: DashManifest,
-  mediaUrlFor: (rawUrl: string) => string,
+  mediaUrlFor: (rawUrl: string, role: DashMediaUrlRole) => string,
 ): string {
   const duration = manifest.durationSeconds
     ? ` mediaPresentationDuration="${xmlAttr(durationValue(manifest.durationSeconds))}"`
@@ -83,7 +84,7 @@ ${renderAdaptationSet("video", manifest.video, mediaUrlFor)}${audio}
 function renderAdaptationSet(
   contentType: "video" | "audio",
   representation: DashRepresentation,
-  mediaUrlFor: (rawUrl: string) => string,
+  mediaUrlFor: (rawUrl: string, role: DashMediaUrlRole) => string,
 ): string {
   const attrs = [
     `id="${contentType}"`,
@@ -99,7 +100,7 @@ ${renderRepresentation(representation, mediaUrlFor)}
 
 function renderRepresentation(
   representation: DashRepresentation,
-  mediaUrlFor: (rawUrl: string) => string,
+  mediaUrlFor: (rawUrl: string, role: DashMediaUrlRole) => string,
 ): string {
   const attrs = [
     `id="${xmlAttr(representation.id)}"`,
@@ -115,21 +116,26 @@ function renderRepresentation(
       ? `frameRate="${xmlAttr(representation.frameRate)}"`
       : undefined,
   ].filter((attr): attr is string => Boolean(attr));
-  const segmentBase = renderSegmentBase(representation);
+  const segmentBase = renderSegmentBase(representation, mediaUrlFor);
   return `      <Representation ${attrs.join(" ")}>
-        <BaseURL>${xmlText(mediaUrlFor(representation.url))}</BaseURL>${segmentBase}
+        <BaseURL>${xmlText(mediaUrlFor(representation.url, "media"))}</BaseURL>${segmentBase}
       </Representation>`;
 }
 
-function renderSegmentBase(representation: DashRepresentation): string {
+function renderSegmentBase(
+  representation: DashRepresentation,
+  mediaUrlFor: (rawUrl: string, role: DashMediaUrlRole) => string,
+): string {
   if (!representation.initialization && !representation.indexRange) {
     return "";
   }
   const indexRange = representation.indexRange
     ? ` indexRange="${xmlAttr(representation.indexRange)}"`
     : "";
+  // Keep the initialization URI distinct so DASH players do not merge adjacent
+  // init/index ranges; some upstream CDNs reject that merged byte range.
   const initialization = representation.initialization
-    ? `\n          <Initialization range="${xmlAttr(representation.initialization)}"/>`
+    ? `\n          <Initialization sourceURL="${xmlAttr(mediaUrlFor(representation.url, "initialization"))}" range="${xmlAttr(representation.initialization)}"/>`
     : "";
   return `
         <SegmentBase${indexRange}>${initialization}

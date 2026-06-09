@@ -20,21 +20,46 @@ afterAll(async () => {
 });
 
 test("asset 代理拒绝未签名请求", async () => {
+  const unsignedUrl = wrapAssetUrl("/api", "https://example.com/video.mp4")
+    .replace(/&sig=[a-f0-9]{64}$/i, "");
   const response = await app.inject({
     method: "GET",
-    url: "/api/asset?url=https%3A%2F%2Fexample.com%2Fvideo.mp4",
+    url: unsignedUrl,
   });
 
   expect(response.statusCode).toBe(400);
 });
 
 test("asset 代理拒绝签名不匹配请求", async () => {
+  const assetUrl = wrapAssetUrl("/api", "https://example.com/video.mp4")
+    .replace(/sig=[a-f0-9]{64}$/i, `sig=${"0".repeat(64)}`);
   const response = await app.inject({
     method: "GET",
-    url: `/api/asset?url=https%3A%2F%2Fexample.com%2Fvideo.mp4&sig=${"0".repeat(64)}`,
+    url: assetUrl,
   });
 
   expect(response.statusCode).toBe(400);
+});
+
+test("asset 代理拒绝旧版明文 url 参数", async () => {
+  const response = await app.inject({
+    method: "GET",
+    url: `/api/asset?url=${encodeURIComponent("https://example.com/video.mp4")}&sig=${"0".repeat(64)}`,
+  });
+
+  expect(response.statusCode).toBe(400);
+});
+
+test("asset 代理签发不暴露原始上游 URL 的 opaque 引用", () => {
+  const assetUrl = wrapAssetUrl("/api", "https://example.com/video.mp4");
+  const secondAssetUrl = wrapAssetUrl("/api", "https://example.com/video.mp4");
+
+  expect(assetUrl).toContain("/api/asset?ref=");
+  expect(assetUrl).toContain("&sig=");
+  expect(assetUrl).not.toContain("url=");
+  expect(assetUrl).not.toContain("example.com");
+  expect(assetUrl).not.toContain("https%3A%2F%2Fexample.com%2Fvideo.mp4");
+  expect(secondAssetUrl).not.toBe(assetUrl);
 });
 
 test.each(["http://127.0.0.1/private", "http://[::1]/private"])(
@@ -99,20 +124,39 @@ test("DASH 清单端点返回签名 asset URL", async () => {
       indexRange: "801-900",
     },
   });
+  const manifestUrl = wrapDashManifestUrl("/api", manifest);
+
+  expect(manifestUrl).toContain("/api/manifest/dash?ref=");
+  expect(manifestUrl).not.toContain("payload=");
+  expect(manifestUrl).not.toContain("example.com");
 
   const response = await app.inject({
     method: "GET",
-    url: wrapDashManifestUrl("/api", manifest),
+    url: manifestUrl,
   });
 
   expect(response.statusCode).toBe(200);
   expect(response.headers["content-type"]).toContain("application/dash+xml");
   expect(response.body).toContain("<MPD");
-  expect(response.body).toContain(
-    "/api/asset?url=https%3A%2F%2Fexample.com%2Fvideo.m4s",
-  );
-  expect(response.body).toContain(
-    "/api/asset?url=https%3A%2F%2Fexample.com%2Faudio.m4s",
-  );
+  expect(response.body).toContain("/api/asset?ref=");
+  expect(response.body).not.toContain("url=https");
+  expect(response.body).not.toContain("payload=");
+  expect(response.body).not.toContain("example.com");
   expect(response.body).toContain('<SegmentBase indexRange="1001-1200">');
+  const mediaUrl = response.body.match(/<BaseURL>([^<]+)<\/BaseURL>/)?.[1];
+  const initializationUrl = response.body.match(
+    /<Initialization sourceURL="([^"]+)"/,
+  )?.[1];
+  expect(mediaUrl).toContain("/api/asset?ref=");
+  expect(initializationUrl).toContain("/api/asset?ref=");
+  expect(initializationUrl).not.toBe(mediaUrl);
+});
+
+test("DASH 清单端点拒绝旧版明文 payload 参数", async () => {
+  const response = await app.inject({
+    method: "GET",
+    url: `/api/manifest/dash?payload=${"a".repeat(16)}&sig=${"0".repeat(64)}`,
+  });
+
+  expect(response.statusCode).toBe(400);
 });

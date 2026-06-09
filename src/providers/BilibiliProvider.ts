@@ -360,7 +360,7 @@ function throwIfVoucherOnlyPlayUrl(response: BilibiliPlayUrlResponse): void {
     return;
   }
   throw new ApiError(
-    "PROVIDER_UNAVAILABLE",
+    "UPSTREAM_UNAVAILABLE",
     "B站播放地址请求触发风控，请稍后重试。",
     502,
     { reason: "bilibili_voucher", v_voucher: data.v_voucher },
@@ -370,9 +370,9 @@ function throwIfVoucherOnlyPlayUrl(response: BilibiliPlayUrlResponse): void {
 function isBilibiliVoucherError(error: unknown): error is ApiError {
   return (
     error instanceof ApiError &&
-    error.code === "PROVIDER_UNAVAILABLE" &&
-    isRecord(error.providerError) &&
-    error.providerError.reason === "bilibili_voucher"
+    error.code === "UPSTREAM_UNAVAILABLE" &&
+    isRecord(error.upstreamError) &&
+    error.upstreamError.reason === "bilibili_voucher"
   );
 }
 
@@ -381,7 +381,7 @@ function withFallbackMetadata(
   video: NonNullable<BilibiliVideoResponse["data"]>,
 ): ApiError {
   return new ApiError(error.code, error.message, error.statusCode, {
-    ...(isRecord(error.providerError) ? error.providerError : {}),
+    ...(isRecord(error.upstreamError) ? error.upstreamError : {}),
     fallbackSearchQuery: fallbackSearchQuery(video),
     bvid: video.bvid,
     title: video.title,
@@ -452,7 +452,7 @@ export class BilibiliProvider implements VideoProvider {
     const img = navData.data?.wbi_img?.img_url;
     const sub = navData.data?.wbi_img?.sub_url;
     if (!img || !sub) {
-      throw new ApiError("PROVIDER_UNAVAILABLE", "无法获取 B站签名密钥。", 502);
+      throw new ApiError("UPSTREAM_UNAVAILABLE", "无法获取 B站签名密钥。", 502);
     }
     this.wbiImgKey = extractKey(img);
     this.wbiSubKey = extractKey(sub);
@@ -765,7 +765,7 @@ export class BilibiliProvider implements VideoProvider {
       });
       if (!response.ok) {
         throw new ApiError(
-          "PROVIDER_UNAVAILABLE",
+          "UPSTREAM_UNAVAILABLE",
           "B站 API 返回了错误响应。",
           502,
           { status: response.status },
@@ -775,7 +775,7 @@ export class BilibiliProvider implements VideoProvider {
     } catch (error) {
       if (error instanceof ApiError) throw error;
       throw new ApiError(
-        "PROVIDER_UNAVAILABLE",
+        "UPSTREAM_UNAVAILABLE",
         "无法连接 B站 API。",
         502,
         error,

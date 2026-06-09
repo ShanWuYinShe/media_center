@@ -58,7 +58,7 @@
           },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "404": { "$ref": "#/components/responses/NotFound" },
-          "502": { "$ref": "#/components/responses/ProviderError" }
+          "502": { "$ref": "#/components/responses/UpstreamError" }
         }
       }
     },
@@ -87,7 +87,7 @@
             }
           },
           "400": { "$ref": "#/components/responses/BadRequest" },
-          "502": { "$ref": "#/components/responses/ProviderError" }
+          "502": { "$ref": "#/components/responses/UpstreamError" }
         }
       }
     },
@@ -108,7 +108,7 @@
           "400": { "$ref": "#/components/responses/BadRequest" },
           "404": { "$ref": "#/components/responses/NotFound" },
           "422": { "$ref": "#/components/responses/NoPlayableStream" },
-          "502": { "$ref": "#/components/responses/ProviderError" }
+          "502": { "$ref": "#/components/responses/UpstreamError" }
         }
       }
     },
@@ -138,7 +138,44 @@
           "400": { "$ref": "#/components/responses/BadRequest" },
           "404": { "$ref": "#/components/responses/NotFound" },
           "422": { "$ref": "#/components/responses/NoPlayableStream" },
-          "502": { "$ref": "#/components/responses/ProviderError" }
+          "502": { "$ref": "#/components/responses/UpstreamError" }
+        }
+      }
+    },
+    "/manifest/dash": {
+      "get": {
+        "summary": "Return a server-generated DASH manifest",
+        "operationId": "getDashManifest",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+            },
+            "description": "Opaque server-issued DASH manifest reference. Apps should not parse or construct it manually."
+          },
+          {
+            "name": "sig",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+            "description": "Server-issued HMAC signature for the opaque DASH manifest reference."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "DASH MPD manifest",
+            "content": {
+              "application/dash+xml": {
+                "schema": { "type": "string" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "502": { "$ref": "#/components/responses/UpstreamError" }
         }
       }
     },
@@ -171,18 +208,21 @@
         "operationId": "proxyAsset",
         "parameters": [
           {
-            "name": "url",
+            "name": "ref",
             "in": "query",
             "required": true,
-            "schema": { "type": "string", "format": "uri" },
-            "description": "Original asset URL. Supplied inside signed API responses; apps should not construct it manually."
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+            },
+            "description": "Opaque server-issued asset reference. Apps should not parse or construct it manually."
           },
           {
             "name": "sig",
             "in": "query",
             "required": true,
             "schema": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
-            "description": "Server-issued HMAC signature for the original asset URL."
+            "description": "Server-issued HMAC signature for the opaque asset reference."
           },
           {
             "name": "Range",
@@ -196,7 +236,7 @@
           "200": { "$ref": "#/components/responses/AssetStream" },
           "206": { "$ref": "#/components/responses/AssetStream" },
           "400": { "$ref": "#/components/responses/BadRequest" },
-          "502": { "$ref": "#/components/responses/ProviderError" }
+          "502": { "$ref": "#/components/responses/UpstreamError" }
         }
       }
     }
@@ -234,7 +274,7 @@
         "type": "object",
         "required": ["id", "title", "description"],
         "properties": {
-          "id": { "type": "string" },
+          "id": { "type": "string", "description": "Opaque server-generated playback option id" },
           "title": { "type": "string" },
           "description": { "type": "string" }
         },
@@ -317,8 +357,8 @@
                   "NOT_FOUND",
                   "NO_PLAYABLE_STREAM",
                   "INTERNAL_ERROR",
-                  "PROVIDER_TIMEOUT",
-                  "PROVIDER_UNAVAILABLE"
+                  "UPSTREAM_TIMEOUT",
+                  "UPSTREAM_UNAVAILABLE"
                 ]
               },
               "message": { "type": "string" },
@@ -355,8 +395,8 @@
           }
         }
       },
-      "ProviderError": {
-        "description": "Provider, extractor, or upstream media error",
+      "UpstreamError": {
+        "description": "Upstream source, extractor, or media proxy error",
         "content": {
           "application/json": {
             "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
