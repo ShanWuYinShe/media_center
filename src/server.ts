@@ -8,8 +8,6 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
-import { lookup as dnsLookupCallback } from "node:dns";
-import { lookup } from "node:dns/promises";
 import net from "node:net";
 import { Agent } from "undici";
 import { Readable } from "node:stream";
@@ -36,6 +34,11 @@ import {
 } from "./services/StreamManifests.js";
 import { VideoAggregator } from "./services/VideoAggregator.js";
 import { fetchWithTimeout } from "./services/fetchWithTimeout.js";
+import {
+  AssetDnsResolver,
+  BlockedAddressError,
+  type ResolvedAddress,
+} from "./services/assetDns.js";
 import { ASSET_SIGNING_KEY } from "./services/runtimeSecrets.js";
 import type { MediaSourceConfig, ProviderName } from "./types.js";
 
@@ -617,13 +620,13 @@ function truncateMiddle(value: string, maxLength: number): string {
   return `${value.slice(0, headLength)}...${value.slice(-tailLength)}`;
 }
 
-type ResolvedAddress = { address: string; family: number };
-
 // validatingLookup resolves a hostname and refuses the connection if ANY
 // resolved address points at a loopback/private/internal target. Installing it
 // on the dispatcher's connector closes the DNS-rebinding (TOCTOU) window: the
 // address validated here is the exact address undici connects to, so a domain
 // cannot pass the pre-flight check and then re-resolve to an internal IP.
+// 解析经 assetDnsResolver(短 TTL 缓存 + single-flight + 瞬时错误重试),避免一屏
+// 封面并发时数十次 getaddrinfo 打满 libuv 线程池导致整批 DNS 超时。
 function validatingLookup(
   hostname: string,
   options: { all?: boolean } & Record<string, unknown>,
@@ -633,30 +636,35 @@ function validatingLookup(
     family?: number,
   ) => void,
 ): void {
-  dnsLookupCallback(hostname, { ...options, all: true }, (err, addresses) => {
-    if (err) {
-      callback(err, "", 0);
-      return;
-    }
-    const resolved = addresses as ResolvedAddress[];
-    if (
-      resolved.length === 0 ||
-      resolved.some(({ address }) => isBlockedAddress(address))
-    ) {
-      const blockedErr = Object.assign(
-        new Error("resolved address is not allowed"),
-        { code: "EAI_BLOCKED" },
-      ) as NodeJS.ErrnoException;
-      callback(blockedErr, "", 0);
-      return;
-    }
-    if (options.all) {
-      callback(null, resolved);
-    } else {
-      callback(null, resolved[0].address, resolved[0].family);
-    }
-  });
+  assetDnsResolver.resolve(hostname).then(
+    (resolved) => {
+      if (options.all) {
+        callback(null, resolved);
+      } else {
+        callback(null, resolved[0].address, resolved[0].family);
+      }
+    },
+    (error: unknown) => {
+      if (error instanceof BlockedAddressError) {
+        callback(
+          Object.assign(new Error("resolved address is not allowed"), {
+            code: "EAI_BLOCKED",
+          }) as NodeJS.ErrnoException,
+          "",
+          0,
+        );
+        return;
+      }
+      callback(error as NodeJS.ErrnoException, "", 0);
+    },
+  );
 }
+
+const assetDnsResolver = new AssetDnsResolver({
+  isBlockedAddress,
+  ttlMs: positiveInteger(process.env.ASSET_DNS_CACHE_TTL_MS, 30_000),
+  maxRetries: positiveInteger(process.env.ASSET_DNS_MAX_RETRIES, 2),
+});
 
 const assetProxyDispatcher = new Agent({
   connect: { lookup: validatingLookup as never },
@@ -1016,26 +1024,17 @@ async function validateAssetProxyTarget(rawUrl: string): Promise<URL> {
       400,
     );
   }
-  let addresses: { address: string }[];
   try {
-    addresses = await lookup(hostname, { all: true, verbatim: true });
+    await assetDnsResolver.resolve(hostname);
   } catch (error) {
-    throw new ApiError(
-      "UPSTREAM_UNAVAILABLE",
-      "资源地址无法解析。",
-      502,
-      error,
-    );
-  }
-  if (
-    addresses.length === 0 ||
-    addresses.some(({ address }) => isBlockedAddress(address))
-  ) {
-    throw new ApiError(
-      "BAD_REQUEST",
-      "资源地址不允许访问本地或内网目标。",
-      400,
-    );
+    if (error instanceof BlockedAddressError) {
+      throw new ApiError(
+        "BAD_REQUEST",
+        "资源地址不允许访问本地或内网目标。",
+        400,
+      );
+    }
+    throw new ApiError("UPSTREAM_UNAVAILABLE", "资源地址无法解析。", 502, error);
   }
   return parsed;
 }
