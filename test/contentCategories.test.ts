@@ -5,7 +5,9 @@ import {
   categoriesConfigSchema,
   contentCategories,
   findContentCategory,
+  mediaServerConfig,
   loadContentCategories,
+  loadMediaServerConfig,
 } from "../src/contentCategories.js";
 
 test("默认配置加载后,每个分类都有完整的对外字段", () => {
@@ -23,6 +25,14 @@ test("默认配置中所有 id 唯一,没有重复", () => {
   expect(new Set(ids).size).toBe(ids.length);
 });
 
+test("默认来源保留中文优先源,低匹配源默认关闭", () => {
+  expect(mediaServerConfig.sources).toEqual([
+    { id: "bilibili", enabled: true },
+    { id: "youtube", enabled: false },
+    { id: "internet-archive", enabled: false },
+  ]);
+});
+
 test("默认配置只包含产品指定的五个一级分类", () => {
   expect(contentCategories.map((category) => category.id)).toEqual([
     "movies",
@@ -37,6 +47,7 @@ test("query 字段使用短搜索词,内部关键词只用于相关性评分", (
   const documentaries = findContentCategory("documentaries");
   expect(documentaries).toBeDefined();
   expect(documentaries!.query).toBe("纪录片 完整版");
+  expect(documentaries!.sourceQueries["internet-archive"]).toBe("documentary");
   expect(documentaries!.keywords).toContain("历史");
   expect(documentaries!.query).not.toContain("历史");
 });
@@ -77,6 +88,7 @@ test("excludes 配置保留为内部过滤规则,不会污染搜索 query", () =
     ],
   });
   expect(config.categories[0].searchQuery).toBe("foo");
+  expect(config.categories[0].sourceQueries).toBeUndefined();
   expect(config.categories[0].excludes).toEqual(["baz", "qux"]);
 });
 
@@ -92,6 +104,7 @@ test("可以从运行时 JSON 文件加载分类配置", () => {
           title: "本地测试",
           description: "由运行时配置提供",
           searchQuery: "本地 搜索",
+          sourceQueries: { youtube: "local search" },
           keywords: ["本地", "搜索"],
           excludes: ["预告"],
         },
@@ -107,9 +120,41 @@ test("可以从运行时 JSON 文件加载分类配置", () => {
       title: "本地测试",
       description: "由运行时配置提供",
       query: "本地 搜索",
+      sourceQueries: { youtube: "local search" },
       keywords: ["本地", "搜索"],
       excludes: ["预告"],
     },
+  ]);
+});
+
+test("可以从运行时 JSON 文件加载来源配置", () => {
+  const dir = mkdtempSync(join(tmpdir(), "media-config-"));
+  const path = join(dir, "contentCategories.json");
+  writeFileSync(
+    path,
+    JSON.stringify({
+      sources: [
+        { id: "internet-archive", enabled: true },
+        { id: "bilibili", enabled: false },
+      ],
+      categories: [
+        {
+          id: "local-test",
+          title: "本地测试",
+          description: "由运行时配置提供",
+          searchQuery: "本地 搜索",
+          keywords: ["本地", "搜索"],
+        },
+      ],
+    }),
+  );
+
+  const config = loadMediaServerConfig(path);
+
+  expect(config.sources).toEqual([
+    { id: "internet-archive", enabled: true },
+    { id: "bilibili", enabled: false },
+    { id: "youtube", enabled: false },
   ]);
 });
 

@@ -5,9 +5,14 @@ import { lookup } from "node:dns/promises";
 import net from "node:net";
 import { Readable } from "node:stream";
 import { z } from "zod";
-import { contentCategories, findContentCategory } from "./contentCategories.js";
+import {
+  contentCategories,
+  findContentCategory,
+  mediaServerConfig,
+} from "./contentCategories.js";
 import { ApiError } from "./errors.js";
 import { BilibiliProvider } from "./providers/BilibiliProvider.js";
+import { InternetArchiveProvider } from "./providers/InternetArchiveProvider.js";
 import { YouTubeProvider } from "./providers/YouTubeProvider.js";
 import type { VideoProvider } from "./providers/VideoProvider.js";
 import { CategoryResultCache } from "./services/CategoryResultCache.js";
@@ -21,6 +26,7 @@ import {
 } from "./services/StreamManifests.js";
 import { VideoAggregator } from "./services/VideoAggregator.js";
 import { fetchWithTimeout } from "./services/fetchWithTimeout.js";
+import type { MediaSourceConfig, ProviderName } from "./types.js";
 
 const searchSchema = z.object({
   q: z.string().trim().min(1).max(120),
@@ -57,10 +63,7 @@ export function buildServer() {
     trustProxy: true,
     disableRequestLogging: true,
   });
-  const providers: VideoProvider[] = [
-    new BilibiliProvider(),
-    new YouTubeProvider(),
-  ];
+  const providers = buildProviders(mediaServerConfig.sources);
   const aggregator = new VideoAggregator(providers);
   const categoryCache = new CategoryResultCache(aggregator, contentCategories);
   const responseCache = new HttpResponseCache();
@@ -453,6 +456,9 @@ function assetTargetLogContext(rawUrl: string | null): Record<string, unknown> {
 }
 
 function assetProvider(hostname: string): string {
+  if (hostname.endsWith(".archive.org")) {
+    return "internet-archive";
+  }
   if (
     hostname.endsWith(".bilivideo.com") ||
     hostname.endsWith(".bilibili.com")
@@ -466,6 +472,27 @@ function assetProvider(hostname: string): string {
     return "youtube";
   }
   return "unknown";
+}
+
+function buildProviders(sources: MediaSourceConfig[]): VideoProvider[] {
+  const providers = sources
+    .filter((source) => source.enabled)
+    .map((source) => providerForSource(source.id));
+  if (providers.length === 0) {
+    throw new Error("At least one media provider must be enabled");
+  }
+  return providers;
+}
+
+function providerForSource(id: ProviderName): VideoProvider {
+  switch (id) {
+    case "internet-archive":
+      return new InternetArchiveProvider();
+    case "youtube":
+      return new YouTubeProvider();
+    case "bilibili":
+      return new BilibiliProvider();
+  }
 }
 
 function compactHeaders(

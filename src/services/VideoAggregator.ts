@@ -8,6 +8,7 @@ import type {
   PublicVideoSummary,
   SearchResult,
   VideoDetails,
+  ProviderName,
 } from "../types.js";
 import type { VideoProvider } from "../providers/VideoProvider.js";
 
@@ -123,7 +124,7 @@ export class VideoAggregator {
       this.providers.map((provider) =>
         this.collectProviderSearchResult(
           provider,
-          expandedQuery,
+          providerSearchQuery(provider.name, expandedQuery, category),
           rawCandidateTarget,
           maxProviderPages,
         ),
@@ -322,10 +323,8 @@ export class VideoAggregator {
             ? publicDetailsToSummary(cachedDetails)
             : undefined;
         }
-        if (item.provider === "bilibili") {
-          // Bilibili playurl is aggressively rate-limited from server IPs.
-          // Search/category pages expose metadata only; playback is resolved
-          // just-in-time via /videos/:id/playback.
+        if (item.provider === "bilibili" || item.provider === "internet-archive") {
+          // 风控或元数据成本较高的来源只在进入详情/播放时解析直链。
           return this.toPublicSummary(item);
         }
         const details = await withTimeout(
@@ -670,6 +669,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function providerSearchQuery(
+  providerName: string,
+  fallbackQuery: string,
+  category?: ContentCategory,
+): string {
+  if (!category || !isProviderName(providerName)) {
+    return fallbackQuery;
+  }
+  return category.sourceQueries[providerName] ?? fallbackQuery;
+}
+
+function isProviderName(value: string): value is ProviderName {
+  return (
+    value === "internet-archive" || value === "youtube" || value === "bilibili"
+  );
+}
+
 function relevanceScore(
   item: SearchResult["items"][number],
   category?: ContentCategory,
@@ -691,6 +707,10 @@ function relevanceScore(
     item.durationSeconds < 20 * 60
   ) {
     return -1;
+  }
+  const sourceScore = sourceQueryRelevanceScore(item, category);
+  if (sourceScore !== undefined) {
+    return sourceScore;
   }
   const keywordScore = category.keywords.reduce((score, keyword, index) => {
     const normalized = keyword.toLocaleLowerCase();
@@ -771,6 +791,25 @@ function relevanceScore(
     return -1;
   }
   return keywordScore;
+}
+
+function sourceQueryRelevanceScore(
+  item: SearchResult["items"][number],
+  category: ContentCategory,
+): number | undefined {
+  const providerQuery = category.sourceQueries[item.provider];
+  if (!providerQuery || item.provider !== "internet-archive") {
+    return undefined;
+  }
+  const text = `${item.title} ${item.description} ${item.creators.join(" ")}`
+    .toLocaleLowerCase()
+    .replace(/\s+/g, " ");
+  const terms = providerQuery
+    .toLocaleLowerCase()
+    .split(/\s+/)
+    .filter((term) => term.length >= 3);
+  const matchedTerms = terms.filter((term) => text.includes(term)).length;
+  return Math.max(1, matchedTerms);
 }
 
 function encodeVideoId(providerName: string, sourceId: string): string {

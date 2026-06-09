@@ -1,10 +1,29 @@
 {
+  "sources": [
+    {
+      "id": "bilibili",
+      "enabled": true
+    },
+    {
+      "id": "youtube",
+      "enabled": false
+    },
+    {
+      "id": "internet-archive",
+      "enabled": false
+    }
+  ],
   "categories": [
     {
       "id": "movies",
       "title": "电影",
       "description": "院线电影、国产经典、海外大片和完整长片。",
       "searchQuery": "电影 完整版",
+      "sourceQueries": {
+        "internet-archive": "public domain feature film",
+        "youtube": "电影 完整版",
+        "bilibili": "电影 完整版"
+      },
       "keywords": ["电影", "完整版", "全片", "高清"],
       "excludes": [
         "解说",
@@ -42,6 +61,11 @@
       "title": "电视剧",
       "description": "国产剧、海外剧、古装、武侠、谍战和军旅剧集。",
       "searchQuery": "电视剧 全集",
+      "sourceQueries": {
+        "internet-archive": "classic television episode",
+        "youtube": "电视剧 全集",
+        "bilibili": "电视剧 全集"
+      },
       "keywords": ["电视剧", "全集", "连续剧", "剧集", "第01集", "国产剧"],
       "excludes": [
         "解说",
@@ -70,6 +94,11 @@
       "title": "纪录片",
       "description": "历史、人文、自然、科技和纪实类纪录片。",
       "searchQuery": "纪录片 完整版",
+      "sourceQueries": {
+        "internet-archive": "documentary",
+        "youtube": "纪录片 完整版",
+        "bilibili": "纪录片 完整版"
+      },
       "keywords": ["纪录片", "完整版", "全片", "纪实", "历史"],
       "excludes": [
         "解说",
@@ -90,6 +119,11 @@
       "title": "红色经典",
       "description": "长征、抗战、解放战争、抗美援朝等革命题材的经典老电影。",
       "searchQuery": "红色经典 战争 老电影",
+      "sourceQueries": {
+        "internet-archive": "Chinese revolutionary film",
+        "youtube": "红色经典 战争 老电影",
+        "bilibili": "红色经典 战争 老电影"
+      },
       "keywords": [
         "红色经典",
         "红色经典电影",
@@ -147,6 +181,11 @@
       "title": "Dota 专区",
       "description": "Dota 1 为主，兼顾 Dota 2 的完整对局、录像和赛事。",
       "searchQuery": "Dota1",
+      "sourceQueries": {
+        "internet-archive": "dota gameplay match",
+        "youtube": "Dota1",
+        "bilibili": "Dota1"
+      },
       "keywords": [
         "Dota1 完整比赛",
         "Dota1",

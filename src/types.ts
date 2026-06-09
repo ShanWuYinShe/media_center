@@ -1,5 +1,10 @@
-export type ProviderName = "youtube" | "bilibili";
+export type ProviderName = "internet-archive" | "youtube" | "bilibili";
 export type VideoKind = "vod" | "live";
+
+export type MediaSourceConfig = {
+  id: ProviderName;
+  enabled: boolean;
+};
 
 export type VideoSummary = {
   provider: ProviderName;
@@ -78,11 +83,12 @@ export type ContentCategory = {
   title: string;
   description: string;
   query: string;
+  sourceQueries: Partial<Record<ProviderName, string>>;
   keywords: string[];
   excludes: string[];
 };
 
 export type PublicContentCategory = Omit<
   ContentCategory,
-  "query" | "keywords" | "excludes"
+  "query" | "sourceQueries" | "keywords" | "excludes"
 >;

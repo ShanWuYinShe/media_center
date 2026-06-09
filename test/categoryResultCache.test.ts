@@ -6,6 +6,7 @@ const category: ContentCategory = {
   title: "电影",
   description: "测试分类",
   query: "电影 完整版",
+  sourceQueries: {},
   keywords: ["电影"],
   excludes: [],
 };

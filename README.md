@@ -1,6 +1,6 @@
 # Media Server
 
-合规公开视频聚合服务。公开 API 只返回 Android TV App 可直接播放的普通视频点播地址，不要求客户端知道视频来自 Bilibili、YouTube 或其他 Provider。
+合规公开视频聚合服务。公开 API 只返回 Android TV App 可直接播放的普通视频点播地址，不要求客户端知道视频来自 Bilibili、YouTube、Internet Archive 或其他 Provider。
 
 ## 视频类型
 
@@ -30,14 +30,23 @@
 ## 配置与部署
 
 - workwork 部署中 Media Server 只在 Docker 内部网络提供服务，App 必须通过 nginx 公开前缀访问。
-- 由 workwork admin 管理分类和代理设置。admin 会生成运行时分类文件并把它挂载到容器内 `/config/contentCategories.json`，服务端通过 `CONTENT_CATEGORIES_FILE=/config/contentCategories.json` 读取。
+- 由 workwork admin 管理来源、分类和代理设置。admin 会生成运行时配置文件并把它挂载到容器内 `/config/contentCategories.json`，服务端通过 `CONTENT_CATEGORIES_FILE=/config/contentCategories.json` 读取。
 - 如果不通过 workwork，也可以手动设置 `CONTENT_CATEGORIES_FILE=/path/to/contentCategories.json`（兼容别名 `MEDIA_SERVER_CONTENT_CATEGORIES_FILE`）覆盖内置分类；JSON 结构与 `src/contentCategories.json` 相同。
 - `HOST` / `PORT` 控制服务监听地址；nginx 公开前缀由反代设置 `X-Forwarded-Prefix`，本服务会据此重写图片和播放代理 URL。
 
+## 来源定位
+
+- **Bilibili**：中文覆盖最好，适合 Dota、中文纪录片、用户上传内容和偏中文口味的搜索；播放地址接口可能返回 `v_voucher` 风控，是当前中文内容的高覆盖但高风险来源。
+- **YouTube**：可作为补源，但中文覆盖和稳定性不如 Bilibili；搜索页面和 yt-dlp 解析都可能遇到反 bot/登录校验，默认关闭。
+- **Internet Archive**：通过官方 `advancedsearch` / `metadata` API 和公开下载直链接入，风控风险最低；但中文内容覆盖弱，只适合作为公版老片、历史影像和英文纪录片补充，不适合作为你的中文主源。
+
+目前没有同时满足“中文覆盖足够好、分类偏好匹配、官方稳定播放接口、无风控”的单一公开视频站点。央视/CNTV 中文内容合规性更强，但公开视频播放接口不是面向公众稳定开放的标准 API，若后续接入应作为实验源并默认关闭。
+
 ## 点播解析与流式播放
 
-- Bilibili 普通视频优先走公开接口解析 DASH(fMP4) 或单文件 MP4 点播地址；DASH 清单和媒体分片都通过服务端签名代理，播放器按 Range 流式拉取，不需要整文件下载。Bilibili 只返回 `v_voucher` 风控响应时，服务端会用该视频标题搜索 YouTube 公开视频作为补源；若 YouTube 补源也被反 bot 或上游错误拦截，会短时熔断补源并返回原 Bilibili 风控错误，避免把 cookies 变成线上必需依赖。熔断时间可用 `YOUTUBE_FALLBACK_COOLDOWN_MS` 配置。
+- Bilibili 普通视频优先走公开接口解析 DASH(fMP4) 或单文件 MP4 点播地址；DASH 清单和媒体分片都通过服务端签名代理，播放器按 Range 流式拉取，不需要整文件下载。Bilibili 只返回 `v_voucher` 风控响应时，且 YouTube 来源已启用时，服务端会用该视频标题搜索 YouTube 公开视频作为补源；若 YouTube 补源也被反 bot 或上游错误拦截，会短时熔断补源并返回原 Bilibili 风控错误，避免把 cookies 变成线上必需依赖。熔断时间可用 `YOUTUBE_FALLBACK_COOLDOWN_MS` 配置。
 - YouTube 普通视频通过内部 `vod_extractor` 服务解析点播地址；本地运行可设置 `VOD_EXTRACTOR_URL=http://127.0.0.1:8790/extract`，或安装 `yt-dlp` 并设置 `VOD_EXTRACTOR_BIN=/path/to/yt-dlp` 作为 fallback。若 YouTube 要求登录/反 bot 校验，可先通过 `VOD_EXTRACTOR_EXTRACTOR_ARGS` 尝试 yt-dlp 的 YouTube 客户端/PO token 参数；cookies 文件 `.wework/vod_extractor/youtube-cookies.txt` 仅作为临时兜底，不作为生产稳定性保证。
+- Internet Archive 条目通过官方 metadata 文件列表选择 MP4/WebM 点播文件，再交由 `/api/asset` 代理。
 - `/api/asset` 只接受服务端签发的代理 URL，不会先下载完整文件，而是把 App 的 HTTP Range 请求直接转发给上游 CDN，再把响应流式返回给 Media3/ExoPlayer，支持边下边播和 seek。
 - 后端会按 URL + Range 缓存点播片段和图片响应，默认缓存目录 `/cache`，总上限 50GB，可用 `BACKEND_CACHE_DIR` 和 `BACKEND_CACHE_MAX_BYTES` 覆盖。
 - 上游 HTTP 请求默认 10 秒超时（`PROVIDER_FETCH_TIMEOUT_MS`），Provider 搜索默认 15 秒超时（`PROVIDER_SEARCH_TIMEOUT_MS`），直接详情/点播解析默认 35 秒超时（`DETAIL_RESOLVE_TIMEOUT_MS`），避免单个来源卡住整个 API。
