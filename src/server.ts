@@ -61,6 +61,7 @@ const dashManifestQuerySchema = z.object({
   ref: opaqueReferenceSchema,
   sig: z.string().regex(/^[a-f0-9]{64}$/i),
 });
+const MAX_ROUTE_PARAM_LENGTH = 4096;
 const ASSET_SIGNING_KEY =
   process.env.MEDIA_ASSET_SIGNING_KEY?.trim() ||
   randomBytes(32).toString("hex");
@@ -93,6 +94,9 @@ export function buildServer() {
     logger: { level: process.env.LOG_LEVEL ?? "info" },
     trustProxy: true,
     disableRequestLogging: true,
+    routerOptions: {
+      maxParamLength: MAX_ROUTE_PARAM_LENGTH,
+    },
   });
   const providers = buildProviders(mediaServerConfig.sources);
   const aggregator = new VideoAggregator(providers);
