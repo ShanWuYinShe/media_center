@@ -201,6 +201,78 @@ test("Bilibili 风控时用 YouTube 补源并保留原视频 ID", async () => {
   });
 });
 
+test("YouTube 补源失败后返回 Bilibili 风控错误并短时熔断", async () => {
+  let youtubeSearchCalls = 0;
+  const bilibiliProvider: VideoProvider = {
+    name: "bilibili",
+    async search(query, page, pageSize): Promise<SearchResult> {
+      return { query, page, pageSize, total: 0, items: [] };
+    },
+    async getDetails() {
+      throw new ApiError(
+        "PROVIDER_UNAVAILABLE",
+        "B站播放地址请求触发风控，请稍后重试。",
+        502,
+        {
+          reason: "bilibili_voucher",
+          fallbackSearchQuery: "风控视频完整测试",
+          title: "风控视频完整测试",
+          sourceUrl: "https://www.bilibili.com/video/BVFAIL",
+        },
+      );
+    },
+    async getStreams() {
+      return [];
+    },
+  };
+  const youtubeProvider: VideoProvider = {
+    name: "youtube",
+    async search(query, page, pageSize): Promise<SearchResult> {
+      youtubeSearchCalls += 1;
+      return {
+        query,
+        page,
+        pageSize,
+        total: 1,
+        items: [
+          {
+            ...summary("yt-match", true, "youtube"),
+            title: "风控视频完整测试",
+          },
+        ],
+      };
+    },
+    async getDetails() {
+      throw new ApiError(
+        "PROVIDER_UNAVAILABLE",
+        "点播解析服务返回失败。",
+        502,
+        {
+          reason: "youtube_bot_challenge",
+        },
+      );
+    },
+    async getStreams() {
+      return [];
+    },
+  };
+  const aggregator = new VideoAggregator([bilibiliProvider, youtubeProvider], {
+    youtubeFallbackCooldownMs: 60_000,
+  });
+  const videoId = encoded("bilibili", "BVFAIL");
+
+  await expect(aggregator.getDetails(videoId)).rejects.toMatchObject({
+    code: "PROVIDER_UNAVAILABLE",
+    message: "B站播放地址请求触发风控，请稍后重试。",
+  });
+  await expect(aggregator.getDetails(videoId)).rejects.toMatchObject({
+    code: "PROVIDER_UNAVAILABLE",
+    message: "B站播放地址请求触发风控，请稍后重试。",
+  });
+
+  expect(youtubeSearchCalls).toBe(1);
+});
+
 test("详情接口每次刷新播放地址避免过期缓存", async () => {
   let detailCalls = 0;
   const provider: VideoProvider = {

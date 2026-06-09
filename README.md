@@ -36,8 +36,8 @@
 
 ## 点播解析与流式播放
 
-- Bilibili 普通视频优先走公开接口解析 DASH(fMP4) 或单文件 MP4 点播地址；DASH 清单和媒体分片都通过服务端签名代理，播放器按 Range 流式拉取，不需要整文件下载。Bilibili 只返回 `v_voucher` 风控响应时，服务端会用该视频标题搜索 YouTube 公开视频作为补源。
-- YouTube 普通视频通过内部 `vod_extractor` 服务解析点播地址；本地运行可设置 `VOD_EXTRACTOR_URL=http://127.0.0.1:8790/extract`，或安装 `yt-dlp` 并设置 `VOD_EXTRACTOR_BIN=/path/to/yt-dlp` 作为 fallback。若 YouTube 要求登录/反 bot 校验，可先通过 `VOD_EXTRACTOR_EXTRACTOR_ARGS` 尝试 yt-dlp 的 YouTube 客户端/PO token 参数；仍被拦截时再给 `vod_extractor` 提供 `.wework/vod_extractor/youtube-cookies.txt` cookies 文件。
+- Bilibili 普通视频优先走公开接口解析 DASH(fMP4) 或单文件 MP4 点播地址；DASH 清单和媒体分片都通过服务端签名代理，播放器按 Range 流式拉取，不需要整文件下载。Bilibili 只返回 `v_voucher` 风控响应时，服务端会用该视频标题搜索 YouTube 公开视频作为补源；若 YouTube 补源也被反 bot 或上游错误拦截，会短时熔断补源并返回原 Bilibili 风控错误，避免把 cookies 变成线上必需依赖。熔断时间可用 `YOUTUBE_FALLBACK_COOLDOWN_MS` 配置。
+- YouTube 普通视频通过内部 `vod_extractor` 服务解析点播地址；本地运行可设置 `VOD_EXTRACTOR_URL=http://127.0.0.1:8790/extract`，或安装 `yt-dlp` 并设置 `VOD_EXTRACTOR_BIN=/path/to/yt-dlp` 作为 fallback。若 YouTube 要求登录/反 bot 校验，可先通过 `VOD_EXTRACTOR_EXTRACTOR_ARGS` 尝试 yt-dlp 的 YouTube 客户端/PO token 参数；cookies 文件 `.wework/vod_extractor/youtube-cookies.txt` 仅作为临时兜底，不作为生产稳定性保证。
 - `/api/asset` 只接受服务端签发的代理 URL，不会先下载完整文件，而是把 App 的 HTTP Range 请求直接转发给上游 CDN，再把响应流式返回给 Media3/ExoPlayer，支持边下边播和 seek。
 - 后端会按 URL + Range 缓存点播片段和图片响应，默认缓存目录 `/cache`，总上限 50GB，可用 `BACKEND_CACHE_DIR` 和 `BACKEND_CACHE_MAX_BYTES` 覆盖。
 - 上游 HTTP 请求默认 10 秒超时（`PROVIDER_FETCH_TIMEOUT_MS`），Provider 搜索默认 15 秒超时（`PROVIDER_SEARCH_TIMEOUT_MS`），直接详情/点播解析默认 35 秒超时（`DETAIL_RESOLVE_TIMEOUT_MS`），避免单个来源卡住整个 API。

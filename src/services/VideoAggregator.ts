@@ -27,6 +27,10 @@ const DEFAULT_SEARCH_DETAIL_TIMEOUT_MS = positiveNumber(
   process.env.SEARCH_DETAIL_TIMEOUT_MS,
   8_000,
 );
+const DEFAULT_YOUTUBE_FALLBACK_COOLDOWN_MS = positiveNumber(
+  process.env.YOUTUBE_FALLBACK_COOLDOWN_MS,
+  30 * 60_000,
+);
 const YOUTUBE_FALLBACK_CANDIDATES = 5;
 const MIN_YOUTUBE_FALLBACK_SCORE = 0.32;
 
@@ -34,6 +38,7 @@ type VideoAggregatorOptions = {
   providerSearchTimeoutMs?: number;
   detailResolveTimeoutMs?: number;
   searchDetailTimeoutMs?: number;
+  youtubeFallbackCooldownMs?: number;
 };
 
 type BilibiliPlaybackFallback = {
@@ -56,6 +61,8 @@ export class VideoAggregator {
   private readonly providerSearchTimeoutMs: number;
   private readonly detailResolveTimeoutMs: number;
   private readonly searchDetailTimeoutMs: number;
+  private readonly youtubeFallbackCooldownMs: number;
+  private youtubeFallbackUnavailableUntil = 0;
 
   constructor(
     private readonly providers: VideoProvider[],
@@ -67,6 +74,8 @@ export class VideoAggregator {
       options.detailResolveTimeoutMs ?? DEFAULT_DETAIL_RESOLVE_TIMEOUT_MS;
     this.searchDetailTimeoutMs =
       options.searchDetailTimeoutMs ?? DEFAULT_SEARCH_DETAIL_TIMEOUT_MS;
+    this.youtubeFallbackCooldownMs =
+      options.youtubeFallbackCooldownMs ?? DEFAULT_YOUTUBE_FALLBACK_COOLDOWN_MS;
   }
 
   async search(
@@ -352,7 +361,16 @@ export class VideoAggregator {
       if (!fallback) {
         throw error;
       }
-      const youtubeDetails = await this.findYoutubeFallback(fallback);
+      if (this.isYoutubeFallbackCoolingDown()) {
+        throw error;
+      }
+      let youtubeDetails: VideoDetails | undefined;
+      try {
+        youtubeDetails = await this.findYoutubeFallback(fallback);
+      } catch {
+        this.coolDownYoutubeFallback();
+        throw error;
+      }
       if (youtubeDetails) {
         return {
           provider: "bilibili",
@@ -421,6 +439,17 @@ export class VideoAggregator {
       );
     }
     return undefined;
+  }
+
+  private isYoutubeFallbackCoolingDown(): boolean {
+    return Date.now() < this.youtubeFallbackUnavailableUntil;
+  }
+
+  private coolDownYoutubeFallback(): void {
+    if (this.youtubeFallbackCooldownMs > 0) {
+      this.youtubeFallbackUnavailableUntil =
+        Date.now() + this.youtubeFallbackCooldownMs;
+    }
   }
 
   private provider(name: string): VideoProvider {
