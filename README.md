@@ -1,10 +1,11 @@
-# Media Center Android App
+# Media Center
 
-这个仓库只保留 Android TV 客户端：
+这个仓库同时包含媒体中心的客户端与服务端：
 
 - `media_app`：Android TV + Kotlin + Jetpack Compose + Media3 客户端，针对遥控器焦点、电视安全边距和 2 米观看距离优化。
+- `media_server`：Go 实现的合规公开视频聚合后端，提供分类、搜索、详情、播放地址与 asset 代理接口。
 
-服务端实现已经迁移到 `workwork/services/media_server`。App 只需要一个服务端地址，默认是 `https://yinghuoren.com/api/media`，也可以通过 `MEDIA_SERVER_URL` 覆盖。
+App 只需要一个服务端地址，默认是 `https://yinghuoren.com/api/media`，也可以通过 `MEDIA_SERVER_URL` 覆盖。代理 / 部署基础设施（nginx、xray、admin 面板等）在 `workwork` 仓库，并通过 git submodule 引用本仓库来构建 `media_server`。
 
 ## 视频类型
 
@@ -34,15 +35,24 @@ ANDROID_HOME="$HOME/Library/Android/sdk" \
 ./gradlew :app:assembleDebug -PMEDIA_SERVER_URL=https://your-domain.example/api/media
 ```
 
+## 服务端 media_server
+
+Go 服务，详见 `media_server/README.md`。本地编译检查：
+
+```bash
+go build -C media_server -o /dev/null .
+```
+
+`workwork` 仓库通过 git submodule 引用本仓库，docker-compose 从 `media_center/media_server` 构建并部署该服务。
+
 ## 工具链约定
 
 JS/Web 前端项目优先使用 Bun（`bun install`、`bun run`、`bun test`）。当前 `media_app` 是 Android TV 原生客户端，构建仍使用 Gradle/Android Studio 工具链；如果后续新增 Web 管理台或 H5 前端，应默认采用 Bun。
 
 ## API 契约
 
-API 由 `workwork/services/media_server` 维护。实现或调整 App 前先看：
+API 由本仓库的 `media_server` 维护。实现或调整 App 前先看：
 
-- `workwork/services/media_server/API.md`
-- `workwork/services/media_server/openapi.json`
+- `media_server/API.md`
 
 App 只原样使用 API 返回的图片/播放 URL，不自行构造代理地址或处理代理签名。扩展其他 Provider 时应使用官方 API 或已授权数据源，不接入盗版站点、DRM 绕过或盗链资源。
