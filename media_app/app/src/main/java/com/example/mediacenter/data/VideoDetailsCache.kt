@@ -11,8 +11,8 @@ import kotlinx.serialization.json.Json
 /**
  * 只缓存公开视频详情的稳定元数据。
  *
- * 服务端返回的 thumbnailUrl 和 playbackOptions[].url 都是签名 /asset URL,不能持久化;
- * 播放前必须通过 /videos/{id}/playback 刷新真实播放地址。
+ * 服务端返回的 thumbnailUrl 和 playbackOptions[].url 都是短期有效的 opaque 代理 URL,不能持久化;
+ * 播放前必须通过 /videos/{id}/playback 刷新服务端代理播放地址。
  */
 class VideoDetailsCache(
     cacheDir: File,

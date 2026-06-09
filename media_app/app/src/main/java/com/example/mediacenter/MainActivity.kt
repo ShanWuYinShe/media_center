@@ -42,6 +42,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -53,12 +54,12 @@ import com.example.mediacenter.data.PlaybackOption
 import com.example.mediacenter.data.VideoDetails
 import com.example.mediacenter.data.VideoDetailsCache
 import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.player.CappedLoadErrorHandlingPolicy
 import com.example.mediacenter.player.TolerantDashManifestParser
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.MediaViewModel
 import com.example.mediacenter.ui.MediaViewModelFactory
 import java.net.HttpURLConnection
-import java.net.URI
 import java.net.URL
 import kotlin.math.max
 import kotlinx.coroutines.Dispatchers
@@ -95,6 +96,7 @@ class MainActivity : ComponentActivity() {
     private var selectedPlaybackOptionId: String? = null
     private var selectedPlaybackVideoId: String? = null
     private var detailFocusTarget: DetailFocusTarget = DetailFocusTarget.Play
+    private val playbackLoadErrorHandlingPolicy = CappedLoadErrorHandlingPolicy(MaxPlaybackRetries)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -264,11 +266,7 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         titleBlock.addView(label("媒体中心", 30f, Colors.TextPrimary, bold = true, maxLines = 1), linearMatch())
-        titleBlock.addView(
-            label("合规公开视频与授权内容 · 遥控器优先体验", 13f, Colors.TextTertiary, maxLines = 1),
-            LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(2)),
-        )
-        row.addView(titleBlock, LinearLayout.LayoutParams(0, dp(64), 1f))
+        row.addView(titleBlock, LinearLayout.LayoutParams(0, dp(54), 1f))
         val searchButton = circleIconButton(
             icon = PillIcon.Search,
             onClick = {
@@ -922,11 +920,14 @@ class MainActivity : ComponentActivity() {
             .setConnectTimeoutMs(8_000)
             .setReadTimeoutMs(20_000)
             .setUserAgent(PlaybackUserAgent)
-            .setDefaultRequestProperties(playbackRequestHeaders(playbackUrl))
+            .setDefaultRequestProperties(PlaybackRequestHeaders)
 
         releasePlayer()
         val nextPlayer = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .setMediaSourceFactory(
+                DefaultMediaSourceFactory(dataSourceFactory)
+                    .setLoadErrorHandlingPolicy(playbackLoadErrorHandlingPolicy),
+            )
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
             .build()
@@ -939,6 +940,7 @@ class MainActivity : ComponentActivity() {
                     setMediaSource(
                         DashMediaSource.Factory(dataSourceFactory)
                             .setManifestParser(TolerantDashManifestParser())
+                            .setLoadErrorHandlingPolicy(playbackLoadErrorHandlingPolicy)
                             .createMediaSource(mediaItem),
                     )
                 } else {
@@ -955,7 +957,7 @@ class MainActivity : ComponentActivity() {
 
                     override fun onPlayerError(error: PlaybackException) {
                         Log.w("MediaCenterPlayer", "Playback failed for ${stream.id}", error)
-                        viewModel.playbackFailed("视频播放失败，请稍后重试")
+                        viewModel.playbackFailed(playbackErrorMessage(error))
                     }
                 })
                 prepare()
@@ -1905,20 +1907,19 @@ private class ChevronDownView(context: Context) : View(context) {
 
 private const val PlaybackUserAgent =
     "Mozilla/5.0 (Linux; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+private const val MaxPlaybackRetries = 3
+private val PlaybackRequestHeaders = mapOf(
+    "Accept" to "*/*",
+    "Accept-Language" to "zh-CN,zh;q=0.9,en;q=0.8",
+)
 
-private fun playbackRequestHeaders(url: String): Map<String, String> {
-    val headers = mutableMapOf(
-        "Accept" to "*/*",
-        "Accept-Language" to "zh-CN,zh;q=0.9,en;q=0.8",
-    )
-    val host = runCatching { URI(url).host }.getOrNull() ?: return headers
-    when {
-        host.isHostOrSubdomain("bilivideo.com") || host.isHostOrSubdomain("bilibili.com") ->
-            headers["Referer"] = "https://www.bilibili.com"
-        host.isHostOrSubdomain("googlevideo.com") || host.isHostOrSubdomain("youtube.com") ->
-            headers["Referer"] = "https://www.youtube.com"
+private fun playbackErrorMessage(error: PlaybackException): String {
+    val responseCode = error.findCause<HttpDataSource.InvalidResponseCodeException>()?.responseCode
+    return when (responseCode) {
+        401, 403 -> "播放地址已失效或被拒绝，请重试"
+        404, 410 -> "播放资源不可用，请重试或换个视频"
+        else -> "视频播放失败，请稍后重试"
     }
-    return headers
 }
 
 private fun playbackMimeType(mimeType: String?): String {
@@ -1930,6 +1931,11 @@ private fun playbackMimeType(mimeType: String?): String {
     }
 }
 
-private fun String.isHostOrSubdomain(domain: String): Boolean {
-    return this == domain || endsWith(".$domain")
+private inline fun <reified T : Throwable> Throwable.findCause(): T? {
+    var current: Throwable? = this
+    while (current != null) {
+        if (current is T) return current
+        current = current.cause
+    }
+    return null
 }
