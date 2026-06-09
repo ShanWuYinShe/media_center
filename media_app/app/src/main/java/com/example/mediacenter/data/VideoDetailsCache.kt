@@ -3,6 +3,8 @@ package com.example.mediacenter.data
 import android.util.Log
 import java.io.File
 import java.security.MessageDigest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -26,11 +28,11 @@ class VideoDetailsCache(
 ) {
     private val root = File(cacheDir, cacheDirectoryName)
 
-    fun get(video: VideoSummary): VideoDetails? {
+    suspend fun get(video: VideoSummary): VideoDetails? = withContext(Dispatchers.IO) {
         val file = fileFor(video.id)
-        if (!file.isFile) return null
-        return try {
-            val cached = json.decodeFromString<CachedVideoDetails>(file.readText())
+        if (!file.isFile) return@withContext null
+        try {
+            val cached = json.decodeFromString<CachedVideoDetails>(file.readText(Charsets.UTF_8))
             if (cached.id != video.id) {
                 Log.w(LogTag, "Ignoring mismatched cached details for ${video.id}")
                 file.delete()
@@ -49,12 +51,12 @@ class VideoDetailsCache(
         }
     }
 
-    fun put(details: VideoDetails) {
+    suspend fun put(details: VideoDetails) = withContext(Dispatchers.IO) {
         try {
             root.mkdirs()
             val file = fileFor(details.id)
             val tmp = File(root, "${file.name}.tmp")
-            tmp.writeText(json.encodeToString(CachedVideoDetails.from(details)))
+            tmp.writeText(json.encodeToString(CachedVideoDetails.from(details)), Charsets.UTF_8)
             if (!tmp.renameTo(file)) {
                 tmp.copyTo(file, overwrite = true)
                 tmp.delete()

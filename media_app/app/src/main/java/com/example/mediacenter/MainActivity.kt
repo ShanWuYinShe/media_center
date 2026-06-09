@@ -7,6 +7,9 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
@@ -22,9 +25,7 @@ import android.view.Window
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.GridLayout
 import android.widget.HorizontalScrollView
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -47,6 +48,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
+import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.example.mediacenter.data.ContentCategory
 import com.example.mediacenter.data.MediaApi
 import com.example.mediacenter.data.MediaRepository
@@ -59,12 +62,26 @@ import com.example.mediacenter.player.TolerantDashManifestParser
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.MediaViewModel
 import com.example.mediacenter.ui.MediaViewModelFactory
-import java.net.HttpURLConnection
-import java.net.URL
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.util.Locale
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlin.math.max
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MediaViewModel by viewModels {
@@ -93,6 +110,10 @@ class MainActivity : ComponentActivity() {
     private var rememberedCategoryId: String? = null
     private val rememberedVideoFocusByCategory = mutableMapOf<String, String>()
     private var pendingHomeFocus: HomeFocusTarget? = null
+    private var pendingCategorySelect: Runnable? = null
+    private var prefetchedVisibleVideoIds: List<String> = emptyList()
+    private var homeVideoRecycler: RecyclerView? = null
+    private var homeVideoAdapter: VideoGridAdapter? = null
     private var selectedPlaybackOptionId: String? = null
     private var selectedPlaybackVideoId: String? = null
     private var detailFocusTarget: DetailFocusTarget = DetailFocusTarget.Play
@@ -146,10 +167,8 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         player?.pause()
-        if (currentState.playing != null) {
-            viewModel.back()
-        }
         releasePlayer()
+        renderedState = null
     }
 
     override fun onDestroy() {
@@ -164,12 +183,24 @@ class MainActivity : ComponentActivity() {
 
     private fun render(state: MediaUiState) {
         if (renderedState == state && renderedSearchVisible == searchVisible) return
+        val previousState = renderedState
+        if (previousState != null && updateHomeInPlaceIfPossible(previousState, state)) {
+            renderedState = state
+            renderedSearchVisible = searchVisible
+            return
+        }
         renderedState = state
         renderedSearchVisible = searchVisible
 
         when {
-            state.playing != null -> renderPlayer(state)
+            state.playing != null -> {
+                clearHomeVideoList()
+                resetHomeDetailsPrefetch()
+                renderPlayer(state)
+            }
             state.selected != null -> {
+                clearHomeVideoList()
+                resetHomeDetailsPrefetch()
                 releasePlayer()
                 renderDetails(state)
             }
@@ -180,7 +211,33 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun updateHomeInPlaceIfPossible(previous: MediaUiState, state: MediaUiState): Boolean {
+        val adapter = homeVideoAdapter ?: return false
+        if (renderedSearchVisible != searchVisible || searchVisible) return false
+        if (previous.playing != null || previous.selected != null || state.playing != null || state.selected != null) return false
+        if (previous.items.isEmpty() || state.items.isEmpty()) return false
+        if (previous.query != state.query ||
+            previous.categories != state.categories ||
+            previous.selectedCategoryId != state.selectedCategoryId ||
+            previous.loading != state.loading ||
+            previous.error != state.error
+        ) {
+            return false
+        }
+
+        adapter.setData(
+            newItems = state.items,
+            newCanLoadMore = state.canLoadMore,
+            newLoadingMore = state.loadingMore,
+            newLoadMoreError = state.loadMoreError,
+            focusTarget = null,
+        )
+        prefetchVisibleHomeDetails(state.items.take(gridColumns() * 2))
+        return true
+    }
+
     private fun renderHome(state: MediaUiState) {
+        clearHomeVideoList()
         val screen = FrameLayout(this).apply {
             background = appBackground()
             clipChildren = false
@@ -208,6 +265,7 @@ class MainActivity : ComponentActivity() {
         }
 
         if (searchVisible) {
+            resetHomeDetailsPrefetch()
             content.addView(View(this), LinearLayout.LayoutParams(match(), dp(60)))
             content.addView(searchPanel(state), linearMatch())
             setContent(screen)
@@ -226,9 +284,12 @@ class MainActivity : ComponentActivity() {
 
         val body = FrameLayout(this)
         content.addView(body, LinearLayout.LayoutParams(match(), 0, 1f))
+        if (state.items.isEmpty()) {
+            resetHomeDetailsPrefetch()
+        }
         when {
             state.loading && state.items.isEmpty() -> body.addView(centeredLoading("正在加载…"), frameMatch())
-            state.error != null -> body.addView(errorState(state.error, viewModel::retry), frameMatch())
+            state.error != null && state.items.isEmpty() -> body.addView(errorState(state.error, viewModel::retry), frameMatch())
             state.items.isEmpty() -> body.addView(emptyState(if (state.query.isBlank()) "当前分类暂无内容" else "没有找到相关内容"), frameMatch())
             else -> {
                 body.addView(
@@ -236,11 +297,21 @@ class MainActivity : ComponentActivity() {
                         items = state.items,
                         canLoadMore = state.canLoadMore,
                         loadingMore = state.loadingMore,
-                        registerFocusTarget = ::registerFocusTarget,
+                        loadMoreError = state.loadMoreError,
+                        onRetryLoadMore = viewModel::retryLoadMore,
+                        focusTarget = focusTarget,
                     ),
                     frameMatch(),
                 )
-                viewModel.prefetchVisibleDetails(state.items.take(gridColumns() * 2))
+                prefetchVisibleHomeDetails(state.items.take(gridColumns() * 2))
+                state.error?.let { message ->
+                    body.addView(
+                        homeInlineError(message),
+                        FrameLayout.LayoutParams(match(), wrap(), Gravity.BOTTOM).apply {
+                            setMargins(dp(8), 0, dp(8), dp(20))
+                        },
+                    )
+                }
             }
         }
 
@@ -540,13 +611,14 @@ class MainActivity : ComponentActivity() {
             clipChildren = false
             clipToPadding = false
         }
-        categories.forEach { category ->
+        categories.forEachIndexed { index, category ->
             val chip = pill(
                 text = category.title,
                 selected = category.id == selectedId,
                 heightDp = 44,
                 horizontalPaddingDp = 22,
                 onClick = {
+                    cancelPendingCategorySelect()
                     searchVisible = false
                     rememberedCategoryId = category.id
                     homeFocusArea = HomeFocusArea.Category
@@ -557,6 +629,9 @@ class MainActivity : ComponentActivity() {
                     if (focused) {
                         rememberedCategoryId = category.id
                         homeFocusArea = HomeFocusArea.Category
+                        // 聚焦即加载该分类:无需额外按 OK 确认。用防抖避免
+                        // 左右快速划过分类时每个都触发网络请求,只在停留时切换。
+                        scheduleCategorySelect(category)
                     }
                 },
             ).apply {
@@ -578,6 +653,8 @@ class MainActivity : ComponentActivity() {
                                 false
                             }
                         }
+                        KeyEvent.KEYCODE_DPAD_LEFT -> index == 0
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> index == categories.lastIndex
                         else -> false
                     }
                 }
@@ -593,144 +670,116 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun clearHomeVideoList() {
+        cancelPendingCategorySelect()
+        homeVideoRecycler?.adapter = null
+        homeVideoRecycler = null
+        homeVideoAdapter = null
+    }
+
+    private fun scheduleCategorySelect(category: ContentCategory) {
+        // 已是当前分类则无需切换(selectCategory 内部也会去重,这里提前跳过省去防抖)。
+        if (category.id == currentState.selectedCategoryId) {
+            cancelPendingCategorySelect()
+            return
+        }
+        cancelPendingCategorySelect()
+        val runnable = Runnable {
+            pendingCategorySelect = null
+            if (!searchVisible && rememberedCategoryId == category.id) {
+                pendingHomeFocus = HomeFocusTarget.Category(category.id)
+                viewModel.selectCategory(category)
+            }
+        }
+        pendingCategorySelect = runnable
+        root.postDelayed(runnable, CategorySelectDebounceMs)
+    }
+
+    private fun cancelPendingCategorySelect() {
+        pendingCategorySelect?.let { root.removeCallbacks(it) }
+        pendingCategorySelect = null
+    }
+
+    private fun resetHomeDetailsPrefetch() {
+        if (prefetchedVisibleVideoIds.isEmpty()) return
+        prefetchedVisibleVideoIds = emptyList()
+        viewModel.cancelVisibleDetailsPrefetch()
+    }
+
+    private fun prefetchVisibleHomeDetails(videos: List<VideoSummary>) {
+        val ids = videos.map { it.id }
+        if (ids == prefetchedVisibleVideoIds) return
+        if (ids.isEmpty()) {
+            resetHomeDetailsPrefetch()
+            return
+        }
+        prefetchedVisibleVideoIds = ids
+        viewModel.prefetchVisibleDetails(videos)
+    }
+
     private fun videoGrid(
         items: List<VideoSummary>,
         canLoadMore: Boolean,
         loadingMore: Boolean,
-        registerFocusTarget: (HomeFocusTarget, View) -> Unit,
+        loadMoreError: String?,
+        onRetryLoadMore: () -> Unit,
+        focusTarget: HomeFocusTarget?,
     ): View {
-        val scroll = ScrollView(this).apply {
-            isFillViewport = true
-            clipToPadding = false
-            clipChildren = false
-            viewTreeObserver.addOnScrollChangedListener {
-                val content = getChildAt(0) ?: return@addOnScrollChangedListener
-                if (canLoadMore && !loadingMore && scrollY + height >= content.height - dp(360)) {
-                    viewModel.loadMore()
-                }
-            }
-        }
-        val grid = GridLayout(this).apply {
-            columnCount = gridColumns()
-            clipChildren = false
-            clipToPadding = false
-            setPadding(0, dp(16), 0, dp(32))
-        }
-        val cardWidth = posterCardWidth(grid.columnCount)
+        val columns = gridColumns()
+        val cardWidth = posterCardWidth(columns)
         val cardHeight = (cardWidth * 1.50f).toInt()
-        items.forEachIndexed { index, video ->
-            val card = posterCard(
-                video = video,
-                index = index,
-                columns = grid.columnCount,
-            )
-            registerFocusTarget(HomeFocusTarget.Video(video.id), card)
-            grid.addView(card, GridLayout.LayoutParams().apply {
-                width = cardWidth
-                height = cardHeight
-                setMargins(dp(8), dp(8), dp(8), dp(18))
-            })
-        }
-        if (canLoadMore) {
-            grid.addView(loadMoreIndicator(loadingMore), GridLayout.LayoutParams().apply {
-                width = resources.displayMetrics.widthPixels - dp(112)
-                height = dp(72)
-                columnSpec = GridLayout.spec(0, grid.columnCount)
-                setMargins(0, dp(4), 0, dp(18))
-            })
-        }
-        scroll.addView(grid)
-        return scroll
-    }
-
-    private fun posterCard(
-        video: VideoSummary,
-        index: Int,
-        columns: Int,
-    ): View {
-        val card = FrameLayout(this).apply {
-            clipChildren = false
-            isFocusable = true
-            isClickable = true
-            foreground = null
-            background = rounded(Color.TRANSPARENT, 16, 1, Color.TRANSPARENT)
-            setPadding(dp(3), dp(3), dp(3), dp(3))
-            setOnClickListener { viewModel.openDetails(video) }
-            setOnKeyListener { _, keyCode, event ->
-                if (event.action != KeyEvent.ACTION_DOWN || keyCode != KeyEvent.KEYCODE_DPAD_UP) {
-                    return@setOnKeyListener false
+        val adapter = VideoGridAdapter(
+            columns = columns,
+            cardWidth = cardWidth,
+            cardHeight = cardHeight,
+            onRetryLoadMore = onRetryLoadMore,
+        )
+        val layoutManager = GridLayoutManager(this, columns).apply {
+            isItemPrefetchEnabled = false
+            spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
+                override fun getSpanSize(position: Int): Int {
+                    return if (adapter.isFooterPosition(position)) columns else 1
                 }
-                if (index >= columns) return@setOnKeyListener false
-                homeDefaultCategoryTarget(currentState)?.let { target ->
-                    homeFocusArea = HomeFocusArea.Category
-                    requestHomeFocus(target)
-                } ?: false
             }
         }
-        val imageWrap = FrameLayout(this).apply {
-            background = rounded(Colors.SurfaceElevated, 14, 1, Colors.GlassBorder)
+        val recycler = RecyclerView(this).apply {
+            this.layoutManager = layoutManager
+            this.adapter = adapter
+            descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+            isFocusable = false
+            clipToPadding = false
+            clipChildren = false
+            setPadding(0, dp(16), 0, dp(32))
+            itemAnimator = null
+            setItemViewCacheSize(0)
+            addOnScrollListener(object : RecyclerView.OnScrollListener() {
+                override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                    val lastVisible = layoutManager.findLastVisibleItemPosition()
+                    if (lastVisible >= adapter.videoCount - columns) {
+                        // loadMore() 会同步把 loadingMore=true 推给 StateFlow,
+                        // 触发 render()->setData()->notifyItemChanged()。若直接在滚动回调里
+                        // 调用,会在 RecyclerView 滚动派发期间修改适配器而抛 IllegalStateException。
+                        // post 到下一帧,等本次滚动/布局派发结束后再触发。
+                        recyclerView.post { viewModel.loadMore() }
+                    }
+                }
+            })
         }
-        val image = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            setBackgroundColor(Colors.SurfaceElevated)
-        }
-        imageWrap.addView(image, frameMatch())
-        val initials = label(video.title.take(2).ifBlank { "影" }, 42f, Colors.TextTertiary, bold = true, maxLines = 1).apply {
-            gravity = Gravity.CENTER
-        }
-        imageWrap.addView(initials, frameMatch())
-        loadImage(video.thumbnailUrl, image, initials, video.title)
-        imageWrap.addView(
-            View(this).apply {
-                background = GradientDrawable(
-                    GradientDrawable.Orientation.TOP_BOTTOM,
-                    intArrayOf(Color.argb(22, 255, 255, 255), Color.TRANSPARENT),
-                )
-            },
-            frameMatch(),
+        homeVideoRecycler = recycler
+        homeVideoAdapter = adapter
+        adapter.setData(
+            newItems = items,
+            newCanLoadMore = canLoadMore,
+            newLoadingMore = loadingMore,
+            newLoadMoreError = loadMoreError,
+            focusTarget = focusTarget,
         )
-        imageWrap.addView(
-            View(this).apply {
-                background = GradientDrawable(
-                    GradientDrawable.Orientation.TOP_BOTTOM,
-                    intArrayOf(Color.TRANSPARENT, Color.argb(220, 0, 0, 0)),
-                )
-            },
-            frameMatch(),
-        )
-        val focusIndicator = View(this).apply {
-            setBackgroundColor(Colors.AppleBlue)
-            alpha = 0f
-        }
-        imageWrap.addView(focusIndicator, FrameLayout.LayoutParams(match(), dp(5), Gravity.BOTTOM))
-        card.addView(imageWrap, frameMatch())
-
-        val title = label(video.title, 14f, Colors.TextPrimary, bold = true, maxLines = 1).apply {
-            gravity = Gravity.BOTTOM or Gravity.START
-        }
-        val meta = label(videoMeta(video), 11f, Color.argb(170, 255, 255, 255), maxLines = 1)
-        val textBlock = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.BOTTOM
-            setPadding(dp(10), dp(8), dp(10), dp(10))
-            addView(title, linearMatch())
-            addView(meta, linearMatch())
-        }
-        imageWrap.addView(textBlock, FrameLayout.LayoutParams(match(), wrap(), Gravity.BOTTOM))
-        applyCardFocus(card) { focused ->
-            imageWrap.background = rounded(
-                if (focused) Colors.GlassFillStrong else Colors.SurfaceElevated,
-                14,
-                if (focused) 2 else 1,
-                if (focused) Colors.GlassBorderFocused else Colors.GlassBorder,
-            )
-            if (focused) {
-                homeFocusArea = HomeFocusArea.Video
-                rememberedVideoFocusByCategory[homeCategoryKey(currentState)] = video.id
+        if (focusTarget is HomeFocusTarget.Video) {
+            adapter.indexOfVideo(focusTarget.id).takeIf { it >= 0 }?.let { index ->
+                recycler.scrollToPosition(index)
             }
-            focusIndicator.animate().alpha(if (focused) 1f else 0f).setDuration(120).start()
         }
-        return card
+        return recycler
     }
 
     private fun loadMoreIndicator(loadingMore: Boolean): View {
@@ -748,6 +797,330 @@ class MainActivity : ComponentActivity() {
             row.addView(label("下滑加载更多", 14f, Colors.TextTertiary, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(8)))
         }
         return row
+    }
+
+    private fun loadMoreErrorIndicator(message: String, onRetry: () -> Unit): View {
+        return LinearLayout(this).apply {
+            gravity = Gravity.CENTER
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(24), 0, dp(24), 0)
+            background = rounded(Colors.GlassFill, 24, 1, Colors.GlassBorder)
+            isFocusable = true
+            isClickable = true
+            setOnClickListener { onRetry() }
+            setOnKeyListener { _, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+            }
+            addView(label(message, 14f, Colors.TextSecondary, bold = true, maxLines = 1), LinearLayout.LayoutParams(0, wrap(), 1f))
+            addView(label("重试", 14f, Colors.AppleBlue, bold = true, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(12)))
+        }
+    }
+
+    private inner class VideoGridAdapter(
+        private val columns: Int,
+        private val cardWidth: Int,
+        private val cardHeight: Int,
+        private val onRetryLoadMore: () -> Unit,
+    ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+        private var items: List<VideoSummary> = emptyList()
+        private var canLoadMore: Boolean = false
+        private var loadingMore: Boolean = false
+        private var loadMoreError: String? = null
+        private var pendingFocusTarget: HomeFocusTarget.Video? = null
+
+        val videoCount: Int
+            get() = items.size
+
+        init {
+            setHasStableIds(true)
+        }
+
+        fun setData(
+            newItems: List<VideoSummary>,
+            newCanLoadMore: Boolean,
+            newLoadingMore: Boolean,
+            newLoadMoreError: String?,
+            focusTarget: HomeFocusTarget?,
+        ) {
+            val oldItems = items
+            val oldCanLoadMore = canLoadMore
+            val oldLoadingMore = loadingMore
+            val oldLoadMoreError = loadMoreError
+            if (focusTarget is HomeFocusTarget.Video) {
+                pendingFocusTarget = focusTarget
+            }
+
+            items = newItems
+            canLoadMore = newCanLoadMore
+            loadingMore = newLoadingMore
+            loadMoreError = newLoadMoreError
+
+            val samePrefix = oldItems.size <= newItems.size &&
+                oldItems.indices.all { index -> oldItems[index] == newItems[index] }
+            if (!samePrefix) {
+                notifyDataSetChanged()
+                return
+            }
+            val insertedCount = newItems.size - oldItems.size
+            if (insertedCount > 0) {
+                notifyItemRangeInserted(oldItems.size, insertedCount)
+            }
+            when {
+                oldCanLoadMore && newCanLoadMore -> {
+                    if (insertedCount > 0 || oldLoadingMore != newLoadingMore || oldLoadMoreError != newLoadMoreError) {
+                        notifyItemChanged(items.size)
+                    }
+                }
+                oldCanLoadMore && !newCanLoadMore -> notifyItemRemoved(items.size)
+                !oldCanLoadMore && newCanLoadMore -> notifyItemInserted(items.size)
+            }
+        }
+
+        fun requestFocusOn(target: HomeFocusTarget.Video) {
+            pendingFocusTarget = target
+            val index = indexOfVideo(target.id)
+            if (index >= 0) notifyItemChanged(index)
+        }
+
+        fun indexOfVideo(videoId: String): Int {
+            return items.indexOfFirst { it.id == videoId }
+        }
+
+        fun isFooterPosition(position: Int): Boolean {
+            return canLoadMore && position == items.size
+        }
+
+        override fun getItemCount(): Int {
+            return items.size + if (canLoadMore) 1 else 0
+        }
+
+        override fun getItemId(position: Int): Long {
+            return if (isFooterPosition(position)) {
+                FooterStableId
+            } else {
+                stableVideoId(items[position].id)
+            }
+        }
+
+        override fun getItemViewType(position: Int): Int {
+            return if (isFooterPosition(position)) ViewTypeFooter else ViewTypeVideo
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+            return if (viewType == ViewTypeFooter) {
+                LoadMoreHolder()
+            } else {
+                VideoHolder()
+            }
+        }
+
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+            if (holder is LoadMoreHolder) {
+                holder.bind(loadingMore, loadMoreError)
+            } else if (holder is VideoHolder) {
+                holder.bind(items[position], position, items.size)
+            }
+        }
+
+        override fun onViewAttachedToWindow(holder: RecyclerView.ViewHolder) {
+            super.onViewAttachedToWindow(holder)
+            if (holder is VideoHolder) {
+                holder.loadVisibleThumbnail()
+            }
+        }
+
+        override fun onViewDetachedFromWindow(holder: RecyclerView.ViewHolder) {
+            if (holder is VideoHolder) {
+                holder.cancelVisibleThumbnail()
+            }
+            super.onViewDetachedFromWindow(holder)
+        }
+
+        override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
+            if (holder is VideoHolder) {
+                holder.recycle()
+            }
+            super.onViewRecycled(holder)
+        }
+
+        private fun stableVideoId(value: String): Long {
+            var result = 1125899906842597L
+            value.forEach { char -> result = 31 * result + char.code }
+            return result
+        }
+
+        private inner class VideoHolder : RecyclerView.ViewHolder(createVideoCardRoot()) {
+            private val card: FrameLayout = itemView as FrameLayout
+            private val imageWrap = FrameLayout(this@MainActivity).apply {
+                background = rounded(Colors.SurfaceElevated, 14, 1, Colors.GlassBorder)
+            }
+            private val image = ThumbnailImageView(this@MainActivity)
+            private val initials = label("", 42f, Colors.TextTertiary, bold = true, maxLines = 1).apply {
+                gravity = Gravity.CENTER
+                alpha = 1f
+            }
+            private val title = label("", 14f, Colors.TextPrimary, bold = true, maxLines = 1).apply {
+                gravity = Gravity.BOTTOM or Gravity.START
+            }
+            private val meta = label("", 11f, Color.argb(170, 255, 255, 255), maxLines = 1)
+            private val focusIndicator = View(this@MainActivity).apply {
+                setBackgroundColor(Colors.AppleBlue)
+                alpha = 0f
+            }
+            private var boundVideo: VideoSummary? = null
+            private var boundThumbnailUrl: String? = null
+
+            init {
+                imageWrap.addView(image, frameMatch())
+                imageWrap.addView(initials, frameMatch())
+                imageWrap.addView(
+                    View(this@MainActivity).apply {
+                        background = GradientDrawable(
+                            GradientDrawable.Orientation.TOP_BOTTOM,
+                            intArrayOf(Color.argb(22, 255, 255, 255), Color.TRANSPARENT),
+                        )
+                    },
+                    frameMatch(),
+                )
+                imageWrap.addView(
+                    View(this@MainActivity).apply {
+                        background = GradientDrawable(
+                            GradientDrawable.Orientation.TOP_BOTTOM,
+                            intArrayOf(Color.TRANSPARENT, Color.argb(220, 0, 0, 0)),
+                        )
+                    },
+                    frameMatch(),
+                )
+                imageWrap.addView(focusIndicator, FrameLayout.LayoutParams(match(), dp(5), Gravity.BOTTOM))
+                card.addView(imageWrap, frameMatch())
+
+                val textBlock = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.BOTTOM
+                    setPadding(dp(10), dp(8), dp(10), dp(10))
+                    addView(title, linearMatch())
+                    addView(meta, linearMatch())
+                }
+                imageWrap.addView(textBlock, FrameLayout.LayoutParams(match(), wrap(), Gravity.BOTTOM))
+
+                applyCardFocus(card) { focused ->
+                    imageWrap.background = rounded(
+                        if (focused) Colors.GlassFillStrong else Colors.SurfaceElevated,
+                        14,
+                        if (focused) 2 else 1,
+                        if (focused) Colors.GlassBorderFocused else Colors.GlassBorder,
+                    )
+                    val video = boundVideo
+                    if (focused && video != null) {
+                        homeFocusArea = HomeFocusArea.Video
+                        rememberedVideoFocusByCategory[homeCategoryKey(currentState)] = video.id
+                    }
+                    focusIndicator.animate().cancel()
+                    focusIndicator.animate().alpha(if (focused) 1f else 0f).setDuration(120).start()
+                }
+            }
+
+            fun bind(video: VideoSummary, index: Int, itemCount: Int) {
+                boundVideo = video
+                card.tag = HomeFocusTarget.Video(video.id).viewTag()
+                title.text = video.title
+                meta.text = videoMeta(video)
+                initials.text = video.title.take(2).ifBlank { "影" }
+                boundThumbnailUrl = video.thumbnailUrl
+                image.cancelThumbnailLoad()
+                image.setThumbnailBitmap(null)
+                setPlaceholderVisible(initials, true)
+                if (card.isAttachedToWindow) {
+                    loadVisibleThumbnail()
+                }
+                card.setOnClickListener { viewModel.openDetails(video) }
+                card.setOnKeyListener { _, keyCode, event ->
+                    if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                    // loadMore 追加后,bind 时捕获的 index/itemCount 会变陈旧,
+                    // 用实时的 binding 位置和适配器数量判断边界,避免中部 item 被
+                    // 误判为末项而挡住右移。
+                    val pos = bindingAdapterPosition.takeIf { it >= 0 } ?: index
+                    val count = videoCount
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_UP -> {
+                            if (pos >= columns) return@setOnKeyListener false
+                            homeDefaultCategoryTarget(currentState)?.let { target ->
+                                homeFocusArea = HomeFocusArea.Category
+                                requestHomeFocus(target)
+                            } ?: false
+                        }
+                        KeyEvent.KEYCODE_DPAD_LEFT -> pos % columns == 0
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                            pos == count - 1 || pos % columns == columns - 1
+                        }
+                        else -> false
+                    }
+                }
+
+                val target = pendingFocusTarget
+                if (target != null && target.id == video.id) {
+                    pendingFocusTarget = null
+                    card.post {
+                        if (card.requestFocus()) pendingHomeFocus = null
+                    }
+                }
+            }
+
+            fun loadVisibleThumbnail() {
+                val video = boundVideo ?: return
+                loadImage(boundThumbnailUrl, image, initials, video.title, cardWidth, cardHeight)
+            }
+
+            fun cancelVisibleThumbnail() {
+                image.cancelThumbnailLoad()
+                image.setThumbnailBitmap(null)
+                setPlaceholderVisible(initials, true)
+            }
+
+            fun recycle() {
+                cancelVisibleThumbnail()
+                boundVideo = null
+                boundThumbnailUrl = null
+            }
+        }
+
+        private inner class LoadMoreHolder : RecyclerView.ViewHolder(createLoadMoreRoot()) {
+            private val container: FrameLayout = itemView as FrameLayout
+
+            fun bind(loading: Boolean, error: String?) {
+                container.removeAllViews()
+                container.addView(
+                    if (error == null) {
+                        loadMoreIndicator(loading)
+                    } else {
+                        loadMoreErrorIndicator(error, onRetryLoadMore)
+                    },
+                    frameMatch(),
+                )
+            }
+        }
+
+        private fun createVideoCardRoot(): FrameLayout {
+            return FrameLayout(this@MainActivity).apply {
+                layoutParams = RecyclerView.LayoutParams(cardWidth, cardHeight).apply {
+                    setMargins(dp(8), dp(8), dp(8), dp(18))
+                }
+                clipChildren = false
+                isFocusable = true
+                isClickable = true
+                background = rounded(Color.TRANSPARENT, 16, 1, Color.TRANSPARENT)
+                setPadding(dp(3), dp(3), dp(3), dp(3))
+            }
+        }
+
+        private fun createLoadMoreRoot(): FrameLayout {
+            return FrameLayout(this@MainActivity).apply {
+                layoutParams = RecyclerView.LayoutParams(match(), dp(72)).apply {
+                    setMargins(0, dp(4), 0, dp(18))
+                }
+            }
+        }
     }
 
     private fun renderDetails(state: MediaUiState) {
@@ -776,16 +1149,14 @@ class MainActivity : ComponentActivity() {
         val hero = FrameLayout(this).apply {
             background = rounded(Colors.SurfaceElevated, 22, 1, Colors.GlassBorder)
         }
-        val heroImage = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            setBackgroundColor(Colors.SurfaceElevated)
-        }
+        val heroImage = ThumbnailImageView(this)
         val heroInitials = label(details.title.take(2).ifBlank { "影" }, 64f, Colors.TextTertiary, bold = true, maxLines = 1).apply {
             gravity = Gravity.CENTER
+            alpha = 1f
         }
         hero.addView(heroImage, frameMatch())
         hero.addView(heroInitials, frameMatch())
-        loadImage(details.thumbnailUrl, heroImage, heroInitials, details.title)
+        loadImage(details.thumbnailUrl, heroImage, heroInitials, details.title, dp(500), dp(308))
         hero.addView(
             View(this).apply {
                 background = GradientDrawable(
@@ -1269,6 +1640,21 @@ class MainActivity : ComponentActivity() {
 
     private fun requestHomeFocus(target: HomeFocusTarget): Boolean {
         pendingHomeFocus = target
+        if (target is HomeFocusTarget.Video) {
+            val adapter = homeVideoAdapter
+            val recycler = homeVideoRecycler
+            val index = adapter?.indexOfVideo(target.id) ?: -1
+            if (recycler != null && adapter != null && index >= 0) {
+                adapter.requestFocusOn(target)
+                recycler.scrollToPosition(index)
+                recycler.post {
+                    root.findViewWithTag<View>(target.viewTag())?.let { view ->
+                        if (view.requestFocus()) pendingHomeFocus = null
+                    }
+                }
+                return true
+            }
+        }
         val view = root.findViewWithTag<View>(target.viewTag())
         if (view != null) {
             view.requestFocus()
@@ -1355,6 +1741,15 @@ class MainActivity : ComponentActivity() {
         row.addView(label(message, 14f, Colors.TextDanger, maxLines = 2), LinearLayout.LayoutParams(0, wrap(), 1f))
         row.addView(pill("重试", selected = false, heightDp = 38, horizontalPaddingDp = 18, onClick = onRetry), LinearLayout.LayoutParams(wrap(), dp(38)).withStartMargin(dp(12)))
         return row
+    }
+
+    private fun homeInlineError(message: String): View {
+        return LinearLayout(this).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+            background = rounded(Color.argb(210, 14, 16, 20), 22, 1, Colors.GlassBorder)
+            addView(label(message, 14f, Colors.TextPrimary, bold = true, maxLines = 2), LinearLayout.LayoutParams(match(), wrap()))
+        }
     }
 
     private fun emptyState(message: String): View {
@@ -1465,6 +1860,7 @@ class MainActivity : ComponentActivity() {
                 if (focused) 3 else 1,
                 if (focused) Colors.GlassBorderFocused else Colors.GlassBorder,
             )
+            button.animate().cancel()
             button.animate().scaleX(if (focused) 1.08f else 1f).scaleY(if (focused) 1.08f else 1f).setDuration(120).start()
         }
         update(false)
@@ -1518,6 +1914,7 @@ class MainActivity : ComponentActivity() {
             val contentColor = if (focused) Colors.TextPrimary else Colors.DeepSpace
             textView.setTextColor(contentColor)
             iconView?.setIconColor(contentColor)
+            row.animate().cancel()
             row.animate().scaleX(if (focused) 1.04f else 1f).scaleY(if (focused) 1.04f else 1f).setDuration(120).start()
         }
         update(false)
@@ -1566,10 +1963,17 @@ class MainActivity : ComponentActivity() {
         fun update(focused: Boolean) {
             view.background = when {
                 focused -> rounded(Colors.AppleBlue, 999, 3, Colors.GlassBorderFocused)
-                selected -> rounded(Colors.AppleBlue, 999, 2, Colors.AppleBlue)
+                selected -> rounded(Colors.GlassFillStrong, 999, 2, Colors.AppleBlue)
                 else -> rounded(Colors.GlassFill, 999, 1, Colors.GlassBorder)
             }
-            setContentColor(if (focused || selected) Colors.TextPrimary else Colors.TextSecondary)
+            setContentColor(
+                when {
+                    focused -> Colors.TextPrimary
+                    selected -> Colors.AppleBlue
+                    else -> Colors.TextSecondary
+                },
+            )
+            view.animate().cancel()
             view.animate().scaleX(if (focused) 1.06f else 1f).scaleY(if (focused) 1.06f else 1f).setDuration(120).start()
         }
         update(false)
@@ -1585,6 +1989,7 @@ class MainActivity : ComponentActivity() {
     ) {
         fun update(focused: Boolean) {
             view.background = rounded(Color.TRANSPARENT, 18, if (focused) 3 else 0, if (focused) Colors.GlassBorderFocused else Color.TRANSPARENT)
+            view.animate().cancel()
             view.animate().scaleX(if (focused) 1.04f else 1f).scaleY(if (focused) 1.04f else 1f).setDuration(120).start()
         }
         update(false)
@@ -1594,47 +1999,168 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun loadImage(url: String?, image: ImageView, placeholder: View, title: String) {
+    private fun loadImage(
+        url: String?,
+        image: ThumbnailImageView,
+        placeholder: View,
+        title: String,
+        maxWidthPx: Int,
+        maxHeightPx: Int,
+    ) {
         val imageUrl = url?.takeIf { it.isNotBlank() }
+        image.cancelThumbnailLoad()
         image.tag = imageUrl
-        image.setImageDrawable(null)
-        placeholder.visibility = View.VISIBLE
+        image.setThumbnailBitmap(null)
+        setPlaceholderVisible(placeholder, true)
         if (imageUrl == null) return
         ImageMemoryCache.get(imageUrl)?.let {
-            image.setImageBitmap(it)
-            placeholder.visibility = View.GONE
+            image.setThumbnailBitmap(it)
+            setPlaceholderVisible(placeholder, false)
             return
         }
-        lifecycleScope.launch {
-            val bitmap = withContext(Dispatchers.IO) { fetchBitmap(imageUrl) }
-            if (bitmap != null) {
-                ImageMemoryCache.put(imageUrl, bitmap)
-            } else {
-                Log.w("MediaCenterImage", "Unable to load thumbnail for $title")
+        val detachListener = object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) = Unit
+
+            override fun onViewDetachedFromWindow(view: View) {
+                image.cancelThumbnailLoad()
             }
-            if (image.tag == imageUrl && bitmap != null) {
-                image.setImageBitmap(bitmap)
-                placeholder.visibility = View.GONE
+        }
+        val job = lifecycleScope.launch {
+            try {
+                val bitmap = ThumbnailFetchSemaphore.withPermit {
+                    fetchBitmap(
+                        url = imageUrl,
+                        maxWidthPx = maxWidthPx.coerceAtLeast(dp(160)),
+                        maxHeightPx = maxHeightPx.coerceAtLeast(dp(120)),
+                    )
+                }
+                if (bitmap != null) {
+                    ImageMemoryCache.put(imageUrl, bitmap)
+                } else {
+                    Log.w("MediaCenterImage", "Unable to load thumbnail for $title")
+                }
+                if (image.tag == imageUrl && bitmap != null) {
+                    image.setThumbnailBitmap(bitmap)
+                    setPlaceholderVisible(placeholder, false)
+                }
+            } finally {
+                image.clearThumbnailLoad(job = coroutineContext[Job])
+            }
+        }
+        image.trackThumbnailLoad(job, detachListener)
+    }
+
+    private fun setPlaceholderVisible(placeholder: View, visible: Boolean) {
+        placeholder.animate().cancel()
+        placeholder.visibility = View.VISIBLE
+        placeholder.alpha = if (visible) 1f else 0f
+    }
+
+    private suspend fun fetchBitmap(url: String, maxWidthPx: Int, maxHeightPx: Int): Bitmap? {
+        return try {
+            val bytes = fetchThumbnailBytes(url)
+            withContext(Dispatchers.Default) {
+                decodeSampledBitmap(bytes, maxWidthPx, maxHeightPx)
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: IOException) {
+            Log.w("MediaCenterImage", "Thumbnail request failed", error)
+            null
+        } catch (error: RuntimeException) {
+            Log.w("MediaCenterImage", "Thumbnail request failed", error)
+            null
+        } catch (error: OutOfMemoryError) {
+            Log.e("MediaCenterImage", "Thumbnail decode exceeded memory budget", error)
+            null
+        }
+    }
+
+    private suspend fun fetchThumbnailBytes(url: String): ByteArray = suspendCancellableCoroutine { continuation ->
+        val request = Request.Builder()
+            .url(url)
+            .get()
+            .header("Accept", "image/*,*/*;q=0.8")
+            .header("User-Agent", PlaybackUserAgent)
+            .build()
+        val call = ThumbnailHttpClient.newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, error: IOException) {
+                if (continuation.isActive) {
+                    continuation.resumeWithException(error)
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                try {
+                    val bytes = response.readBoundedThumbnailBytes()
+                    if (continuation.isActive) {
+                        continuation.resume(bytes)
+                    }
+                } catch (error: IOException) {
+                    if (continuation.isActive) {
+                        continuation.resumeWithException(error)
+                    }
+                } catch (error: RuntimeException) {
+                    if (continuation.isActive) {
+                        continuation.resumeWithException(error)
+                    }
+                }
+            }
+        })
+    }
+
+    private fun Response.readBoundedThumbnailBytes(): ByteArray {
+        return use { response ->
+            if (!response.isSuccessful) {
+                throw IOException("Thumbnail HTTP ${response.code()}")
+            }
+            val body = response.body() ?: throw IOException("Thumbnail response body is empty")
+            val contentLength = body.contentLength()
+            if (contentLength > MaxThumbnailBytes) {
+                throw IOException("Thumbnail exceeds $MaxThumbnailBytes bytes")
+            }
+            body.byteStream().use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(8 * 1024)
+                var totalBytes = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    totalBytes += read
+                    if (totalBytes > MaxThumbnailBytes) {
+                        throw IOException("Thumbnail exceeds $MaxThumbnailBytes bytes")
+                    }
+                    output.write(buffer, 0, read)
+                }
+                output.toByteArray()
             }
         }
     }
 
-    private fun fetchBitmap(url: String): Bitmap? {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 8_000
-            readTimeout = 15_000
-            instanceFollowRedirects = true
-            setRequestProperty("Accept", "image/*,*/*;q=0.8")
-            setRequestProperty("User-Agent", PlaybackUserAgent)
+    private fun decodeSampledBitmap(bytes: ByteArray, maxWidthPx: Int, maxHeightPx: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply {
+            inJustDecodeBounds = true
         }
-        return try {
-            connection.inputStream.use(BitmapFactory::decodeStream)
-        } catch (error: Exception) {
-            Log.w("MediaCenterImage", "Thumbnail request failed", error)
-            null
-        } finally {
-            connection.disconnect()
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        val sampleSize = bitmapSampleSize(bounds.outWidth, bounds.outHeight, maxWidthPx, maxHeightPx)
+        val decodeOptions = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.RGB_565
         }
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions)
+    }
+
+    private fun bitmapSampleSize(width: Int, height: Int, maxWidthPx: Int, maxHeightPx: Int): Int {
+        var sampleSize = 1
+        val targetWidth = maxWidthPx.coerceAtLeast(1)
+        val targetHeight = maxHeightPx.coerceAtLeast(1)
+        while (height / (sampleSize * 2) >= targetHeight && width / (sampleSize * 2) >= targetWidth) {
+            sampleSize *= 2
+        }
+        return sampleSize
     }
 
     private fun appBackground(): GradientDrawable {
@@ -1671,9 +2197,9 @@ class MainActivity : ComponentActivity() {
         val min = (total / 60) % 60
         val hr = total / 3600
         return if (hr > 0) {
-            String.format("%d:%02d:%02d", hr, min, sec)
+            String.format(Locale.ROOT, "%d:%02d:%02d", hr, min, sec)
         } else {
-            String.format("%d:%02d", min, sec)
+            String.format(Locale.ROOT, "%d:%02d", min, sec)
         }
     }
 
@@ -1743,7 +2269,12 @@ private object Colors {
 }
 
 private object ImageMemoryCache {
-    private val cache = object : LruCache<String, Bitmap>(16 * 1024) {
+    // 按应用可用堆的 1/8 估算缓存上限(Android 推荐做法),再夹到 8~24MB。
+    // 低堆的 API19 电视盒子会自动收缩,避免缩略图缓存撑爆内存导致 OOM。
+    private val maxSizeKb: Int = ((Runtime.getRuntime().maxMemory() / 1024) / 8)
+        .coerceIn(8L * 1024, 24L * 1024)
+        .toInt()
+    private val cache = object : LruCache<String, Bitmap>(maxSizeKb) {
         override fun sizeOf(key: String, value: Bitmap): Int {
             return value.byteCount / 1024
         }
@@ -1795,6 +2326,69 @@ private enum class PillIcon {
     Play,
 }
 
+private class ThumbnailImageView(context: Context) : View(context) {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val src = Rect()
+    private val dst = RectF()
+    private var bitmap: Bitmap? = null
+    private var loadJob: Job? = null
+    private var loadDetachListener: OnAttachStateChangeListener? = null
+
+    fun setThumbnailBitmap(value: Bitmap?) {
+        if (bitmap === value) return
+        bitmap = value
+        invalidate()
+    }
+
+    fun trackThumbnailLoad(job: Job, detachListener: OnAttachStateChangeListener) {
+        cancelThumbnailLoad()
+        loadJob = job
+        loadDetachListener = detachListener
+        addOnAttachStateChangeListener(detachListener)
+    }
+
+    fun clearThumbnailLoad(job: Job?) {
+        if (job == null || loadJob !== job) return
+        loadJob = null
+        loadDetachListener?.let(::removeOnAttachStateChangeListener)
+        loadDetachListener = null
+    }
+
+    fun cancelThumbnailLoad() {
+        loadJob?.cancel()
+        loadJob = null
+        loadDetachListener?.let(::removeOnAttachStateChangeListener)
+        loadDetachListener = null
+    }
+
+    override fun onDetachedFromWindow() {
+        cancelThumbnailLoad()
+        super.onDetachedFromWindow()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val current = bitmap ?: return
+        val viewWidth = width
+        val viewHeight = height
+        if (viewWidth <= 0 || viewHeight <= 0 || current.width <= 0 || current.height <= 0) return
+
+        val viewRatio = viewWidth.toFloat() / viewHeight.toFloat()
+        val bitmapRatio = current.width.toFloat() / current.height.toFloat()
+        if (bitmapRatio > viewRatio) {
+            val cropWidth = (current.height * viewRatio).toInt().coerceAtLeast(1)
+            val left = (current.width - cropWidth) / 2
+            src.set(left, 0, left + cropWidth, current.height)
+        } else {
+            val cropHeight = (current.width / viewRatio).toInt().coerceAtLeast(1)
+            val top = (current.height - cropHeight) / 2
+            src.set(0, top, current.width, top + cropHeight)
+        }
+        dst.set(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
+        canvas.drawBitmap(current, src, dst, paint)
+    }
+}
+
 private class PillIconView(
     context: Context,
     private val icon: PillIcon,
@@ -1804,6 +2398,10 @@ private class PillIconView(
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
+    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+    private val path = Path()
     private var iconColor: Int = Colors.TextPrimary
 
     fun setIconColor(color: Int) {
@@ -1838,17 +2436,13 @@ private class PillIconView(
                 canvas.drawLine(w * 0.74f, h * 0.26f, w * 0.26f, h * 0.74f, paint)
             }
             PillIcon.Play -> {
-                val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    style = Paint.Style.FILL
-                    color = iconColor
-                }
-                val path = android.graphics.Path().apply {
-                    moveTo(w * 0.28f, h * 0.18f)
-                    lineTo(w * 0.28f, h * 0.82f)
-                    lineTo(w * 0.82f, h * 0.50f)
-                    close()
-                }
-                canvas.drawPath(path, fill)
+                fillPaint.color = iconColor
+                path.reset()
+                path.moveTo(w * 0.28f, h * 0.18f)
+                path.lineTo(w * 0.28f, h * 0.82f)
+                path.lineTo(w * 0.82f, h * 0.50f)
+                path.close()
+                canvas.drawPath(path, fillPaint)
             }
         }
     }
@@ -1859,6 +2453,9 @@ private class PlaybackGlyphView(context: Context) : View(context) {
         color = Color.WHITE
         style = Paint.Style.FILL
     }
+    private val leftPauseRect = RectF()
+    private val rightPauseRect = RectF()
+    private val path = Path()
     private var playing: Boolean = true
 
     fun setPlaying(value: Boolean) {
@@ -1873,15 +2470,16 @@ private class PlaybackGlyphView(context: Context) : View(context) {
         val h = height.toFloat()
         if (playing) {
             val radius = w * 0.05f
-            canvas.drawRoundRect(w * 0.24f, h * 0.18f, w * 0.46f, h * 0.82f, radius, radius, paint)
-            canvas.drawRoundRect(w * 0.54f, h * 0.18f, w * 0.76f, h * 0.82f, radius, radius, paint)
+            leftPauseRect.set(w * 0.24f, h * 0.18f, w * 0.46f, h * 0.82f)
+            rightPauseRect.set(w * 0.54f, h * 0.18f, w * 0.76f, h * 0.82f)
+            canvas.drawRoundRect(leftPauseRect, radius, radius, paint)
+            canvas.drawRoundRect(rightPauseRect, radius, radius, paint)
         } else {
-            val path = android.graphics.Path().apply {
-                moveTo(w * 0.28f, h * 0.18f)
-                lineTo(w * 0.28f, h * 0.82f)
-                lineTo(w * 0.82f, h * 0.50f)
-                close()
-            }
+            path.reset()
+            path.moveTo(w * 0.28f, h * 0.18f)
+            path.lineTo(w * 0.28f, h * 0.82f)
+            path.lineTo(w * 0.82f, h * 0.50f)
+            path.close()
             canvas.drawPath(path, paint)
         }
     }
@@ -1908,6 +2506,17 @@ private class ChevronDownView(context: Context) : View(context) {
 private const val PlaybackUserAgent =
     "Mozilla/5.0 (Linux; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 private const val MaxPlaybackRetries = 3
+private const val MaxThumbnailBytes = 6 * 1024 * 1024
+private const val ViewTypeVideo = 1
+private const val ViewTypeFooter = 2
+private const val FooterStableId = Long.MIN_VALUE
+private const val CategorySelectDebounceMs = 280L
+private val ThumbnailFetchSemaphore = Semaphore(4)
+private val ThumbnailHttpClient = OkHttpClient.Builder()
+    .connectTimeout(8, TimeUnit.SECONDS)
+    .readTimeout(15, TimeUnit.SECONDS)
+    .followRedirects(true)
+    .build()
 private val PlaybackRequestHeaders = mapOf(
     "Accept" to "*/*",
     "Accept-Language" to "zh-CN,zh;q=0.9,en;q=0.8",
@@ -1918,13 +2527,30 @@ private fun playbackErrorMessage(error: PlaybackException): String {
     return when (responseCode) {
         401, 403 -> "播放地址已失效或被拒绝，请重试"
         404, 410 -> "播放资源不可用，请重试或换个视频"
-        else -> "视频播放失败，请稍后重试"
+        else -> when (error.errorCode) {
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+            -> "当前设备不支持该视频编码，可能需要服务端提供 H.264/AAC 版本"
+            PlaybackException.ERROR_CODE_DECODING_FAILED ->
+                "视频解码失败，可能是编码、码率或分辨率超出当前设备能力"
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE,
+            -> "当前播放格式不受支持，请换个清晰度或让服务端转码"
+            else -> "视频播放失败，请稍后重试"
+        }
     }
 }
 
 private fun playbackMimeType(mimeType: String?): String {
-    return when (mimeType?.lowercase()) {
+    return when (mimeType?.trim()?.lowercase()) {
         "application/dash+xml", "application/mpd", "application/dash" -> MimeTypes.APPLICATION_MPD
+        "application/vnd.apple.mpegurl",
+        "application/x-mpegurl",
+        "audio/mpegurl",
+        "audio/x-mpegurl",
+        -> MimeTypes.APPLICATION_M3U8
         "video/webm" -> MimeTypes.VIDEO_WEBM
         "video/mp4", null -> MimeTypes.VIDEO_MP4
         else -> mimeType

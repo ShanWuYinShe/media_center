@@ -29,6 +29,7 @@ data class MediaUiState(
     val playing: PlaybackOption? = null,
     val loading: Boolean = false,
     val loadingMore: Boolean = false,
+    val loadMoreError: String? = null,
     val canLoadMore: Boolean = false,
     val page: Int = 0,
     val playingVideo: VideoSummary? = null,
@@ -99,6 +100,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     items = emptyList(),
                     loading = true,
                     loadingMore = false,
+                    loadMoreError = null,
                     canLoadMore = false,
                     page = 1,
                     error = null,
@@ -130,11 +132,11 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
 
     fun loadMore() {
         val current = mutableState.value
-        if (current.loading || current.loadingMore || !current.canLoadMore) return
+        if (current.loading || current.loadingMore || !current.canLoadMore || current.loadMoreError != null) return
         val nextPage = current.page + 1
         loadMoreJob?.cancel()
         loadMoreJob = viewModelScope.launch {
-            mutableState.update { it.copy(loadingMore = true, error = null) }
+            mutableState.update { it.copy(loadingMore = true, loadMoreError = null, error = null) }
             runCatchingCancellable {
                 repository.search(
                     current.query,
@@ -149,6 +151,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                         state.copy(
                             items = merged,
                             loadingMore = false,
+                            loadMoreError = null,
                             canLoadMore = response.items.size >= PageSize,
                             page = nextPage,
                         )
@@ -169,10 +172,19 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     // 续播依赖的分页加载失败:清掉待续播标记,避免悬挂。
                     pendingAutoAdvanceFromId = null
                     mutableState.update {
-                        it.copy(loadingMore = false, error = error.message ?: "加载更多失败")
+                        it.copy(
+                            loadingMore = false,
+                            loadMoreError = error.message ?: "加载更多失败",
+                        )
                     }
                 }
         }
+    }
+
+    fun retryLoadMore() {
+        if (mutableState.value.loadMoreError == null) return
+        mutableState.update { it.copy(loadMoreError = null) }
+        loadMore()
     }
 
     fun selectCategory(category: ContentCategory) {
@@ -428,12 +440,17 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     }
 
     fun retry() {
+        val current = mutableState.value
+        if (current.items.isNotEmpty() && current.loadMoreError != null) {
+            retryLoadMore()
+            return
+        }
         // 当 categories 为空时,意味着首次加载也失败了,需要从分类开始重试;
         // 否则仅重试当前 search,避免覆盖已经加载好的分类数据。
-        if (mutableState.value.categories.isEmpty()) {
+        if (current.categories.isEmpty()) {
             loadCategoriesAndSearch()
         } else {
-            search(mutableState.value.query)
+            search(current.query)
         }
     }
 
@@ -458,7 +475,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         viewModelScope.launch {
             // categories 失败时直接 setError 退出,**不再**调 search()。
             // 避免:网络持续不通 → categories 失败 + search(query="", null) 也 400 失败 → 用户陷入"重试 → 失败 → 重试"的死循环。
-            mutableState.update { it.copy(loading = true, error = null) }
+            mutableState.update { it.copy(loading = true, loadMoreError = null, error = null) }
             val categoriesResult = runCatchingCancellable { repository.categories() }
             val categories = categoriesResult.getOrNull()
             if (categories == null) {

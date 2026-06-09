@@ -3,6 +3,8 @@ package com.example.mediacenter.data
 import java.io.IOException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.Json
 import okhttp3.Call
@@ -80,7 +82,10 @@ class MediaApi(
         var lastError: IOException? = null
         while (true) {
             try {
-                return json.decodeFromString<T>(execute(request))
+                val body = execute(request)
+                return withContext(Dispatchers.Default) {
+                    json.decodeFromString<T>(body)
+                }
             } catch (error: IOException) {
                 lastError = error
                 if (attempt >= MAX_RETRIES) break
