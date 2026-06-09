@@ -663,7 +663,7 @@ function validatingLookup(
 const assetDnsResolver = new AssetDnsResolver({
   isBlockedAddress,
   ttlMs: positiveInteger(process.env.ASSET_DNS_CACHE_TTL_MS, 30_000),
-  maxRetries: positiveInteger(process.env.ASSET_DNS_MAX_RETRIES, 2),
+  maxRetries: positiveInteger(process.env.ASSET_DNS_MAX_RETRIES, 5),
 });
 
 const assetProxyDispatcher = new Agent({

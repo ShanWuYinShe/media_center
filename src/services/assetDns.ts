@@ -1,4 +1,5 @@
-import { lookup as dnsLookup } from "node:dns/promises";
+import { lookup as getaddrinfoLookup, Resolver } from "node:dns/promises";
+import { isIP } from "node:net";
 
 export type ResolvedAddress = { address: string; family: number };
 
@@ -15,7 +16,26 @@ export class BlockedAddressError extends Error {
   }
 }
 
-const TRANSIENT_DNS_CODES = new Set(["EAI_AGAIN", "ETIMEDOUT", "ESERVFAIL"]);
+// getaddrinfo(EAI_*)与 c-ares(c-ares 自有码)两套可恢复错误码。拥塞/超时类视为
+// 瞬时,交给上层退避重试 → 把"慢"吸收为延迟而非直接抛错。
+const TRANSIENT_DNS_CODES = new Set([
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "ETIMEOUT",
+  "ESERVFAIL",
+  "EREFUSED",
+  "ECONNREFUSED",
+  "ECONNRESET",
+]);
+
+// c-ares 返回这些码表示"该域名确实没有此类记录",不应再重试 c-ares,
+// 而是回退到系统解析器(getaddrinfo,可读 /etc/hosts、NSS)。
+const CARES_NO_RECORD_CODES = new Set([
+  "ENOTFOUND",
+  "ENODATA",
+  "EBADNAME",
+  "ENOTIMP",
+]);
 
 export interface AssetDnsResolverOptions {
   isBlockedAddress: (address: string) => boolean;
@@ -59,8 +79,10 @@ export class AssetDnsResolver {
   constructor(options: AssetDnsResolverOptions) {
     this.isBlockedAddress = options.isBlockedAddress;
     this.ttlMs = options.ttlMs ?? 30_000;
-    this.maxRetries = options.maxRetries ?? 2;
-    this.retryBackoffMs = options.retryBackoffMs ?? [100, 300];
+    this.maxRetries = options.maxRetries ?? 5;
+    this.retryBackoffMs = options.retryBackoffMs ?? [
+      100, 250, 500, 1000, 2000,
+    ];
     this.lookupFn = options.lookupFn ?? defaultLookup;
     this.now = options.now ?? Date.now;
     this.sleepFn = options.sleepFn ?? defaultSleep;
@@ -136,8 +158,78 @@ function isTransientDnsError(error: unknown): boolean {
   return typeof code === "string" && TRANSIENT_DNS_CODES.has(code);
 }
 
-const defaultLookup: LookupFn = (hostname, options) =>
-  dnsLookup(hostname, options) as Promise<ResolvedAddress[]>;
+function isCaresNoRecordError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return typeof code === "string" && CARES_NO_RECORD_CODES.has(code);
+}
+
+const caresResolver = new Resolver();
+
+/**
+ * 默认解析:优先用 c-ares(node:dns 的 Resolver.resolve4/6)。
+ *
+ * 关键点:c-ares 在独立的 UDP/TCP 套接字上异步查询,**不占用 libuv 线程池**,
+ * 因此即使线程池被其它阻塞型调用占满,DNS 也只会变慢、排队,而不会被挤掉。
+ * 这从机制上消除了"线程池不足 → getaddrinfo 直接 EAI_AGAIN → 502"的路径。
+ *
+ * 仅当 c-ares 明确返回"无此记录"(可能是 /etc/hosts、NSS 特殊解析)时,才回退到
+ * getaddrinfo;c-ares 的瞬时错误(超时/拒绝)直接上抛,交由上层退避重试。
+ */
+async function defaultLookup(
+  hostname: string,
+  options: { all: true; verbatim: true },
+): Promise<ResolvedAddress[]> {
+  const literal = isIP(hostname);
+  if (literal === 4) {
+    return [{ address: hostname, family: 4 }];
+  }
+  if (literal === 6) {
+    return [{ address: hostname, family: 6 }];
+  }
+  try {
+    return await caresResolveBoth(hostname);
+  } catch (error) {
+    if (!isCaresNoRecordError(error)) {
+      throw error;
+    }
+  }
+  return (await getaddrinfoLookup(
+    hostname,
+    options,
+  )) as ResolvedAddress[];
+}
+
+async function caresResolveBoth(hostname: string): Promise<ResolvedAddress[]> {
+  const [v4, v6] = await Promise.allSettled([
+    caresResolver.resolve4(hostname),
+    caresResolver.resolve6(hostname),
+  ]);
+  const addresses: ResolvedAddress[] = [];
+  if (v4.status === "fulfilled") {
+    for (const address of v4.value) {
+      addresses.push({ address, family: 4 });
+    }
+  }
+  if (v6.status === "fulfilled") {
+    for (const address of v6.value) {
+      addresses.push({ address, family: 6 });
+    }
+  }
+  if (addresses.length > 0) {
+    return addresses;
+  }
+  const errors = [v4, v6]
+    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    .map((result) => result.reason);
+  const transient = errors.find(isTransientDnsError);
+  if (transient) {
+    throw transient;
+  }
+  throw (
+    errors[0] ??
+    Object.assign(new Error("no DNS records"), { code: "ENODATA" })
+  );
+}
 
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

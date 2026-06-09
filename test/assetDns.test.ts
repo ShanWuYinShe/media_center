@@ -97,6 +97,45 @@ test("瞬时 DNS 错误(EAI_AGAIN)退避重试后成功", async () => {
   expect(calls).toBe(3);
 });
 
+test("c-ares 瞬时码(ETIMEOUT)同样退避重试", async () => {
+  let calls = 0;
+  const lookupFn: LookupFn = async () => {
+    calls += 1;
+    if (calls < 2) {
+      throw Object.assign(new Error("timeout"), { code: "ETIMEOUT" });
+    }
+    return publicAddress;
+  };
+  const resolver = new AssetDnsResolver({
+    isBlockedAddress: noBlock,
+    maxRetries: 3,
+    lookupFn,
+    sleepFn: immediateSleep,
+  });
+
+  await expect(resolver.resolve("example.com")).resolves.toEqual(publicAddress);
+  expect(calls).toBe(2);
+});
+
+test("持续瞬时错误耗尽重试后抛出最后一次错误", async () => {
+  let calls = 0;
+  const lookupFn: LookupFn = async () => {
+    calls += 1;
+    throw Object.assign(new Error("temporary failure"), { code: "EAI_AGAIN" });
+  };
+  const resolver = new AssetDnsResolver({
+    isBlockedAddress: noBlock,
+    maxRetries: 3,
+    lookupFn,
+    sleepFn: immediateSleep,
+  });
+
+  await expect(resolver.resolve("example.com")).rejects.toMatchObject({
+    code: "EAI_AGAIN",
+  });
+  expect(calls).toBe(4);
+});
+
 test("确定性 DNS 错误(ENOTFOUND)不重试,直接抛出", async () => {
   let calls = 0;
   const lookupFn: LookupFn = async () => {
