@@ -3,10 +3,10 @@ import {
   createDecipheriv,
   createHash,
   createHmac,
-  randomBytes,
 } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import { ApiError } from "../errors.js";
+import { VIDEO_ID_SECRET } from "./runtimeSecrets.js";
 import type {
   ContentCategory,
   PlaybackOption,
@@ -39,10 +39,6 @@ const DEFAULT_YOUTUBE_FALLBACK_COOLDOWN_MS = positiveNumber(
   process.env.YOUTUBE_FALLBACK_COOLDOWN_MS,
   30 * 60_000,
 );
-const VIDEO_ID_SECRET =
-  process.env.MEDIA_PUBLIC_ID_KEY?.trim() ||
-  process.env.MEDIA_ASSET_SIGNING_KEY?.trim() ||
-  randomBytes(32).toString("hex");
 const VIDEO_ID_KEY = createHash("sha256")
   .update(`media-public-video-id:${VIDEO_ID_SECRET}`)
   .digest();

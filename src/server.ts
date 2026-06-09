@@ -34,6 +34,7 @@ import {
 } from "./services/StreamManifests.js";
 import { VideoAggregator } from "./services/VideoAggregator.js";
 import { fetchWithTimeout } from "./services/fetchWithTimeout.js";
+import { ASSET_SIGNING_KEY } from "./services/runtimeSecrets.js";
 import type { MediaSourceConfig, ProviderName } from "./types.js";
 
 const searchSchema = z.object({
@@ -62,9 +63,6 @@ const dashManifestQuerySchema = z.object({
   sig: z.string().regex(/^[a-f0-9]{64}$/i),
 });
 const MAX_ROUTE_PARAM_LENGTH = 4096;
-const ASSET_SIGNING_KEY =
-  process.env.MEDIA_ASSET_SIGNING_KEY?.trim() ||
-  randomBytes(32).toString("hex");
 const ASSET_REFERENCE_KEY = createHash("sha256")
   .update(`media-asset-reference:${ASSET_SIGNING_KEY}`)
   .digest();

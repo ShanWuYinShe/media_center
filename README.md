@@ -33,7 +33,7 @@
 - 由 workwork admin 管理来源、分类和代理设置。admin 会生成运行时配置文件并把它挂载到容器内 `/config/contentCategories.json`，服务端通过 `CONTENT_CATEGORIES_FILE=/config/contentCategories.json` 读取。
 - 如果不通过 workwork，也可以手动设置 `CONTENT_CATEGORIES_FILE=/path/to/contentCategories.json`（兼容别名 `MEDIA_SERVER_CONTENT_CATEGORIES_FILE`）覆盖内置分类；JSON 结构与 `src/contentCategories.json` 相同。
 - `HOST` / `PORT` 控制服务监听地址；nginx 公开前缀由反代设置 `X-Forwarded-Prefix`，本服务会据此重写图片和播放代理 URL。
-- 生产环境必须配置稳定的 `MEDIA_ASSET_SIGNING_KEY`；它用于签发 opaque 视频 ID、图片 URL、播放 URL 和 DASH 清单 URL。未配置时仅适合本地开发，服务重启会导致旧 opaque URL/ID 失效。可选 `MEDIA_PUBLIC_ID_KEY` 可单独覆盖视频 ID 加密密钥。
+- `MEDIA_ASSET_SIGNING_KEY` 用于签发 opaque 视频 ID、图片 URL、播放 URL 和 DASH 清单 URL；生产环境建议显式配置。未配置时服务会在 `BACKEND_CACHE_DIR` 下生成持久密钥，避免容器重启后旧 opaque ID 立即失效。可选 `MEDIA_PUBLIC_ID_KEY` 可单独覆盖视频 ID 加密密钥。
 
 ## 来源定位
 
