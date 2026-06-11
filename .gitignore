@@ -34,3 +34,6 @@ $RECYCLE.BIN/
 .env
 .env.local
 .env.*.local
+
+# ----- Claude Code Worktree 元数据 -----
+.claude/worktrees/

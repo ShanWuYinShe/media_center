@@ -2,6 +2,8 @@
 
 合规公开视频媒体中心：Android TV 客户端（`media_app`）+ Go 聚合后端（`media_server`）。通用约束见全局 `~/.claude/CLAUDE.md`。
 
+> **开发隔离**：遵循全局 Worktree 约束——开发改动在 `.claude/worktrees/<分支名>`（已被 `.gitignore` 忽略）中进行，主工作树保持干净，只用于同步、只读分析和最终合并，不在主目录直接堆改动。
+
 ## 仓库结构
 
 - `media_app/` — Android TV + Kotlin + Jetpack Compose + Media3 客户端
