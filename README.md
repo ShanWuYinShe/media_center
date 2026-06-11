@@ -4,6 +4,7 @@
 
 - `media_app`：Android TV + Kotlin + Jetpack Compose + Media3 客户端，针对遥控器焦点、电视安全边距和 2 米观看距离优化。
 - `media_server`：Go 实现的合规公开视频聚合后端，提供分类、搜索、详情、播放地址与 asset 代理接口。
+- `vod_extractor`：Python + yt-dlp 内部点播解析服务，只在部署方 Docker 内网中供 `media_server` 调用。
 
 App 只需要一个服务端地址，默认是 `https://yinghuoren.com/api/media`，也可以通过 `MEDIA_SERVER_URL` 覆盖。代理 / 部署基础设施（nginx、xray、admin 面板等）在 `workwork` 仓库，并通过 git submodule 引用本仓库来构建 `media_server`。
 
@@ -43,7 +44,7 @@ Go 服务，详见 `media_server/README.md`。本地编译检查：
 go build -C media_server -o /dev/null .
 ```
 
-`workwork` 仓库通过 git submodule 引用本仓库，docker-compose 从 `media_center/media_server` 构建并部署该服务。
+`workwork` 仓库通过 git submodule 引用本仓库到 `services/media_center`，docker-compose 从 `services/media_center/media_server` 和 `services/media_center/vod_extractor` 构建并部署相关服务。
 
 ## 工具链约定
 

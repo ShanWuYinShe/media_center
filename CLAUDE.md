@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-合规公开视频媒体中心：Android TV 客户端（`media_app`）+ Go 聚合后端（`media_server`）。通用约束见全局 `~/.claude/CLAUDE.md`。
+合规公开视频媒体中心：Android TV 客户端（`media_app`）+ Go 聚合后端（`media_server`）+ 内部点播解析服务（`vod_extractor`）。通用约束见全局 `~/.claude/CLAUDE.md`。
 
 > **开发隔离**：遵循全局 Worktree 约束——开发改动在 `.claude/worktrees/<分支名>`（已被 `.gitignore` 忽略）中进行，主工作树保持干净，只用于同步、只读分析和最终合并，不在主目录直接堆改动。
 
@@ -8,8 +8,9 @@
 
 - `media_app/` — Android TV + Kotlin + Jetpack Compose + Media3 客户端
 - `media_server/` — Go 实现的合规公开视频聚合后端（分类、搜索、详情、播放地址、asset 代理）
+- `vod_extractor/` — Python + yt-dlp 内部点播解析服务，只供 `media_server` 在 Docker 内网调用
 
-App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部署方式。默认服务端 URL 是 `https://yinghuoren.com/api/media`。代理 / 部署基础设施在 `workwork` 仓库，通过 git submodule 引用本仓库来构建 `media_server`；yt-dlp / vod_extractor 点播解析服务仍在 `workwork`。
+App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部署方式。默认服务端 URL 是 `https://yinghuoren.com/api/media`。代理 / 部署基础设施在 `workwork` 仓库，通过 git submodule 引用本仓库来构建 `media_server` 和 `vod_extractor`。
 
 ## media_app
 
@@ -32,8 +33,8 @@ go test -C media_server ./...
 
 - **技术栈**：Go；HTTP 服务监听 `PORT`（容器内默认 8787）。
 - **内容分类**：`media_server/src/contentCategories.json`；线上由 `workwork` 的 admin 生成运行时分类配置注入。
-- **点播解析**：通过内部 `vod_extractor`（在 `workwork`）解析公开视频点播地址，本服务不内置 yt-dlp。
-- **部署**：`workwork` 以 git submodule 引用本仓库，docker-compose 从 `media_center/media_server` 构建。
+- **点播解析**：通过本仓库内的内部 `vod_extractor` 服务解析公开视频点播地址，本服务不内置 yt-dlp。
+- **部署**：`workwork` 以 git submodule 引用本仓库，docker-compose 从 `services/media_center/media_server` 构建。
 
 ## UI/UX 设计约定
 
@@ -62,4 +63,4 @@ go test -C media_server ./...
 - **视频类型**：`vod`（点播）是当前唯一支持类型；`live`（直播）不处理。
 - **播放代理**：播放地址由服务端返回，支持边下边播和 seek。
 - **合规**：只处理公开视频和授权内容，不接入盗版站点、DRM 绕过或未授权下载。
-- **服务端变更**：`media_server`（Provider、分类、缓存、搜索、播放地址解析）在本仓库 `media_server/` 维护；yt-dlp / vod_extractor 点播解析服务仍在 `workwork` 仓库维护。
+- **服务端变更**：`media_server`（Provider、分类、缓存、搜索、播放地址解析）在本仓库 `media_server/` 维护；yt-dlp 点播解析服务在本仓库 `vod_extractor/` 维护。
