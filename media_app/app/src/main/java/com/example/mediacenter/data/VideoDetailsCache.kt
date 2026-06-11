@@ -13,8 +13,9 @@ import kotlinx.serialization.json.Json
 /**
  * 只缓存公开视频详情的稳定元数据。
  *
- * 服务端返回的 thumbnailUrl 和 playbackOptions[].url 都是短期有效的 opaque 代理 URL,不能持久化;
- * 播放前必须通过 /videos/{id}/playback 刷新服务端代理播放地址。
+ * 服务端返回的 thumbnailUrl / playbackOptions[].url 可能是短期有效的代理 URL,也可能是
+ * 仅当前会话可用的直连媒体地址;都不持久化。播放前必须通过 /videos/{id}/playback 刷新
+ * 最新播放地址。上游请求头同样不落盘,缓存回放时按空占位恢复。
  */
 class VideoDetailsCache(
     cacheDir: File,
@@ -127,6 +128,8 @@ private data class CachedVideoDetails(
             year = year,
             creators = creators,
             thumbnailUrl = video.thumbnailUrl,
+            thumbnailHeaders = video.thumbnailHeaders,
+            thumbnailDelivery = video.thumbnailDelivery,
             durationSeconds = durationSeconds,
             playbackKind = playbackKind,
             playbackOptions = playbackOptions.map { it.toPlaybackOption() },
@@ -157,6 +160,7 @@ private data class CachedPlaybackOption(
     val kind: String,
     val label: String,
     val mimeType: String? = null,
+    val delivery: String = DeliveryMode.DIRECT,
 ) {
     fun toPlaybackOption(): PlaybackOption {
         return PlaybackOption(
@@ -165,6 +169,8 @@ private data class CachedPlaybackOption(
             label = label,
             url = "",
             mimeType = mimeType,
+            headers = emptyMap(),
+            delivery = delivery,
         )
     }
 
@@ -175,6 +181,7 @@ private data class CachedPlaybackOption(
                 kind = option.kind,
                 label = option.label,
                 mimeType = option.mimeType,
+                delivery = option.delivery,
             )
         }
     }

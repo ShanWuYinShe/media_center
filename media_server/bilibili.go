@@ -111,7 +111,10 @@ type bilibiliNavResponse struct {
 
 func NewBilibiliClient(timeout time.Duration) *BilibiliClient {
 	return &BilibiliClient{
-		client: &http.Client{Timeout: timeout},
+		client: &http.Client{
+			Timeout:   timeout,
+			Transport: newDirectUpstreamTransport(0, false),
+		},
 	}
 }
 
@@ -403,21 +406,9 @@ func (c *BilibiliClient) ensureWBIKeys(ctx context.Context) (string, string, err
 	if err := c.getJSON(ctx, bilibiliAPIBase+"/x/web-interface/nav", bilibiliWebHeaders(), &payload); err != nil {
 		return "", "", err
 	}
-	if payload.Code != 0 {
-		return "", "", &apiError{
-			Status:  http.StatusBadGateway,
-			Code:    "UPSTREAM_UNAVAILABLE",
-			Message: fmt.Sprintf("B站导航接口返回错误 (code=%d)。", payload.Code),
-		}
-	}
-	imgKey := extractWBIKey(payload.Data.WBIImg.ImgURL)
-	subKey := extractWBIKey(payload.Data.WBIImg.SubURL)
-	if imgKey == "" || subKey == "" {
-		return "", "", &apiError{
-			Status:  http.StatusBadGateway,
-			Code:    "UPSTREAM_UNAVAILABLE",
-			Message: "无法获取 B站签名密钥。",
-		}
+	imgKey, subKey, err := wbiKeysOrNavError(payload)
+	if err != nil {
+		return "", "", err
 	}
 
 	// 锁内 double-check 更新：如果已被其他 goroutine 刷新，直接用已有的。
@@ -430,6 +421,29 @@ func (c *BilibiliClient) ensureWBIKeys(ctx context.Context) (string, string, err
 	c.subKey = subKey
 	c.keyExpiry = time.Now().Add(10 * time.Minute)
 	return c.imgKey, c.subKey, nil
+}
+
+func wbiKeysOrNavError(payload bilibiliNavResponse) (string, string, error) {
+	imgKey, subKey := wbiKeysFromNav(payload)
+	if imgKey != "" && subKey != "" {
+		return imgKey, subKey, nil
+	}
+	if payload.Code != 0 {
+		return "", "", &apiError{
+			Status:  http.StatusBadGateway,
+			Code:    "UPSTREAM_UNAVAILABLE",
+			Message: fmt.Sprintf("B站导航接口返回错误 (code=%d)。", payload.Code),
+		}
+	}
+	return "", "", &apiError{
+		Status:  http.StatusBadGateway,
+		Code:    "UPSTREAM_UNAVAILABLE",
+		Message: "无法获取 B站签名密钥。",
+	}
+}
+
+func wbiKeysFromNav(payload bilibiliNavResponse) (string, string) {
+	return extractWBIKey(payload.Data.WBIImg.ImgURL), extractWBIKey(payload.Data.WBIImg.SubURL)
 }
 
 func (c *BilibiliClient) getJSON(

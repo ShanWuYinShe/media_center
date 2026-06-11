@@ -17,6 +17,9 @@ type mediaServer struct {
 	categoriesByID map[string]ContentCategory
 	bilibili       *BilibiliClient
 	idCodec        *IDCodec
+	asset          *AssetSigner
+	assetClient    *http.Client
+	deliveryMode   string
 }
 
 func main() {
@@ -24,7 +27,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-	categories, err := loadCategories(config.CategoriesPath)
+	categories, sources, err := loadCategories(config.CategoriesPath)
 	if err != nil {
 		log.Fatalf("load categories: %v", err)
 	}
@@ -34,9 +37,12 @@ func main() {
 		categoriesByID: indexCategories(categories),
 		bilibili:       NewBilibiliClient(config.ProviderTimeout),
 		idCodec:        NewIDCodec(config.SigningKey),
+		asset:          NewAssetSigner(config.SigningKey, config.AssetURLTTL),
+		assetClient:    newAssetHTTPClient(),
+		deliveryMode:   sourceDeliveryMode(sources, "bilibili"),
 	}
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
-	log.Printf("media_server listening on %s", addr)
+	log.Printf("media_server listening on %s (bilibili delivery=%s)", addr, server.deliveryMode)
 	if err := http.ListenAndServe(addr, server); err != nil {
 		log.Fatal(err)
 	}
@@ -46,6 +52,8 @@ func (s *mediaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && (r.URL.Path == "/health" || r.URL.Path == "/api/health"):
 		s.writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	case r.URL.Path == "/api/asset":
+		s.handleAsset(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/categories":
 		s.handleCategories(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/search":
@@ -95,6 +103,7 @@ func (s *mediaServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, searchErr)
 		return
 	}
+	s.applyDeliveryToSearch(s.assetBaseURL(r), &resp)
 	s.writeJSON(w, http.StatusOK, resp)
 }
 
@@ -121,6 +130,7 @@ func (s *mediaServer) handleCategoryVideos(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, categoryErr)
 		return
 	}
+	s.applyDeliveryToSearch(s.assetBaseURL(r), &resp)
 	s.writeJSON(w, http.StatusOK, resp)
 }
 
@@ -155,6 +165,7 @@ func (s *mediaServer) handleVideos(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, detailErr)
 		return
 	}
+	s.applyDeliveryToDetails(s.assetBaseURL(r), &details)
 	s.writeJSON(w, http.StatusOK, details)
 }
 
@@ -173,6 +184,7 @@ func (s *mediaServer) handlePlayback(w http.ResponseWriter, r *http.Request, vid
 		s.writeError(w, playbackErr)
 		return
 	}
+	s.applyDeliveryToOptions(s.assetBaseURL(r), options)
 	s.writeJSON(w, http.StatusOK, PlaybackOptionsResponse{Items: options})
 }
 
@@ -304,6 +316,64 @@ func indexCategories(categories []ContentCategory) map[string]ContentCategory {
 		out[category.ID] = category
 	}
 	return out
+}
+
+// assetBaseURL 解析对外可见的 API 基址，用于拼接 /asset 代理地址。
+// 优先用 MEDIA_SERVER_PUBLIC_URL；否则按请求(含反代头)推导。
+func (s *mediaServer) assetBaseURL(r *http.Request) string {
+	if s.config.PublicBaseURL != "" {
+		return s.config.PublicBaseURL
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if proto := firstForwardedValue(r.Header.Get("X-Forwarded-Proto")); proto != "" {
+		scheme = proto
+	}
+	host := r.Host
+	if forwarded := firstForwardedValue(r.Header.Get("X-Forwarded-Host")); forwarded != "" {
+		host = forwarded
+	}
+	return scheme + "://" + host + "/api"
+}
+
+func firstForwardedValue(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	return strings.TrimSpace(strings.Split(raw, ",")[0])
+}
+
+// deliver 决定单个资源的下发方式：
+//   - direct：原样返回上游 URL + companion headers，由 App 直连。
+//   - proxy：返回 /asset 签名代理地址，上游请求头由服务端回源时附加，不下发。
+func (s *mediaServer) deliver(base, rawURL string, headers map[string]string) (string, map[string]string, string) {
+	if s.deliveryMode == DeliveryProxy && strings.TrimSpace(rawURL) != "" {
+		return s.asset.ProxyURL(base, rawURL, headers), nil, DeliveryProxy
+	}
+	return rawURL, headers, DeliveryDirect
+}
+
+func (s *mediaServer) applyDeliveryToSummary(base string, v *VideoSummary) {
+	v.ThumbnailURL, v.ThumbnailHeaders, v.ThumbnailDelivery = s.deliver(base, v.ThumbnailURL, v.ThumbnailHeaders)
+}
+
+func (s *mediaServer) applyDeliveryToOptions(base string, options []PlaybackOption) {
+	for i := range options {
+		options[i].URL, options[i].Headers, options[i].Delivery = s.deliver(base, options[i].URL, options[i].Headers)
+	}
+}
+
+func (s *mediaServer) applyDeliveryToSearch(base string, resp *SearchResponse) {
+	for i := range resp.Items {
+		s.applyDeliveryToSummary(base, &resp.Items[i])
+	}
+}
+
+func (s *mediaServer) applyDeliveryToDetails(base string, details *VideoDetails) {
+	details.ThumbnailURL, details.ThumbnailHeaders, details.ThumbnailDelivery = s.deliver(base, details.ThumbnailURL, details.ThumbnailHeaders)
+	s.applyDeliveryToOptions(base, details.PlaybackOptions)
 }
 
 func relevanceScore(item VideoSummary, category ContentCategory) int {

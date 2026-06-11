@@ -32,6 +32,8 @@ data class VideoSummary(
     val year: String? = null,
     val creators: List<String> = emptyList(),
     val thumbnailUrl: String? = null,
+    val thumbnailHeaders: Map<String, String> = emptyMap(),
+    val thumbnailDelivery: String = DeliveryMode.DIRECT,
     val durationSeconds: Long? = null,
     val playbackKind: String = "vod",
 )
@@ -45,6 +47,8 @@ data class VideoDetails(
     val year: String? = null,
     val creators: List<String> = emptyList(),
     val thumbnailUrl: String? = null,
+    val thumbnailHeaders: Map<String, String> = emptyMap(),
+    val thumbnailDelivery: String = DeliveryMode.DIRECT,
     val durationSeconds: Long? = null,
     val playbackKind: String = "vod",
     val playbackOptions: List<PlaybackOption> = emptyList(),
@@ -62,4 +66,17 @@ data class PlaybackOption(
     val label: String,
     val url: String,
     val mimeType: String? = null,
+    val headers: Map<String, String> = emptyMap(),
+    val delivery: String = DeliveryMode.DIRECT,
 )
+
+/**
+ * 资源下发方式，决定 App 如何获取缩略图 / 播放流：
+ *  - [DIRECT]：国内可直连源，服务端只下发上游 URL + companion headers，App 直连上游。
+ *  - [PROXY]：国内不可直连的国外源，服务端通过 /asset 代理回源，下发的是签名代理地址；
+ *    上游请求头由服务端附加，App 端 headers 为空，URL 也不可持久化。
+ */
+object DeliveryMode {
+    const val DIRECT = "direct"
+    const val PROXY = "proxy"
+}

@@ -10,10 +10,15 @@ App 应把配置值当作 **API base URL**。当前线上默认是：
 
 ## 当前契约
 
-- 后端负责：分类/搜索/详情/播放选项聚合，以及为 App 提供**直连上游所需请求头**。
-- 对 App **可直接访问**的国内资源，后端会直接返回上游 `thumbnailUrl` / `playbackOptions[].url`。
-- 对 App 未来**不能直连**的来源，后端仍可以返回后端 URL；因此 App 必须把 URL 当成**可执行地址**，不要自行推断来源。
-- `thumbnailHeaders` 和 `playbackOptions[].headers` 必须原样带到图片请求和播放请求里。
+- 后端负责：分类/搜索/详情/播放选项聚合，并按来源决定每个资源的**下发方式**（`deliveryMode`）。
+- **`direct`（国内可直连源，如 Bilibili）**：后端直接返回上游 `thumbnailUrl` / `playbackOptions[].url`，
+  并通过 `thumbnailHeaders` / `playbackOptions[].headers` 下发直连所需请求头，由 **App 直连上游**，
+  避免后端被国内源限流。
+- **`proxy`（国内不可直连的国外源）**：后端返回的是签名 `/asset` 代理地址，字节由**后端回源**并转发；
+  上游请求头由后端附加，**不会**下发给 App（对应 `headers` 为空）。
+- App 必须把 URL 当成**可执行地址**，不要根据 host 推断来源；通过 `deliveryMode` 区分两类资源。
+- `thumbnailHeaders` 和 `playbackOptions[].headers` 必须原样带到对应请求里（`proxy` 模式下为空）。
+- `proxy` 模式下的 `thumbnailUrl` / `playbackOptions[].url` 是带签名和有效期的代理地址，**不要持久化**。
 - 视频类型当前只支持 `vod`。
 - 视频 `id` 和播放选项 `id` 都是不透明值；App 必须原样保存，并在放入 path 时 URL encode。
 
@@ -35,6 +40,8 @@ App 应把配置值当作 **API base URL**。当前线上默认是：
 | 422 | `NO_PLAYABLE_STREAM` | 视频暂无可直接播放的点播流 |
 | 500 | `INTERNAL_ERROR` | 服务端内部错误 |
 | 502 | `UPSTREAM_UNAVAILABLE` | 上游 API 或点播地址不可用 |
+| 410 | `BAD_REQUEST` | `/asset` 代理地址已过期 |
+| 403 | `BAD_REQUEST` | `/asset` 代理地址签名无效 |
 
 ## 数据模型
 
@@ -51,6 +58,8 @@ type Category = {
 ### VideoSummary
 
 ```ts
+type DeliveryMode = "direct" | "proxy";
+
 type VideoSummary = {
   id: string;
   videoKind: "vod";
@@ -60,6 +69,8 @@ type VideoSummary = {
   creators: string[];
   thumbnailUrl?: string;
   thumbnailHeaders?: Record<string, string>;
+  // 缩略图下发方式：direct=App 直连上游；proxy=经 /asset 后端代理。
+  thumbnailDelivery?: DeliveryMode;
   durationSeconds?: number;
   playbackKind: "vod";
 };
@@ -83,6 +94,8 @@ type PlaybackOption = {
   url: string;
   mimeType: "video/mp4" | "video/webm" | "application/dash+xml";
   headers?: Record<string, string>;
+  // 播放流下发方式：direct=App 直连上游(带 headers)；proxy=经 /asset 后端代理(headers 为空)。
+  delivery?: DeliveryMode;
 };
 ```
 
@@ -133,6 +146,7 @@ type PagedVideos = {
       "thumbnailHeaders": {
         "Referer": "https://www.bilibili.com"
       },
+      "thumbnailDelivery": "direct",
       "durationSeconds": 3600,
       "playbackKind": "vod"
     }
@@ -152,7 +166,7 @@ type PagedVideos = {
 
 仅返回最新播放选项。App 真正进入播放器前应再次调用此接口，以刷新直连播放地址。
 
-示例：
+示例（`direct` 国内可直连源）：
 
 ```json
 {
@@ -166,16 +180,50 @@ type PagedVideos = {
       "headers": {
         "Referer": "https://www.bilibili.com",
         "Origin": "https://www.bilibili.com"
-      }
+      },
+      "delivery": "direct"
     }
   ]
 }
 ```
 
+示例（`proxy` 国外源经后端代理）：
+
+```json
+{
+  "items": [
+    {
+      "id": "v1.xxx",
+      "kind": "vod",
+      "label": "720P",
+      "url": "https://yinghuoren.com/api/media/asset?p=...&sig=...",
+      "mimeType": "video/mp4",
+      "delivery": "proxy"
+    }
+  ]
+}
+```
+
+### `GET /asset?p=...&sig=...`
+
+`proxy` 模式资源（缩略图 / 播放流）的后端回源端点。它存在的原因是 **App（国内）无法直连国外源**，
+而不是后端无法访问——后端可直连所有网络，回源时一律**直连上游**，不经任何出站代理：
+
+- 仅由后端在 `deliveryMode: "proxy"` 时签发，代理 payload 为认证加密 token，地址带签名(`sig`)和有效期；非后端签发的地址会被拒绝（403/410），不是开放代理，也不会向 App 暴露上游 URL/请求头。
+- 支持 `GET` / `HEAD`，并转发 `Range`、`If-Range`、`If-None-Match`、`If-Modified-Since`，支持边下边播和 seek（透传 `206`、`Content-Range`、`Accept-Ranges`）。
+- 上游所需请求头（如 `Referer` / `Origin`）由后端回源时附加，不下发给 App。
+
+## 部署相关
+
+- `MEDIA_SERVER_PUBLIC_URL`（可选）：对外可见的 API 基址（如 `https://yinghuoren.com/api/media`），用于拼接 `proxy` 资源的 `/asset` 绝对地址。**位于会改写路径前缀的反向代理后面时必须设置**；未设置时按请求的 `Host` / `X-Forwarded-*` 头推导。
+- `MEDIA_SERVER_ASSET_URL_TTL_SECONDS`（可选，默认 21600=6 小时）：`/asset` 代理地址的有效期。
+- `contentCategories.json` 的 `sources[]` 可加 `"direct": true|false` 覆盖某个源的下发方式；省略时国内源(bilibili)默认 `direct`，国外源默认 `proxy`。`direct` 仅表示 **App 是否能直连该源**，与后端能否访问无关——后端可访问所有源。
+
 ## App 侧必须遵守
 
-1. 不要根据 `thumbnailUrl` 或 `url` 的 host 推断来源逻辑。
-2. 直连请求必须带上 companion headers：
+1. 不要根据 `thumbnailUrl` 或 `url` 的 host 推断来源逻辑；用 `deliveryMode` 区分 `direct` / `proxy`。
+2. `direct` 请求必须带上 companion headers：
    - 图片：`thumbnailHeaders`
    - 播放：`playbackOptions[].headers`
-3. 播放地址不要持久化；进入播放器前刷新 `/videos/{id}/playback`。
+3. `proxy` 请求直接访问后端 `/asset` 地址即可，`headers` 为空，无需也不应附加上游请求头。
+4. 播放地址（尤其 `proxy` 的签名代理地址）不要持久化；进入播放器前刷新 `/videos/{id}/playback`。

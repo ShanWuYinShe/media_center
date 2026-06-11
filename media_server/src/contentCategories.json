@@ -2,15 +2,18 @@
   "sources": [
     {
       "id": "bilibili",
-      "enabled": true
+      "enabled": true,
+      "direct": true
     },
     {
       "id": "youtube",
-      "enabled": false
+      "enabled": false,
+      "direct": false
     },
     {
       "id": "internet-archive",
-      "enabled": false
+      "enabled": false,
+      "direct": false
     }
   ],
   "categories": [

@@ -12,6 +12,7 @@ import com.example.mediacenter.data.VideoDetailsCacheScope
 import com.example.mediacenter.data.VideoSummary
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -56,18 +57,32 @@ private inline fun <T> runCatchingCancellable(block: () -> T): Result<T> {
     }
 }
 
+// 单次播放会话内,自动从短期 URL 失效或瞬时 5xx(典型 502 Bad Gateway)
+// 恢复的次数上限。
+// 超过后不再自动重试,转为向用户展示错误并退回详情页,避免死循环。
+private const val MaxPlaybackRecoveryAttempts = 3
+
+// 自动恢复的退避步长:第 n 次重试前等待 n * 该值,给 asset 代理回源(懒解析上游)
+// warmup 时间。3 次重试合计约 1.5s + 3s + 4.5s = 9s,避免对仍在预热的网关连发请求。
+private const val PlaybackRecoveryBackoffStepMs = 1_500L
+
 class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     private val mutableState = MutableStateFlow(MediaUiState())
     val state: StateFlow<MediaUiState> = mutableState
     private var searchJob: Job? = null
     private var loadMoreJob: Job? = null
     private var detailsJob: Job? = null
+    private var recoveryJob: Job? = null
     private var detailsPrefetchJob: Job? = null
     private val categoryDetailsPrefetchCompletedIds = mutableSetOf<String>()
     private val searchDetailsPrefetchCompletedIds = mutableSetOf<String>()
     // 在列表末尾按"下一个"时,记录续播来源 id:loadMore 拉到新一页后,
     // 在其 onSuccess 里自动续播该来源的下一条,避免自动续播在分页边界"断档"。
     private var pendingAutoAdvanceFromId: String? = null
+    // 播放发生短期 URL 失效或瞬时 5xx(典型 502 Bad Gateway)时,自动刷新
+    // 地址 / 切换到下一清晰度重试,而不是直接把用户弹回详情页。计数器在新播放开始
+    // 或播放器成功就绪时清零,封顶 [MaxPlaybackRecoveryAttempts] 次后转为展示错误。
+    private var playbackRecoveryAttempts = 0
 
     init {
         loadCategoriesAndSearch()
@@ -85,6 +100,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             return
         }
         detailsJob?.cancel()
+        recoveryJob?.cancel()
         detailsPrefetchJob?.cancel()
         loadMoreJob?.cancel()
         searchJob?.cancel()
@@ -245,6 +261,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     }
 
     fun play(stream: PlaybackOption) {
+        playbackRecoveryAttempts = 0
         val current = mutableState.value
         val selected = current.selected
         val video = current.playingVideo
@@ -256,6 +273,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             return
         }
         detailsJob?.cancel()
+        recoveryJob?.cancel()
         detailsJob = viewModelScope.launch {
             mutableState.update { it.copy(loading = true, error = null) }
             runCatchingCancellable { repository.playbackOptions(selected.id) }
@@ -299,7 +317,31 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         }
     }
 
-    fun playbackFailed(message: String) {
+    fun playbackReady(streamId: String) {
+        if (mutableState.value.playing?.id == streamId) {
+            playbackRecoveryAttempts = 0
+        }
+    }
+
+    fun playbackFailed(message: String, recoverable: Boolean = false) {
+        val current = mutableState.value
+        val selected = current.selected
+        val failedOption = current.playing
+        // 短期 URL 失效 / 瞬时 5xx 且仍有恢复额度时,自动刷新播放地址
+        // 并尝试切换清晰度续播,不打断用户;额度耗尽或非瞬时错误才落到错误态。
+        if (recoverable && selected != null && failedOption != null &&
+            playbackRecoveryAttempts < MaxPlaybackRecoveryAttempts
+        ) {
+            // 只有一个清晰度时,重试同源收益低,限制为单次恢复。
+            val maxAttempts = if (selected.playbackOptions.size <= 1) 1
+                              else MaxPlaybackRecoveryAttempts
+            if (playbackRecoveryAttempts < maxAttempts) {
+                playbackRecoveryAttempts++
+                recoverPlayback(selected.id, failedOption, message)
+                return
+            }
+        }
+        playbackRecoveryAttempts = 0
         mutableState.update {
             if (it.playing == null) {
                 it.copy(error = message)
@@ -309,9 +351,79 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         }
     }
 
+    /**
+     * 可恢复播放失败后的自动恢复。先按 [playbackRecoveryAttempts] 做指数退避,给
+     * asset 代理回源(懒解析上游)或上游短期 URL 刷新留出时间,再重新拉取 [videoId]
+     * 的播放选项拿到新鲜地址。选档策略:前几次刷新**同一清晰度**(多为回源 warmup / 签名过期,同源
+     * 重试最可能恢复);最后一次额度才切到下一档绕开可能彻底坏掉的源。仍取不到可播放
+     * 选项时落错误态。退避期间用户离开播放页或切换了清晰度则放弃,不写回过期状态。
+     */
+    private fun recoverPlayback(
+        videoId: String,
+        failedOption: PlaybackOption,
+        fallbackMessage: String,
+    ) {
+        val attempt = playbackRecoveryAttempts
+        recoveryJob?.cancel()
+        recoveryJob = viewModelScope.launch {
+            mutableState.update { it.copy(loading = true, error = null) }
+            delay(attempt.coerceIn(1, MaxPlaybackRecoveryAttempts) * PlaybackRecoveryBackoffStepMs)
+            val afterDelay = mutableState.value
+            // 退避期间用户离开播放页或切换了清晰度 → 放弃恢复
+            if (afterDelay.selected?.id != videoId || afterDelay.playing?.id != failedOption.id) {
+                mutableState.update { it.copy(loading = false) }
+                return@launch
+            }
+            runCatchingCancellable { repository.playbackOptions(videoId) }
+                .onSuccess { options ->
+                    val sameIdx = options.indexOfFirst { it.id == failedOption.id }
+                    val candidate = when {
+                        options.isEmpty() -> null
+                        // 非最终尝试:重试同一清晰度(多为签名过期/回源 warmup)
+                        attempt < MaxPlaybackRecoveryAttempts && sameIdx >= 0 -> options[sameIdx]
+                        // 最终尝试或同档已消失:切到下一档
+                        sameIdx in 0 until options.lastIndex -> options[sameIdx + 1]
+                        // 同档是列表末尾或已消失:回绕到首档
+                        else -> options.first()
+                    }
+                    mutableState.update { state ->
+                        if (state.selected?.id != videoId || state.playing?.id != failedOption.id) {
+                            state.copy(loading = false)
+                        } else if (candidate == null) {
+                            state.copy(
+                                loading = false,
+                                playing = null,
+                                error = fallbackMessage,
+                            )
+                        } else {
+                            state.copy(
+                                loading = false,
+                                selected = state.selected.copy(playbackOptions = options),
+                                playing = candidate,
+                            )
+                        }
+                    }
+                }
+                .onFailure { error ->
+                    mutableState.update { state ->
+                        if (state.selected?.id != videoId || state.playing?.id != failedOption.id) {
+                            state.copy(loading = false)
+                        } else {
+                            state.copy(
+                                loading = false,
+                                playing = null,
+                                error = error.message ?: fallbackMessage,
+                            )
+                        }
+                    }
+                }
+        }
+    }
+
     fun refreshSelectedPlayback() {
         val selected = mutableState.value.selected ?: return
         detailsJob?.cancel()
+        recoveryJob?.cancel()
         detailsJob = viewModelScope.launch {
             mutableState.update { it.copy(loading = true, error = null) }
             runCatchingCancellable { repository.playbackOptions(selected.id) }
@@ -392,11 +504,13 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         items: List<VideoSummary>,
         prefetchNextPage: Boolean = true,
     ) {
+        playbackRecoveryAttempts = 0
         val nextVideo = items[index]
         val cacheScope = currentDetailsCacheScope()
         // 临近列表末尾时顺便预取下一页,保证“下一个”能持续可用
         if (prefetchNextPage && index >= items.size - 3) loadMore()
         detailsJob?.cancel()
+        recoveryJob?.cancel()
         detailsJob = viewModelScope.launch {
             mutableState.update { it.copy(loading = true, error = null) }
             runCatchingCancellable {
@@ -461,11 +575,15 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         // BACK 的效果被异步写默默撤销。同理清掉待续播标记,避免 loadMore 完成后
         // 触发自动续播再次跳回播放页。
         detailsJob?.cancel()
+        recoveryJob?.cancel()
         pendingAutoAdvanceFromId = null
         mutableState.update {
+            // 取消 detailsJob 后,其内部的 loading=false 清理可能不再执行(协程在
+            // recoverPlayback 的退避 delay 中被取消)。BACK 已无在途加载需要等待,
+            // 这里顺手把 loading 复位,避免返回详情/首页后卡在"正在加载/重试"提示上。
             when {
-                it.playing != null -> it.copy(playing = null)
-                it.selected != null -> it.copy(selected = null)
+                it.playing != null -> it.copy(playing = null, loading = false)
+                it.selected != null -> it.copy(selected = null, loading = false)
                 else -> it
             }
         }

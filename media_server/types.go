@@ -1,5 +1,18 @@
 package main
 
+// Delivery 模式：决定 App 如何获取缩略图 / 播放流。
+//
+// 注意：该区分只看 **App（国内）能否直连上游**，与服务端无关——服务端可访问所有网络，
+// 任何源都能直接回源，永远不需要出站代理。
+//   - DeliveryDirect：App 国内可直连的源（如 Bilibili），服务端只下发上游 URL + companion
+//     headers，由 App 直连上游，避免大量媒体流量集中到服务端 IP 触发上游限流。
+//   - DeliveryProxy：App 国内无法直连的源（国外源），由服务端直连上游并通过 /api/asset
+//     回源转发；下发的是签名代理地址，App 不需要也拿不到上游请求头。
+const (
+	DeliveryDirect = "direct"
+	DeliveryProxy  = "proxy"
+)
+
 type rawConfig struct {
 	Sources    []sourceConfig      `json:"sources"`
 	Categories []rawCategoryConfig `json:"categories"`
@@ -8,6 +21,11 @@ type rawConfig struct {
 type sourceConfig struct {
 	ID      string `json:"id"`
 	Enabled bool   `json:"enabled"`
+	// Direct 表示该源对 App 是否国内可直连。
+	//   - true：App 直连上游（direct）。
+	//   - false：服务端代理回源（proxy）。
+	//   - 省略：按 defaultSourceDirect 的内置判断。
+	Direct *bool `json:"direct,omitempty"`
 }
 
 type rawCategoryConfig struct {
@@ -50,30 +68,32 @@ type SearchResponse struct {
 }
 
 type VideoSummary struct {
-	ID               string            `json:"id"`
-	VideoKind        string            `json:"videoKind"`
-	Title            string            `json:"title"`
-	Description      string            `json:"description"`
-	Year             string            `json:"year,omitempty"`
-	Creators         []string          `json:"creators"`
-	ThumbnailURL     string            `json:"thumbnailUrl,omitempty"`
-	ThumbnailHeaders map[string]string `json:"thumbnailHeaders,omitempty"`
-	DurationSeconds  int64             `json:"durationSeconds,omitempty"`
-	PlaybackKind     string            `json:"playbackKind"`
+	ID                string            `json:"id"`
+	VideoKind         string            `json:"videoKind"`
+	Title             string            `json:"title"`
+	Description       string            `json:"description"`
+	Year              string            `json:"year,omitempty"`
+	Creators          []string          `json:"creators"`
+	ThumbnailURL      string            `json:"thumbnailUrl,omitempty"`
+	ThumbnailHeaders  map[string]string `json:"thumbnailHeaders,omitempty"`
+	ThumbnailDelivery string            `json:"thumbnailDelivery,omitempty"`
+	DurationSeconds   int64             `json:"durationSeconds,omitempty"`
+	PlaybackKind      string            `json:"playbackKind"`
 }
 
 type VideoDetails struct {
-	ID               string            `json:"id"`
-	VideoKind        string            `json:"videoKind"`
-	Title            string            `json:"title"`
-	Description      string            `json:"description"`
-	Year             string            `json:"year,omitempty"`
-	Creators         []string          `json:"creators"`
-	ThumbnailURL     string            `json:"thumbnailUrl,omitempty"`
-	ThumbnailHeaders map[string]string `json:"thumbnailHeaders,omitempty"`
-	DurationSeconds  int64             `json:"durationSeconds,omitempty"`
-	PlaybackKind     string            `json:"playbackKind"`
-	PlaybackOptions  []PlaybackOption  `json:"playbackOptions"`
+	ID                string            `json:"id"`
+	VideoKind         string            `json:"videoKind"`
+	Title             string            `json:"title"`
+	Description       string            `json:"description"`
+	Year              string            `json:"year,omitempty"`
+	Creators          []string          `json:"creators"`
+	ThumbnailURL      string            `json:"thumbnailUrl,omitempty"`
+	ThumbnailHeaders  map[string]string `json:"thumbnailHeaders,omitempty"`
+	ThumbnailDelivery string            `json:"thumbnailDelivery,omitempty"`
+	DurationSeconds   int64             `json:"durationSeconds,omitempty"`
+	PlaybackKind      string            `json:"playbackKind"`
+	PlaybackOptions   []PlaybackOption  `json:"playbackOptions"`
 }
 
 type PlaybackOptionsResponse struct {
@@ -87,6 +107,7 @@ type PlaybackOption struct {
 	URL      string            `json:"url"`
 	MimeType string            `json:"mimeType,omitempty"`
 	Headers  map[string]string `json:"headers,omitempty"`
+	Delivery string            `json:"delivery,omitempty"`
 }
 
 type apiErrorBody struct {

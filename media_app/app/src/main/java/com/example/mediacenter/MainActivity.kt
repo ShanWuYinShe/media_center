@@ -11,7 +11,10 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
+import android.os.Build
 import android.os.Bundle
 import android.text.TextUtils
 import android.util.Log
@@ -51,6 +54,7 @@ import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.mediacenter.data.ContentCategory
+import com.example.mediacenter.data.isTransientHttpStatusCode
 import com.example.mediacenter.data.MediaApi
 import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.PlaybackOption
@@ -119,6 +123,8 @@ class MainActivity : ComponentActivity() {
     private var selectedPlaybackVideoId: String? = null
     private var detailFocusTarget: DetailFocusTarget = DetailFocusTarget.Play
     private val playbackLoadErrorHandlingPolicy = CappedLoadErrorHandlingPolicy(MaxPlaybackRetries)
+    // 瞬时 5xx 自动恢复期间盖在播放画面上的“正在重试…”提示,避免重试窗口里只剩黑屏/卡帧。
+    private var playerRetryOverlay: View? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -198,6 +204,7 @@ class MainActivity : ComponentActivity() {
                 clearHomeVideoList()
                 resetHomeDetailsPrefetch()
                 renderPlayer(state)
+                updatePlayerRetryOverlay(state.loading)
             }
             state.selected != null -> {
                 clearHomeVideoList()
@@ -274,16 +281,18 @@ class MainActivity : ComponentActivity() {
         }
 
         if (state.query.isBlank()) {
-            content.addView(searchIconRow(::registerFocusTarget), linearMatch())
             content.addView(
-                categoryRail(state.categories, state.selectedCategoryId, ::registerFocusTarget),
+                homeTopBar(state.categories, state.selectedCategoryId, ::registerFocusTarget),
                 linearMatch(),
             )
         } else {
             content.addView(searchModeBar(state.query, ::registerFocusTarget), linearMatch())
         }
 
-        val body = FrameLayout(this)
+        val body = FrameLayout(this).apply {
+            clipChildren = false
+            clipToPadding = false
+        }
         content.addView(body, LinearLayout.LayoutParams(match(), 0, 1f))
         if (state.items.isEmpty()) {
             resetHomeDetailsPrefetch()
@@ -323,22 +332,19 @@ class MainActivity : ComponentActivity() {
         setContent(screen)
     }
 
-    private fun searchIconRow(
+    private fun homeTopBar(
+        categories: List<ContentCategory>,
+        selectedId: String?,
         registerFocusTarget: (HomeFocusTarget, View) -> Unit,
     ): View {
         val row = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(18), 0, dp(10))
+            setPadding(0, dp(22), 0, dp(12))
             clipChildren = false
             clipToPadding = false
         }
-        val titleBlock = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        titleBlock.addView(label("媒体中心", 30f, Colors.TextPrimary, bold = true, maxLines = 1), linearMatch())
-        row.addView(titleBlock, LinearLayout.LayoutParams(0, dp(54), 1f))
+
         val searchButton = circleIconButton(
             icon = PillIcon.Search,
             onClick = {
@@ -348,17 +354,100 @@ class MainActivity : ComponentActivity() {
             },
         ).apply {
             setOnKeyListener { _, keyCode, event ->
-                if (event.action != KeyEvent.ACTION_DOWN || keyCode != KeyEvent.KEYCODE_DPAD_DOWN) {
-                    return@setOnKeyListener false
+                if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        currentState.items.firstOrNull()?.id
+                            ?.let(HomeFocusTarget::Video)
+                            ?.let { target ->
+                                homeFocusArea = HomeFocusArea.Video
+                                requestHomeFocus(target)
+                            } ?: false
+                    }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        categories.lastOrNull()?.id?.let { id ->
+                            homeFocusArea = HomeFocusArea.Category
+                            requestHomeFocus(HomeFocusTarget.Category(id))
+                        } ?: false
+                    }
+                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_RIGHT -> true
+                    else -> false
                 }
-                homeDefaultCategoryTarget(currentState)?.let { target ->
-                    homeFocusArea = HomeFocusArea.Category
-                    requestHomeFocus(target)
-                } ?: false
             }
         }
         registerFocusTarget(HomeFocusTarget.Search, searchButton)
-        row.addView(searchButton, LinearLayout.LayoutParams(dp(54), dp(54)))
+
+        val chipRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, dp(4))
+            clipChildren = false
+            clipToPadding = false
+        }
+        categories.forEachIndexed { index, category ->
+            val chip = pill(
+                text = category.title,
+                selected = category.id == selectedId,
+                heightDp = 44,
+                horizontalPaddingDp = 22,
+                onClick = {
+                    cancelPendingCategorySelect()
+                    searchVisible = false
+                    rememberedCategoryId = category.id
+                    homeFocusArea = HomeFocusArea.Category
+                    pendingHomeFocus = HomeFocusTarget.Category(category.id)
+                    viewModel.selectCategory(category)
+                },
+                onFocusChange = { focused ->
+                    if (focused) {
+                        rememberedCategoryId = category.id
+                        homeFocusArea = HomeFocusArea.Category
+                        // 聚焦即加载该分类:无需额外按 OK 确认。用防抖避免
+                        // 左右快速划过分类时每个都触发网络请求,只在停留时切换。
+                        scheduleCategorySelect(category)
+                    }
+                },
+            ).apply {
+                setOnKeyListener { _, keyCode, event ->
+                    if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_UP -> true
+                        KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            val target = rememberedVideoFocusByCategory[homeCategoryKey(currentState)]
+                                ?.let(HomeFocusTarget::Video)
+                                ?: currentState.items.firstOrNull()?.id?.let(HomeFocusTarget::Video)
+                            if (target != null) {
+                                homeFocusArea = HomeFocusArea.Video
+                                requestHomeFocus(target)
+                            } else {
+                                false
+                            }
+                        }
+                        KeyEvent.KEYCODE_DPAD_LEFT -> index == 0
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                            if (index == categories.lastIndex) {
+                                homeFocusArea = HomeFocusArea.Search
+                                requestHomeFocus(HomeFocusTarget.Search)
+                            } else {
+                                false
+                            }
+                        }
+                        else -> false
+                    }
+                }
+            }
+            registerFocusTarget(HomeFocusTarget.Category(category.id), chip)
+            chipRow.addView(chip, LinearLayout.LayoutParams(wrap(), dp(44)).withEndMargin(dp(12)))
+        }
+
+        val scroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            clipToPadding = false
+            clipChildren = false
+            addView(chipRow)
+        }
+        row.addView(scroll, LinearLayout.LayoutParams(0, wrap(), 1f))
+        row.addView(searchButton, LinearLayout.LayoutParams(dp(54), dp(54)).withStartMargin(dp(14)))
         return row
     }
 
@@ -433,14 +522,13 @@ class MainActivity : ComponentActivity() {
     private fun searchPanel(state: MediaUiState): View {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(12), 0, 0)
+            setPadding(0, dp(22), 0, 0)
         }
-        panel.addView(label("搜索", 30f, Colors.TextPrimary, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withStartMargin(dp(2)))
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(20), 0, 0)
+            setPadding(0, 0, 0, 0)
         }
         val inputWrap = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -599,76 +687,6 @@ class MainActivity : ComponentActivity() {
         }
         panel.post { input.requestFocus() }
         return panel
-    }
-
-    private fun categoryRail(
-        categories: List<ContentCategory>,
-        selectedId: String?,
-        registerFocusTarget: (HomeFocusTarget, View) -> Unit,
-    ): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(4), 0, dp(4))
-            clipChildren = false
-            clipToPadding = false
-        }
-        categories.forEachIndexed { index, category ->
-            val chip = pill(
-                text = category.title,
-                selected = category.id == selectedId,
-                heightDp = 44,
-                horizontalPaddingDp = 22,
-                onClick = {
-                    cancelPendingCategorySelect()
-                    searchVisible = false
-                    rememberedCategoryId = category.id
-                    homeFocusArea = HomeFocusArea.Category
-                    pendingHomeFocus = HomeFocusTarget.Category(category.id)
-                    viewModel.selectCategory(category)
-                },
-                onFocusChange = { focused ->
-                    if (focused) {
-                        rememberedCategoryId = category.id
-                        homeFocusArea = HomeFocusArea.Category
-                        // 聚焦即加载该分类:无需额外按 OK 确认。用防抖避免
-                        // 左右快速划过分类时每个都触发网络请求,只在停留时切换。
-                        scheduleCategorySelect(category)
-                    }
-                },
-            ).apply {
-                setOnKeyListener { _, keyCode, event ->
-                    if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
-                    when (keyCode) {
-                        KeyEvent.KEYCODE_DPAD_UP -> {
-                            homeFocusArea = HomeFocusArea.Search
-                            requestHomeFocus(HomeFocusTarget.Search)
-                        }
-                        KeyEvent.KEYCODE_DPAD_DOWN -> {
-                            val target = rememberedVideoFocusByCategory[homeCategoryKey(currentState)]
-                                ?.let(HomeFocusTarget::Video)
-                                ?: currentState.items.firstOrNull()?.id?.let(HomeFocusTarget::Video)
-                            if (target != null) {
-                                homeFocusArea = HomeFocusArea.Video
-                                requestHomeFocus(target)
-                            } else {
-                                false
-                            }
-                        }
-                        KeyEvent.KEYCODE_DPAD_LEFT -> index == 0
-                        KeyEvent.KEYCODE_DPAD_RIGHT -> index == categories.lastIndex
-                        else -> false
-                    }
-                }
-            }
-            registerFocusTarget(HomeFocusTarget.Category(category.id), chip)
-            row.addView(chip, LinearLayout.LayoutParams(wrap(), dp(44)).withEndMargin(dp(12)))
-        }
-        return HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            clipToPadding = false
-            clipChildren = false
-            addView(row)
-        }
     }
 
     private fun clearHomeVideoList() {
@@ -954,7 +972,13 @@ class MainActivity : ComponentActivity() {
         private inner class VideoHolder : RecyclerView.ViewHolder(createVideoCardRoot()) {
             private val card: FrameLayout = itemView as FrameLayout
             private val imageWrap = FrameLayout(this@MainActivity).apply {
-                background = rounded(Colors.SurfaceElevated, 14, 1, Colors.GlassBorder)
+                background = roundedGradient(
+                    Colors.PlaceholderTop,
+                    Colors.PlaceholderBottom,
+                    16,
+                    1,
+                    Colors.GlassBorder,
+                )
             }
             private val image = ThumbnailImageView(this@MainActivity)
             private val initials = label("", 42f, Colors.TextTertiary, bold = true, maxLines = 1).apply {
@@ -966,7 +990,7 @@ class MainActivity : ComponentActivity() {
             }
             private val meta = label("", 11f, Color.argb(170, 255, 255, 255), maxLines = 1)
             private val focusIndicator = View(this@MainActivity).apply {
-                setBackgroundColor(Colors.AppleBlue)
+                background = rounded(Colors.AppleBlue, 999)
                 alpha = 0f
             }
             private var boundVideo: VideoSummary? = null
@@ -993,7 +1017,14 @@ class MainActivity : ComponentActivity() {
                     },
                     frameMatch(),
                 )
-                imageWrap.addView(focusIndicator, FrameLayout.LayoutParams(match(), dp(5), Gravity.BOTTOM))
+                imageWrap.addView(
+                    focusIndicator,
+                    FrameLayout.LayoutParams(match(), dp(4), Gravity.BOTTOM).apply {
+                        leftMargin = dp(12)
+                        rightMargin = dp(12)
+                        bottomMargin = dp(0)
+                    },
+                )
                 card.addView(imageWrap, frameMatch())
 
                 val textBlock = LinearLayout(this@MainActivity).apply {
@@ -1006,19 +1037,21 @@ class MainActivity : ComponentActivity() {
                 imageWrap.addView(textBlock, FrameLayout.LayoutParams(match(), wrap(), Gravity.BOTTOM))
 
                 applyCardFocus(card) { focused ->
-                    imageWrap.background = rounded(
-                        if (focused) Colors.GlassFillStrong else Colors.SurfaceElevated,
-                        14,
+                    imageWrap.background = roundedGradient(
+                        if (focused) Colors.SurfaceFocused else Colors.PlaceholderTop,
+                        if (focused) Colors.SurfaceFocused else Colors.PlaceholderBottom,
+                        16,
                         if (focused) 2 else 1,
                         if (focused) Colors.GlassBorderFocused else Colors.GlassBorder,
                     )
+                    imageWrap.elevationCompat(if (focused) dp(14).toFloat() else 0f)
                     val video = boundVideo
                     if (focused && video != null) {
                         homeFocusArea = HomeFocusArea.Video
                         rememberedVideoFocusByCategory[homeCategoryKey(currentState)] = video.id
                     }
                     focusIndicator.animate().cancel()
-                    focusIndicator.animate().alpha(if (focused) 1f else 0f).setDuration(120).start()
+                    focusIndicator.animate().alpha(if (focused) 1f else 0f).setDuration(140).start()
                 }
             }
 
@@ -1070,7 +1103,15 @@ class MainActivity : ComponentActivity() {
 
             fun loadVisibleThumbnail() {
                 val video = boundVideo ?: return
-                loadImage(boundThumbnailUrl, image, initials, video.title, cardWidth, cardHeight)
+                loadImage(
+                    url = boundThumbnailUrl,
+                    headers = video.thumbnailHeaders,
+                    image = image,
+                    placeholder = initials,
+                    title = video.title,
+                    maxWidthPx = cardWidth,
+                    maxHeightPx = cardHeight,
+                )
             }
 
             fun cancelVisibleThumbnail() {
@@ -1132,6 +1173,12 @@ class MainActivity : ComponentActivity() {
             detailFocusTarget = DetailFocusTarget.Play
         }
         val screen = FrameLayout(this).apply { background = appBackground() }
+        // 详情页电影感背景:用海报的重度降采样版本作为全屏模糊背景 + 多层 scrim,
+        // 既呼应内容又保证右侧信息区文字可读(签名 URL 不落盘,仅内存渲染)。
+        val backdrop = ThumbnailImageView(this).apply { alpha = 0f }
+        screen.addView(backdrop, frameMatch())
+        screen.addView(detailBackdropScrim(), frameMatch())
+        loadBackdropImage(details.thumbnailUrl, details.thumbnailHeaders, backdrop)
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1148,7 +1195,14 @@ class MainActivity : ComponentActivity() {
         }
 
         val hero = FrameLayout(this).apply {
-            background = rounded(Colors.SurfaceElevated, 22, 1, Colors.GlassBorder)
+            background = roundedGradient(
+                Colors.PlaceholderTop,
+                Colors.PlaceholderBottom,
+                22,
+                1,
+                Colors.GlassBorder,
+            )
+            elevationCompat(dp(22).toFloat())
         }
         val heroImage = ThumbnailImageView(this)
         val heroInitials = label(details.title.take(2).ifBlank { "影" }, 64f, Colors.TextTertiary, bold = true, maxLines = 1).apply {
@@ -1157,7 +1211,15 @@ class MainActivity : ComponentActivity() {
         }
         hero.addView(heroImage, frameMatch())
         hero.addView(heroInitials, frameMatch())
-        loadImage(details.thumbnailUrl, heroImage, heroInitials, details.title, dp(500), dp(308))
+        loadImage(
+            url = details.thumbnailUrl,
+            headers = details.thumbnailHeaders,
+            image = heroImage,
+            placeholder = heroInitials,
+            title = details.title,
+            maxWidthPx = dp(500),
+            maxHeightPx = dp(308),
+        )
         hero.addView(
             View(this).apply {
                 background = GradientDrawable(
@@ -1181,10 +1243,25 @@ class MainActivity : ComponentActivity() {
             details.creators.firstOrNull(),
         ).joinToString(" · ")
         if (metadata.isNotBlank()) {
-            info.addView(label(metadata, 14f, Colors.TextTertiary, bold = true, maxLines = 1), linearMatch())
+            info.addView(
+                label(metadata, 13f, Colors.TextTertiary, bold = true, maxLines = 1).apply {
+                    letterSpacingCompat(0.04f)
+                },
+                linearMatch(),
+            )
         }
-        info.addView(label(details.title, 34f, Colors.TextPrimary, bold = true, maxLines = 2), linearMatch())
-        info.addView(label(details.description.ifBlank { "暂无简介" }, 17f, Colors.TextSecondary, maxLines = 3), linearMatch())
+        info.addView(
+            label(details.title, 36f, Colors.TextPrimary, bold = true, maxLines = 2).apply {
+                letterSpacingCompat(-0.01f)
+            },
+            LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(if (metadata.isNotBlank()) 10 else 0)),
+        )
+        info.addView(
+            label(details.description.ifBlank { "暂无简介" }, 16f, Colors.TextSecondary, maxLines = 3).apply {
+                setLineSpacing(dp(4).toFloat(), 1f)
+            },
+            LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(12)),
+        )
 
         if (details.description.length > 96) {
             info.addView(
@@ -1284,15 +1361,22 @@ class MainActivity : ComponentActivity() {
     @OptIn(UnstableApi::class)
     private fun renderPlayer(state: MediaUiState) {
         val stream = state.playing ?: return
-        if (currentPlayerUrl == stream.url && root.childCount > 0) return
+        // 恢复流程会先保持旧 stream 并显示 loading,延迟后再刷新 /playback。
+        // 这段期间不要因播放器已进入 IDLE 而立刻重建同一个失败 URL。
+        if (currentPlayerUrl == stream.url && root.childCount > 0) {
+            if (state.loading || player?.playbackState != Player.STATE_IDLE) return
+        }
 
         val playbackUrl = stream.url
+        val requestHeaders = playbackRequestHeaders(stream.headers)
         val dataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(8_000)
             .setReadTimeoutMs(20_000)
-            .setUserAgent(PlaybackUserAgent)
-            .setDefaultRequestProperties(PlaybackRequestHeaders)
+            .setDefaultRequestProperties(requestHeaders)
+        if (!stream.headers.containsHeader("User-Agent")) {
+            dataSourceFactory.setUserAgent(PlaybackUserAgent)
+        }
 
         releasePlayer()
         val nextPlayer = ExoPlayer.Builder(this)
@@ -1322,14 +1406,18 @@ class MainActivity : ComponentActivity() {
                 playWhenReady = true
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
-                        if (playbackState == Player.STATE_ENDED) {
-                            viewModel.playNext()
+                        when (playbackState) {
+                            Player.STATE_READY -> viewModel.playbackReady(stream.id)
+                            Player.STATE_ENDED -> viewModel.playNext()
                         }
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
                         Log.w("MediaCenterPlayer", "Playback failed for ${stream.id}", error)
-                        viewModel.playbackFailed(playbackErrorMessage(error))
+                        viewModel.playbackFailed(
+                            playbackErrorMessage(error),
+                            recoverable = isRecoverablePlaybackError(error),
+                        )
                     }
                 })
                 prepare()
@@ -1487,7 +1575,7 @@ class MainActivity : ComponentActivity() {
             setPlaying(player.playWhenReady && player.playbackState != Player.STATE_ENDED)
         }
         val center = FrameLayout(this).apply {
-            background = rounded(Color.argb(46, 255, 255, 255), 999, 2, Color.argb(140, 255, 255, 255))
+            background = rounded(Color.argb(38, 255, 255, 255), 999, 2, Color.argb(120, 255, 255, 255))
             addView(glyph, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.CENTER))
         }
         overlay.addView(center, FrameLayout.LayoutParams(dp(88), dp(88), Gravity.CENTER))
@@ -1503,13 +1591,19 @@ class MainActivity : ComponentActivity() {
         }
 
         val progressTrack = FrameLayout(this).apply {
-            background = rounded(Color.argb(56, 255, 255, 255), 3)
+            background = rounded(Color.argb(56, 255, 255, 255), 999)
+            clipChildren = false
         }
         val progressFill = View(this).apply {
-            background = rounded(Colors.AppleBlue, 3)
+            background = rounded(Colors.AppleBlue, 999)
         }
-        progressTrack.addView(progressFill, FrameLayout.LayoutParams(0, dp(5), Gravity.START or Gravity.CENTER_VERTICAL))
-        bottom.addView(progressTrack, LinearLayout.LayoutParams(match(), dp(5)))
+        progressTrack.addView(progressFill, FrameLayout.LayoutParams(0, dp(6), Gravity.START or Gravity.CENTER_VERTICAL))
+        val progressKnob = View(this).apply {
+            background = rounded(Color.WHITE, 999)
+            elevationCompat(dp(2).toFloat())
+        }
+        progressTrack.addView(progressKnob, FrameLayout.LayoutParams(dp(14), dp(14), Gravity.START or Gravity.CENTER_VERTICAL))
+        bottom.addView(progressTrack, LinearLayout.LayoutParams(match(), dp(6)))
 
         val controlsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1542,7 +1636,10 @@ class MainActivity : ComponentActivity() {
             val duration = player.duration.takeIf { it > 0 } ?: 0L
             val position = player.currentPosition.coerceAtLeast(0L)
             val fraction = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
-            progressFill.layoutParams = FrameLayout.LayoutParams((progressTrack.width * fraction).toInt(), dp(5), Gravity.START or Gravity.CENTER_VERTICAL)
+            val filledWidth = (progressTrack.width * fraction).toInt()
+            progressFill.layoutParams = FrameLayout.LayoutParams(filledWidth, dp(6), Gravity.START or Gravity.CENTER_VERTICAL)
+            val maxKnobX = (progressTrack.width - dp(14)).coerceAtLeast(0).toFloat()
+            progressKnob.translationX = (filledWidth - dp(14) / 2f).coerceIn(0f, maxKnobX)
             time.text = "${formatTime(position)} / ${formatTime(duration)}"
         }
         val progressTick = object : Runnable {
@@ -1590,9 +1687,19 @@ class MainActivity : ComponentActivity() {
                 setPadding(dp(28), dp(24), dp(28), dp(24))
                 background = rounded(Colors.SurfaceElevated, 24, 1, Colors.GlassBorder)
             }
-            card.addView(label(title, 24f, Colors.TextPrimary, bold = true, maxLines = 2), linearMatch())
+            card.addView(
+                label(title, 24f, Colors.TextPrimary, bold = true, maxLines = 2).apply {
+                    letterSpacingCompat(-0.01f)
+                },
+                linearMatch(),
+            )
             val scroll = ScrollView(this@MainActivity)
-            scroll.addView(label(description, 17f, Colors.TextSecondary, maxLines = Int.MAX_VALUE), frameMatch())
+            scroll.addView(
+                label(description, 17f, Colors.TextSecondary, maxLines = Int.MAX_VALUE).apply {
+                    setLineSpacing(dp(6).toFloat(), 1f)
+                },
+                frameMatch(),
+            )
             card.addView(scroll, LinearLayout.LayoutParams(match(), 0, 1f).withTopMargin(dp(12)))
             val close = pill("关闭", selected = true, heightDp = 48, horizontalPaddingDp = 28) { dismiss() }.apply {
                 setOnKeyListener { _, keyCode, event ->
@@ -1620,7 +1727,30 @@ class MainActivity : ComponentActivity() {
 
     private fun setContent(view: View) {
         root.removeAllViews()
+        playerRetryOverlay = null
         root.addView(view, frameMatch())
+    }
+
+    // 自动恢复进行中(loading 且仍在播放页)时,在播放画面上盖一层“正在重试…”提示;
+    // 恢复结束(重建播放器或退出播放页)后移除。setContent 会清空 root,因此一并清引用。
+    private fun updatePlayerRetryOverlay(show: Boolean) {
+        if (show) {
+            if (playerRetryOverlay == null) {
+                val scrim = FrameLayout(this).apply {
+                    setBackgroundColor(Color.argb(140, 0, 0, 0))
+                    isClickable = false
+                    addView(
+                        centeredLoading("正在重试…"),
+                        FrameLayout.LayoutParams(wrap(), wrap(), Gravity.CENTER),
+                    )
+                }
+                playerRetryOverlay = scrim
+                root.addView(scrim, frameMatch())
+            }
+        } else {
+            playerRetryOverlay?.let { root.removeView(it) }
+            playerRetryOverlay = null
+        }
     }
 
     private fun releasePlayer() {
@@ -1721,14 +1851,34 @@ class MainActivity : ComponentActivity() {
 
     private fun errorState(message: String, onRetry: () -> Unit): View {
         val card = LinearLayout(this).apply {
-            gravity = Gravity.CENTER
+            gravity = Gravity.CENTER_HORIZONTAL
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(34), dp(28), dp(34), dp(28))
-            background = rounded(Colors.SurfaceElevated, 28, 1, Colors.GlassBorder)
+            setPadding(dp(44), dp(40), dp(44), dp(36))
+            background = roundedGradient(Colors.SurfaceFocused, Colors.SurfaceElevated, 30, 1, Colors.GlassBorder)
+            minimumWidth = dp(360)
+            elevationCompat(dp(18).toFloat())
         }
-        card.addView(label(message, 18f, Colors.TextPrimary, bold = true, maxLines = 3), linearWrap())
-        val retry = pill("重试", selected = true, heightDp = 50, horizontalPaddingDp = 32, onClick = onRetry)
-        card.addView(retry, LinearLayout.LayoutParams(wrap(), dp(50)).withTopMargin(dp(16)))
+        val iconWrap = FrameLayout(this).apply {
+            background = rounded(Colors.GlassFill, 999, 1, Colors.GlassBorder)
+        }
+        iconWrap.addView(WarningGlyphView(this), FrameLayout.LayoutParams(dp(30), dp(30), Gravity.CENTER))
+        card.addView(iconWrap, LinearLayout.LayoutParams(dp(64), dp(64)))
+        card.addView(
+            label("加载失败", 20f, Colors.TextPrimary, bold = true, maxLines = 1).apply {
+                gravity = Gravity.CENTER
+            },
+            LinearLayout.LayoutParams(wrap(), wrap()).withTopMargin(dp(16)),
+        )
+        card.addView(
+            label(message, 15f, Colors.TextSecondary, maxLines = 3).apply {
+                gravity = Gravity.CENTER
+                maxWidth = dp(320)
+                setLineSpacing(dp(3).toFloat(), 1f)
+            },
+            LinearLayout.LayoutParams(wrap(), wrap()).withTopMargin(dp(8)),
+        )
+        val retry = primaryPill("重试", heightDp = 50, horizontalPaddingDp = 40, onClick = onRetry)
+        card.addView(retry, LinearLayout.LayoutParams(wrap(), dp(50)).withTopMargin(dp(24)))
         retry.post { retry.requestFocus() }
         return centeredCard(card)
     }
@@ -1861,8 +2011,9 @@ class MainActivity : ComponentActivity() {
                 if (focused) 3 else 1,
                 if (focused) Colors.GlassBorderFocused else Colors.GlassBorder,
             )
+            button.elevationCompat(if (focused) dp(8).toFloat() else 0f)
             button.animate().cancel()
-            button.animate().scaleX(if (focused) 1.08f else 1f).scaleY(if (focused) 1.08f else 1f).setDuration(120).start()
+            button.animate().scaleX(if (focused) 1.08f else 1f).scaleY(if (focused) 1.08f else 1f).setDuration(140).start()
         }
         update(false)
         button.setOnFocusChangeListener { _, focused ->
@@ -1912,11 +2063,12 @@ class MainActivity : ComponentActivity() {
                 if (focused) 3 else 0,
                 if (focused) Colors.GlassBorderFocused else Color.TRANSPARENT,
             )
+            row.elevationCompat(if (focused) dp(10).toFloat() else dp(2).toFloat())
             val contentColor = if (focused) Colors.TextPrimary else Colors.DeepSpace
             textView.setTextColor(contentColor)
             iconView?.setIconColor(contentColor)
             row.animate().cancel()
-            row.animate().scaleX(if (focused) 1.04f else 1f).scaleY(if (focused) 1.04f else 1f).setDuration(120).start()
+            row.animate().scaleX(if (focused) 1.05f else 1f).scaleY(if (focused) 1.05f else 1f).setDuration(140).start()
         }
         update(false)
         row.setOnFocusChangeListener { _, focused ->
@@ -1967,6 +2119,7 @@ class MainActivity : ComponentActivity() {
                 selected -> rounded(Colors.GlassFillStrong, 999, 2, Colors.AppleBlue)
                 else -> rounded(Colors.GlassFill, 999, 1, Colors.GlassBorder)
             }
+            view.elevationCompat(if (focused) dp(8).toFloat() else 0f)
             setContentColor(
                 when {
                     focused -> Colors.TextPrimary
@@ -1975,7 +2128,7 @@ class MainActivity : ComponentActivity() {
                 },
             )
             view.animate().cancel()
-            view.animate().scaleX(if (focused) 1.06f else 1f).scaleY(if (focused) 1.06f else 1f).setDuration(120).start()
+            view.animate().scaleX(if (focused) 1.06f else 1f).scaleY(if (focused) 1.06f else 1f).setDuration(140).start()
         }
         update(false)
         view.setOnFocusChangeListener { _, focused ->
@@ -1989,9 +2142,8 @@ class MainActivity : ComponentActivity() {
         onFocusChange: ((Boolean) -> Unit)? = null,
     ) {
         fun update(focused: Boolean) {
-            view.background = rounded(Color.TRANSPARENT, 18, if (focused) 3 else 0, if (focused) Colors.GlassBorderFocused else Color.TRANSPARENT)
             view.animate().cancel()
-            view.animate().scaleX(if (focused) 1.04f else 1f).scaleY(if (focused) 1.04f else 1f).setDuration(120).start()
+            view.animate().scaleX(if (focused) 1.06f else 1f).scaleY(if (focused) 1.06f else 1f).setDuration(140).start()
         }
         update(false)
         view.setOnFocusChangeListener { _, focused ->
@@ -2002,6 +2154,7 @@ class MainActivity : ComponentActivity() {
 
     private fun loadImage(
         url: String?,
+        headers: Map<String, String>,
         image: ThumbnailImageView,
         placeholder: View,
         title: String,
@@ -2031,6 +2184,7 @@ class MainActivity : ComponentActivity() {
                 val bitmap = ThumbnailFetchSemaphore.withPermit {
                     fetchBitmap(
                         url = imageUrl,
+                        headers = headers,
                         maxWidthPx = maxWidthPx.coerceAtLeast(dp(160)),
                         maxHeightPx = maxHeightPx.coerceAtLeast(dp(120)),
                     )
@@ -2051,15 +2205,71 @@ class MainActivity : ComponentActivity() {
         image.trackThumbnailLoad(job, detachListener)
     }
 
+    // 详情页模糊背景:复用缩略图字节,降采样到极小尺寸后由 ImageView 双线性放大近似模糊
+    // (minSdk=19,无法用 RenderEffect)。背景位图单独按 "backdrop:" key 缓存,只在内存渲染。
+    private fun loadBackdropImage(
+        url: String?,
+        headers: Map<String, String>,
+        target: ThumbnailImageView,
+    ) {
+        val imageUrl = url?.takeIf { it.isNotBlank() } ?: return
+        val cacheKey = "backdrop:$imageUrl"
+        target.tag = cacheKey
+        ImageMemoryCache.get(cacheKey)?.let {
+            target.setThumbnailBitmap(it)
+            target.animate().alpha(BackdropAlpha).setDuration(420).start()
+            return
+        }
+        val detachListener = object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) = Unit
+
+            override fun onViewDetachedFromWindow(view: View) {
+                target.cancelThumbnailLoad()
+            }
+        }
+        val job = lifecycleScope.launch {
+            try {
+                val bitmap = ThumbnailFetchSemaphore.withPermit {
+                    val bytes = fetchThumbnailBytesWithRetry(imageUrl, headers)
+                    withContext(Dispatchers.Default) {
+                        // 固定极小目标像素(不随密度),放大后形成柔和模糊。
+                        decodeSampledBitmap(bytes, 48, 48)
+                    }
+                }
+                if (bitmap != null) {
+                    ImageMemoryCache.put(cacheKey, bitmap)
+                    if (target.tag == cacheKey) {
+                        target.setThumbnailBitmap(bitmap)
+                        target.animate().alpha(BackdropAlpha).setDuration(420).start()
+                    }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: IOException) {
+                Log.w("MediaCenterImage", "Backdrop request failed", error)
+            } catch (error: RuntimeException) {
+                Log.w("MediaCenterImage", "Backdrop request failed", error)
+            } finally {
+                target.clearThumbnailLoad(job = coroutineContext[Job])
+            }
+        }
+        target.trackThumbnailLoad(job, detachListener)
+    }
+
     private fun setPlaceholderVisible(placeholder: View, visible: Boolean) {
         placeholder.animate().cancel()
         placeholder.visibility = View.VISIBLE
         placeholder.alpha = if (visible) 1f else 0f
     }
 
-    private suspend fun fetchBitmap(url: String, maxWidthPx: Int, maxHeightPx: Int): Bitmap? {
+    private suspend fun fetchBitmap(
+        url: String,
+        headers: Map<String, String>,
+        maxWidthPx: Int,
+        maxHeightPx: Int,
+    ): Bitmap? {
         return try {
-            val bytes = fetchThumbnailBytesWithRetry(url)
+            val bytes = fetchThumbnailBytesWithRetry(url, headers)
             withContext(Dispatchers.Default) {
                 decodeSampledBitmap(bytes, maxWidthPx, maxHeightPx)
             }
@@ -2079,11 +2289,14 @@ class MainActivity : ComponentActivity() {
 
     // asset 代理回源偶发瞬时 5xx(典型为 Cloudflare error code: 502),对瞬时失败做
     // 有限指数退避重试,缓存命中后通常即可恢复,避免直接降级为占位图。
-    private suspend fun fetchThumbnailBytesWithRetry(url: String): ByteArray {
+    private suspend fun fetchThumbnailBytesWithRetry(
+        url: String,
+        headers: Map<String, String>,
+    ): ByteArray {
         var attempt = 0
         while (true) {
             try {
-                return fetchThumbnailBytes(url)
+                return fetchThumbnailBytes(url, headers)
             } catch (error: ThumbnailHttpException) {
                 if (!error.isTransient || attempt >= MaxThumbnailRetries) throw error
             } catch (error: CancellationException) {
@@ -2096,13 +2309,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun fetchThumbnailBytes(url: String): ByteArray = suspendCancellableCoroutine { continuation ->
-        val request = Request.Builder()
+    private suspend fun fetchThumbnailBytes(
+        url: String,
+        headers: Map<String, String>,
+    ): ByteArray = suspendCancellableCoroutine { continuation ->
+        val requestBuilder = Request.Builder()
             .url(url)
             .get()
-            .header("Accept", "image/*,*/*;q=0.8")
-            .header("User-Agent", PlaybackUserAgent)
-            .build()
+        if (!headers.containsHeader("Accept")) {
+            requestBuilder.header("Accept", "image/*,*/*;q=0.8")
+        }
+        if (!headers.containsHeader("User-Agent")) {
+            requestBuilder.header("User-Agent", PlaybackUserAgent)
+        }
+        headers.forEach { (name, value) ->
+            requestBuilder.header(name, value)
+        }
+        val request = requestBuilder.build()
         val call = ThumbnailHttpClient.newCall(request)
         continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
@@ -2183,11 +2406,48 @@ class MainActivity : ComponentActivity() {
         return sampleSize
     }
 
-    private fun appBackground(): GradientDrawable {
-        return GradientDrawable(
+    private fun appBackground(): Drawable {
+        val base = GradientDrawable(
             GradientDrawable.Orientation.TOP_BOTTOM,
-            intArrayOf(Colors.HeroGradientTop, Colors.DeepSpace),
+            intArrayOf(Colors.BackgroundTop, Colors.BackgroundMid, Colors.DeepSpace),
         )
+        // 顶部中央叠一层极淡的 Apple-Blue 径向柔光,增加纵深而不引入新色相。
+        val glow = GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(Colors.AccentGlow, Color.TRANSPARENT),
+        ).apply {
+            gradientType = GradientDrawable.RADIAL_GRADIENT
+            gradientRadius = dp(560).toFloat()
+            setGradientCenter(0.5f, 0f)
+        }
+        return LayerDrawable(arrayOf(base, glow))
+    }
+
+    private fun detailBackdropScrim(): View {
+        val scrim = FrameLayout(this)
+        scrim.addView(
+            View(this).apply { setBackgroundColor(Color.argb(118, 5, 7, 13)) },
+            frameMatch(),
+        )
+        scrim.addView(
+            View(this).apply {
+                background = GradientDrawable(
+                    GradientDrawable.Orientation.LEFT_RIGHT,
+                    intArrayOf(Color.TRANSPARENT, Color.argb(150, 5, 7, 13)),
+                )
+            },
+            frameMatch(),
+        )
+        scrim.addView(
+            View(this).apply {
+                background = GradientDrawable(
+                    GradientDrawable.Orientation.BOTTOM_TOP,
+                    intArrayOf(Color.argb(232, 0, 0, 0), Color.TRANSPARENT),
+                )
+            },
+            frameMatch(),
+        )
+        return scrim
     }
 
     private fun rounded(
@@ -2200,6 +2460,34 @@ class MainActivity : ComponentActivity() {
             setColor(color)
             cornerRadius = dp(radiusDp).toFloat()
             if (strokeDp > 0) setStroke(dp(strokeDp), strokeColor)
+        }
+    }
+
+    private fun roundedGradient(
+        topColor: Int,
+        bottomColor: Int,
+        radiusDp: Int,
+        strokeDp: Int = 0,
+        strokeColor: Int = Color.TRANSPARENT,
+    ): GradientDrawable {
+        return GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(topColor, bottomColor),
+        ).apply {
+            cornerRadius = dp(radiusDp).toFloat()
+            if (strokeDp > 0) setStroke(dp(strokeDp), strokeColor)
+        }
+    }
+
+    private fun View.elevationCompat(value: Float) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            elevation = value
+        }
+    }
+
+    private fun TextView.letterSpacingCompat(value: Float) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            letterSpacing = value
         }
     }
 
@@ -2275,17 +2563,22 @@ class MainActivity : ComponentActivity() {
 
 private object Colors {
     const val DeepSpace: Int = 0xFF000000.toInt()
+    const val BackgroundTop: Int = 0xFF15182B.toInt()
+    const val BackgroundMid: Int = 0xFF0A0B12.toInt()
     const val SurfaceElevated: Int = 0xFF0E1014.toInt()
+    const val SurfaceFocused: Int = 0xFF181C26.toInt()
     const val GlassBorderFocused: Int = 0xFFE5E5E7.toInt()
     const val TextPrimary: Int = 0xFFF5F5F7.toInt()
     const val TextSecondary: Int = 0xFFB0B3B8.toInt()
     const val TextTertiary: Int = 0xFF86868B.toInt()
     const val TextDanger: Int = 0xFFFF453A.toInt()
     const val AppleBlue: Int = 0xFF0A84FF.toInt()
-    const val HeroGradientTop: Int = 0xFF111324.toInt()
+    val AccentGlow: Int = Color.argb(48, 10, 132, 255)
     val GlassFill: Int = Color.argb(20, 255, 255, 255)
     val GlassFillStrong: Int = Color.argb(31, 255, 255, 255)
     val GlassBorder: Int = Color.argb(32, 255, 255, 255)
+    val PlaceholderTop: Int = Color.argb(255, 28, 32, 44)
+    val PlaceholderBottom: Int = Color.argb(255, 12, 14, 20)
 }
 
 private object ImageMemoryCache {
@@ -2523,16 +2816,45 @@ private class ChevronDownView(context: Context) : View(context) {
     }
 }
 
+private class WarningGlyphView(context: Context) : View(context) {
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Colors.TextSecondary
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val markPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Colors.TextSecondary
+        style = Paint.Style.FILL
+    }
+    private val stem = RectF()
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val cx = w * 0.5f
+        val cy = h * 0.5f
+        val radius = w.coerceAtMost(h) * 0.42f
+        ringPaint.strokeWidth = (w.coerceAtMost(h) * 0.085f).coerceAtLeast(2f)
+        canvas.drawCircle(cx, cy, radius, ringPaint)
+        val stemHalf = (w.coerceAtMost(h) * 0.05f).coerceAtLeast(1.5f)
+        stem.set(cx - stemHalf, h * 0.28f, cx + stemHalf, h * 0.58f)
+        canvas.drawRoundRect(stem, stemHalf, stemHalf, markPaint)
+        canvas.drawCircle(cx, h * 0.70f, stemHalf * 1.15f, markPaint)
+    }
+}
+
 private const val PlaybackUserAgent =
     "Mozilla/5.0 (Linux; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 private const val MaxPlaybackRetries = 3
 private const val MaxThumbnailBytes = 6 * 1024 * 1024
+private const val BackdropAlpha = 0.55f
 // 瞬时 5xx/网络抖动最多重试 2 次,退避 400ms / 1200ms,总附加等待 ≤ 1.6s。
 private const val MaxThumbnailRetries = 2
 private val ThumbnailRetryBackoffMs = longArrayOf(400L, 1200L)
 
 private class ThumbnailHttpException(val code: Int) : IOException("Thumbnail HTTP $code") {
-    val isTransient: Boolean get() = code == 408 || code == 425 || code == 429 || code in 500..599
+    val isTransient: Boolean get() = code.isTransientHttpStatusCode()
 }
 private const val ViewTypeVideo = 1
 private const val ViewTypeFooter = 2
@@ -2544,16 +2866,31 @@ private val ThumbnailHttpClient = OkHttpClient.Builder()
     .readTimeout(15, TimeUnit.SECONDS)
     .followRedirects(true)
     .build()
-private val PlaybackRequestHeaders = mapOf(
+private val PlaybackRequestHeaderDefaults = mapOf(
     "Accept" to "*/*",
     "Accept-Language" to "zh-CN,zh;q=0.9,en;q=0.8",
 )
+
+private fun playbackRequestHeaders(companionHeaders: Map<String, String>): Map<String, String> {
+    if (companionHeaders.isEmpty()) return PlaybackRequestHeaderDefaults
+    val requestHeaders = LinkedHashMap<String, String>(companionHeaders)
+    PlaybackRequestHeaderDefaults.forEach { (name, value) ->
+        if (!requestHeaders.containsHeader(name)) {
+            requestHeaders[name] = value
+        }
+    }
+    return requestHeaders
+}
+
+private fun Map<String, String>.containsHeader(name: String): Boolean =
+    keys.any { it.equals(name, ignoreCase = true) }
 
 private fun playbackErrorMessage(error: PlaybackException): String {
     val responseCode = error.findCause<HttpDataSource.InvalidResponseCodeException>()?.responseCode
     return when (responseCode) {
         401, 403 -> "播放地址已失效或被拒绝，请重试"
         404, 410 -> "播放资源不可用，请重试或换个视频"
+        502, 503, 504 -> "该视频来源暂不可用，请稍后重试或换个视频"
         else -> when (error.errorCode) {
             PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
             PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
@@ -2568,6 +2905,14 @@ private fun playbackErrorMessage(error: PlaybackException): String {
             else -> "视频播放失败，请稍后重试"
         }
     }
+}
+
+// 过期/拒绝的短期播放 URL(401/403),以及网关超时/限流/瞬时 5xx 都可通过
+// 刷新 /playback 拿到新地址后恢复,不应直接弹回详情页。
+private fun isRecoverablePlaybackError(error: PlaybackException): Boolean {
+    val responseCode = error.findCause<HttpDataSource.InvalidResponseCodeException>()?.responseCode
+        ?: return false
+    return responseCode == 401 || responseCode == 403 || responseCode.isTransientHttpStatusCode()
 }
 
 private fun playbackMimeType(mimeType: String?): String {

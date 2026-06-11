@@ -35,7 +35,15 @@ class MediaRepository(
         cacheScope: VideoDetailsCacheScope = VideoDetailsCacheScope.Category,
     ): VideoDetails {
         val cache = detailsCacheFor(cacheScope)
-        cache?.get(video)?.let { return it }
+        // 缓存不持久化 thumbnailHeaders/thumbnailUrl (签名 URL 不落盘)。
+        // toVideoDetails() 已用 video 的值做 fallback;这里补充与 API 路径相同的
+        // 归一化,保持两条路径结构一致。
+        cache?.get(video)?.let { cached ->
+            return cached.copy(
+                thumbnailUrl = cached.thumbnailUrl ?: video.thumbnailUrl,
+                thumbnailHeaders = cached.thumbnailHeaders.ifEmpty { video.thumbnailHeaders },
+            )
+        }
         val details = try {
             api.details(video.id)
         } catch (error: Throwable) {
@@ -49,6 +57,8 @@ class MediaRepository(
         require(details.videoKind == "vod") { "当前只支持普通视频点播" }
         val normalizedDetails = details.copy(
             thumbnailUrl = details.thumbnailUrl ?: video.thumbnailUrl,
+            thumbnailHeaders = details.thumbnailHeaders.ifEmpty { video.thumbnailHeaders },
+            thumbnailDelivery = if (details.thumbnailUrl != null) details.thumbnailDelivery else video.thumbnailDelivery,
         )
         cache?.put(normalizedDetails)
         return normalizedDetails
@@ -85,6 +95,8 @@ class MediaRepository(
             year = year,
             creators = creators,
             thumbnailUrl = thumbnailUrl,
+            thumbnailHeaders = thumbnailHeaders,
+            thumbnailDelivery = thumbnailDelivery,
             durationSeconds = durationSeconds,
             playbackKind = playbackKind,
             playbackOptions = emptyList(),

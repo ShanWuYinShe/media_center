@@ -102,7 +102,9 @@ class MediaApi(
                 attempt++
             }
         }
-        throw lastError ?: IOException("未知网络错误")
+        // 走到这里只可能是网络层 IOException 重试耗尽(瞬时 5xx 在上方已直接抛出),
+        // 统一包装成面向用户的友好文案,同时保留原始异常便于排查。
+        throw IOException(NETWORK_FAILURE_MESSAGE, lastError)
     }
 
     private suspend fun execute(request: Request): String = suspendCancellableCoroutine { continuation ->
@@ -146,12 +148,13 @@ class MediaApi(
         return ApiException(
             statusCode = statusCode,
             errorCode = apiError?.code,
-            errorMessage = apiError?.message ?: "HTTP $statusCode",
+            errorMessage = apiError?.message ?: statusCode.toFriendlyHttpMessage(),
         )
     }
 
     private companion object {
         const val MAX_RETRIES = 2
+        const val NETWORK_FAILURE_MESSAGE = "网络连接失败，请检查网络后重试"
         val RETRY_BACKOFF_MS = longArrayOf(500L, 1500L)
     }
 }
@@ -161,10 +164,10 @@ class ApiException(
     val errorCode: String?,
     errorMessage: String,
 ) : Exception(errorMessage) {
-    // 与缩略图加载器(ThumbnailHttpException.isTransient)口径一致：
-    // 408/425/429 与 5xx 视为瞬时,可重试;其余 4xx 为业务错误,不重试。
+    // 口径统一见 [isTransientHttpStatusCode]：408/425/429 与 5xx 视为瞬时,可重试;
+    // 其余 4xx 为业务错误,不重试。
     val isTransient: Boolean
-        get() = statusCode == 408 || statusCode == 425 || statusCode == 429 || statusCode in 500..599
+        get() = statusCode.isTransientHttpStatusCode()
 }
 
 internal val Throwable.isNoPlayableStream: Boolean

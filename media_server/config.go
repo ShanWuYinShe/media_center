@@ -15,6 +15,8 @@ type AppConfig struct {
 	Port             string
 	CategoriesPath   string
 	SigningKey       string
+	PublicBaseURL    string
+	AssetURLTTL      time.Duration
 	ProviderTimeout  time.Duration
 	MaxCategoryPages int
 }
@@ -25,6 +27,8 @@ func loadAppConfig() (AppConfig, error) {
 		Port:             getenv("PORT", "8787"),
 		CategoriesPath:   firstNonEmpty(os.Getenv("CONTENT_CATEGORIES_FILE"), os.Getenv("MEDIA_SERVER_CONTENT_CATEGORIES_FILE"), "src/contentCategories.json"),
 		SigningKey:       firstNonEmpty(os.Getenv("MEDIA_SERVER_SIGNING_KEY"), os.Getenv("MEDIA_ASSET_SIGNING_KEY")),
+		PublicBaseURL:    normalizeBaseURL(firstNonEmpty(os.Getenv("MEDIA_SERVER_PUBLIC_URL"), os.Getenv("PUBLIC_BASE_URL"))),
+		AssetURLTTL:      durationFromSeconds(os.Getenv("MEDIA_SERVER_ASSET_URL_TTL_SECONDS"), 6*time.Hour),
 		ProviderTimeout:  durationFromMillis(os.Getenv("PROVIDER_FETCH_TIMEOUT_MS"), 15*time.Second),
 		MaxCategoryPages: positiveInt(os.Getenv("MEDIA_SERVER_CATEGORY_MAX_PAGES"), 6),
 	}
@@ -38,29 +42,29 @@ func loadAppConfig() (AppConfig, error) {
 	return cfg, nil
 }
 
-func loadCategories(path string) ([]ContentCategory, error) {
+func loadCategories(path string) ([]ContentCategory, []sourceConfig, error) {
 	rawBytes, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read categories config: %w", err)
+		return nil, nil, fmt.Errorf("read categories config: %w", err)
 	}
 	var raw rawConfig
 	if err := json.Unmarshal(rawBytes, &raw); err != nil {
-		return nil, fmt.Errorf("decode categories config: %w", err)
+		return nil, nil, fmt.Errorf("decode categories config: %w", err)
 	}
 	if !bilibiliEnabled(raw.Sources) {
-		return nil, fmt.Errorf("contentCategories.json currently must enable bilibili")
+		return nil, nil, fmt.Errorf("contentCategories.json currently must enable bilibili")
 	}
 	if len(raw.Categories) == 0 {
-		return nil, fmt.Errorf("contentCategories.json must include at least one category")
+		return nil, nil, fmt.Errorf("contentCategories.json must include at least one category")
 	}
 	seen := make(map[string]struct{}, len(raw.Categories))
 	categories := make([]ContentCategory, 0, len(raw.Categories))
 	for _, item := range raw.Categories {
 		if item.ID == "" || item.Title == "" || item.Description == "" {
-			return nil, fmt.Errorf("category id/title/description must be non-empty")
+			return nil, nil, fmt.Errorf("category id/title/description must be non-empty")
 		}
 		if _, ok := seen[item.ID]; ok {
-			return nil, fmt.Errorf("duplicate category id: %s", item.ID)
+			return nil, nil, fmt.Errorf("duplicate category id: %s", item.ID)
 		}
 		seen[item.ID] = struct{}{}
 		query := strings.TrimSpace(item.SearchQuery)
@@ -68,7 +72,7 @@ func loadCategories(path string) ([]ContentCategory, error) {
 			query = strings.TrimSpace(item.Keywords[0])
 		}
 		if query == "" {
-			return nil, fmt.Errorf("category %s must define searchQuery or keywords", item.ID)
+			return nil, nil, fmt.Errorf("category %s must define searchQuery or keywords", item.ID)
 		}
 		categories = append(categories, ContentCategory{
 			ID:            item.ID,
@@ -80,7 +84,40 @@ func loadCategories(path string) ([]ContentCategory, error) {
 			Excludes:      trimStrings(item.Excludes),
 		})
 	}
-	return categories, nil
+	return categories, raw.Sources, nil
+}
+
+// defaultSourceDirect 是各内置源“国内是否可直连”的默认判断：
+// 国内源(bilibili)默认直连；国外源默认走服务端代理。
+var defaultSourceDirect = map[string]bool{
+	"bilibili":         true,
+	"youtube":          false,
+	"internet-archive": false,
+}
+
+// sourceDeliveryMode 解析某个源的 delivery 模式。优先用配置里的 direct 显式值，
+// 其次用内置默认；未知源默认走代理(proxy)，对国内访问更安全。
+func sourceDeliveryMode(sources []sourceConfig, id string) string {
+	for _, source := range sources {
+		if source.ID != id {
+			continue
+		}
+		if source.Direct != nil {
+			return deliveryModeFromDirect(*source.Direct)
+		}
+		break
+	}
+	if direct, ok := defaultSourceDirect[id]; ok {
+		return deliveryModeFromDirect(direct)
+	}
+	return DeliveryProxy
+}
+
+func deliveryModeFromDirect(direct bool) string {
+	if direct {
+		return DeliveryDirect
+	}
+	return DeliveryProxy
 }
 
 func bilibiliEnabled(sources []sourceConfig) bool {
@@ -112,6 +149,23 @@ func durationFromMillis(raw string, fallback time.Duration) time.Duration {
 	}
 	ms := positiveInt(raw, int(fallback/time.Millisecond))
 	return time.Duration(ms) * time.Millisecond
+}
+
+func durationFromSeconds(raw string, fallback time.Duration) time.Duration {
+	if raw == "" {
+		return fallback
+	}
+	seconds := positiveInt(raw, int(fallback/time.Second))
+	return time.Duration(seconds) * time.Second
+}
+
+// normalizeBaseURL 去掉末尾斜杠，便于后续拼接 /asset。空值原样返回。
+func normalizeBaseURL(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	return strings.TrimRight(trimmed, "/")
 }
 
 func getenv(key, fallback string) string {
