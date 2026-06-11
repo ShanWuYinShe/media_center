@@ -2,6 +2,7 @@ package com.example.mediacenter
 
 import android.app.Dialog
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -343,6 +344,10 @@ class MainActivity : ComponentActivity() {
             setPadding(0, dp(22), 0, dp(12))
             clipChildren = false
             clipToPadding = false
+            // 分类栏作为吸顶头:用不透明背景 + 高于卡片(聚焦卡片 elevation 为 dp14)的
+            // elevation,保证向上滚动的视频卡片绘制在分类栏“之下”,不会盖住分类。
+            setBackgroundColor(Colors.BackgroundTop)
+            elevationCompat(dp(20).toFloat())
         }
 
         val searchButton = circleIconButton(
@@ -766,8 +771,12 @@ class MainActivity : ComponentActivity() {
             this.adapter = adapter
             descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
             isFocusable = false
+            // clipToPadding=false 让首/末行聚焦放大有呼吸空间;clipChildren=true 把
+            // 滚动出顶部的卡片裁掉,避免内容向上溢出盖住分类栏(分类栏是 LinearLayout
+            // 中更靠前的兄弟,默认会被靠后的列表绘制覆盖)。顶部 padding 已留出聚焦
+            // 放大所需的余量,首行 1.06x 放大不会被裁。
             clipToPadding = false
-            clipChildren = false
+            clipChildren = true
             setPadding(0, dp(16), 0, dp(32))
             itemAnimator = null
             setItemViewCacheSize(0)
@@ -1526,6 +1535,14 @@ class MainActivity : ComponentActivity() {
             setBackgroundColor(Color.BLACK)
         }
         screen.addView(playerView, frameMatch())
+        // 缓冲指示:独立于自动隐藏的控制层,只要播放器处于 BUFFERING 就常驻显示,
+        // 避免控制层淡出后用户以为卡死。
+        val bufferingSpinner = ProgressBar(this).apply {
+            isIndeterminate = true
+            indeterminateTintList = ColorStateList.valueOf(Colors.AppleBlue)
+            visibility = if (nextPlayer.playbackState == Player.STATE_BUFFERING) View.VISIBLE else View.GONE
+        }
+        screen.addView(bufferingSpinner, FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER))
         screen.addView(overlay, frameMatch())
         nextPlayer.addListener(object : Player.Listener {
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
@@ -1533,6 +1550,8 @@ class MainActivity : ComponentActivity() {
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
+                bufferingSpinner.visibility =
+                    if (playbackState == Player.STATE_BUFFERING) View.VISIBLE else View.GONE
                 syncOverlayVisibilityForPlaybackState()
             }
         })
@@ -1549,67 +1568,104 @@ class MainActivity : ComponentActivity() {
         val nextTitle = if (playingIndex >= 0 && playingIndex + 1 < state.items.size) state.items[playingIndex + 1].title else null
         val hasPrevious = previousTitle != null
         val hasNext = nextTitle != null || state.canLoadMore
+        val videoTitle = state.playingVideo?.title?.takeIf { it.isNotBlank() } ?: "正在播放"
         val overlay = FrameLayout(this)
+
+        // ---------------------- 顶部:标题 + 状态 ----------------------
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.TOP
-            setPadding(dp(56), dp(28), dp(56), dp(48))
+            setPadding(dp(56), dp(36), dp(56), dp(72))
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(Color.argb(166, 0, 0, 0), Color.TRANSPARENT),
+                intArrayOf(Color.argb(204, 0, 0, 0), Color.TRANSPARENT),
             )
         }
-        fun playbackStatusText(): String {
-            val status = when {
-                player.playbackState == Player.STATE_ENDED -> "已结束"
-                player.playWhenReady -> "播放中"
-                else -> "已暂停"
-            }
-            return "$status · ${stream.label.ifBlank { "默认" }}"
+        top.addView(
+            label(videoTitle, 26f, Colors.TextPrimary, bold = true, maxLines = 2).apply {
+                letterSpacingCompat(-0.01f)
+            },
+            linearMatch(),
+        )
+        val statusDot = View(this).apply { background = rounded(Colors.AppleBlue, 999) }
+        val statusText = label("", 15f, Colors.TextSecondary, bold = true, maxLines = 1)
+        val statusRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(statusDot, LinearLayout.LayoutParams(dp(9), dp(9)).withEndMargin(dp(10)))
+            addView(statusText, linearWrap())
         }
-        val playbackStatus = label(playbackStatusText(), 18f, Color.WHITE, bold = true, maxLines = 1)
-        top.addView(playbackStatus, linearMatch())
+        top.addView(statusRow, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(14)))
         overlay.addView(top, FrameLayout.LayoutParams(match(), wrap(), Gravity.TOP))
 
-        val glyph = PlaybackGlyphView(this).apply {
-            setPlaying(player.playWhenReady && player.playbackState != Player.STATE_ENDED)
-        }
-        val center = FrameLayout(this).apply {
-            background = rounded(Color.argb(38, 255, 255, 255), 999, 2, Color.argb(120, 255, 255, 255))
-            addView(glyph, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.CENTER))
-        }
-        overlay.addView(center, FrameLayout.LayoutParams(dp(88), dp(88), Gravity.CENTER))
-
+        // ---------------------- 底部:玻璃传输栏 ----------------------
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.BOTTOM
-            setPadding(dp(56), dp(48), dp(56), dp(28))
+            setPadding(dp(56), dp(96), dp(56), dp(40))
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(Color.TRANSPARENT, Color.argb(184, 0, 0, 0)),
+                intArrayOf(Color.TRANSPARENT, Color.argb(214, 0, 0, 0)),
             )
         }
 
-        val progressTrack = FrameLayout(this).apply {
-            background = rounded(Color.argb(56, 255, 255, 255), 999)
-            clipChildren = false
+        // 传输控制图例:DPAD 驱动,非可聚焦,作为操作提示并反映播放状态。
+        fun transportIcon(icon: TransportIcon, enabled: Boolean): TransportIconView {
+            return TransportIconView(this, icon).apply {
+                setIconColor(Colors.TextPrimary)
+                alpha = if (enabled) 1f else 0.3f
+            }
         }
-        val progressFill = View(this).apply {
-            background = rounded(Colors.AppleBlue, 999)
+        val prevIcon = transportIcon(TransportIcon.Previous, hasPrevious)
+        val rewindIcon = transportIcon(TransportIcon.Rewind, true)
+        val forwardIcon = transportIcon(TransportIcon.Forward, true)
+        val nextIcon = transportIcon(TransportIcon.Next, hasNext)
+        val centerControlGlyph = PlaybackGlyphView(this).apply {
+            setPlaying(player.playWhenReady && player.playbackState != Player.STATE_ENDED)
         }
-        progressTrack.addView(progressFill, FrameLayout.LayoutParams(0, dp(6), Gravity.START or Gravity.CENTER_VERTICAL))
+        val centerControl = FrameLayout(this).apply {
+            background = rounded(Colors.GlassFillStrong, 999, 2, Colors.GlassBorderFocused)
+            addView(centerControlGlyph, FrameLayout.LayoutParams(dp(26), dp(26), Gravity.CENTER))
+        }
+        val transport = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(prevIcon, LinearLayout.LayoutParams(dp(28), dp(28)).withEndMargin(dp(34)))
+            addView(rewindIcon, LinearLayout.LayoutParams(dp(30), dp(30)).withEndMargin(dp(34)))
+            addView(centerControl, LinearLayout.LayoutParams(dp(58), dp(58)))
+            addView(forwardIcon, LinearLayout.LayoutParams(dp(30), dp(30)).withStartMargin(dp(34)))
+            addView(nextIcon, LinearLayout.LayoutParams(dp(28), dp(28)).withStartMargin(dp(34)))
+        }
+        bottom.addView(
+            transport,
+            LinearLayout.LayoutParams(wrap(), wrap()).apply { gravity = Gravity.CENTER_HORIZONTAL },
+        )
+
+        // 进度条:缓冲段 + 已播段 + 拖动点。
+        val bufferedFill = View(this).apply { background = rounded(Color.argb(64, 255, 255, 255), 999) }
+        val progressFill = View(this).apply { background = rounded(Colors.AppleBlue, 999) }
         val progressKnob = View(this).apply {
             background = rounded(Color.WHITE, 999)
             elevationCompat(dp(2).toFloat())
         }
-        progressTrack.addView(progressKnob, FrameLayout.LayoutParams(dp(14), dp(14), Gravity.START or Gravity.CENTER_VERTICAL))
-        bottom.addView(progressTrack, LinearLayout.LayoutParams(match(), dp(6)))
-
-        val controlsRow = LinearLayout(this).apply {
+        val progressTrack = FrameLayout(this).apply {
+            background = rounded(Color.argb(38, 255, 255, 255), 999)
+            clipChildren = false
+            addView(bufferedFill, FrameLayout.LayoutParams(0, dp(6), Gravity.START or Gravity.CENTER_VERTICAL))
+            addView(progressFill, FrameLayout.LayoutParams(0, dp(6), Gravity.START or Gravity.CENTER_VERTICAL))
+            addView(progressKnob, FrameLayout.LayoutParams(dp(14), dp(14), Gravity.START or Gravity.CENTER_VERTICAL))
+        }
+        val timeCurrent = label("0:00", 14f, Colors.TextSecondary, bold = true, maxLines = 1)
+        val timeTotal = label("0:00", 14f, Colors.TextTertiary, maxLines = 1)
+        val scrubberRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(12), 0, 0)
+            addView(timeCurrent, LinearLayout.LayoutParams(wrap(), wrap()).withEndMargin(dp(16)))
+            addView(progressTrack, LinearLayout.LayoutParams(0, dp(14), 1f))
+            addView(timeTotal, LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(16)))
         }
+        bottom.addView(scrubberRow, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(24)))
+
         val hint = label(
             buildString {
                 append("OK 播放/暂停 · ←→ 快退/快进 10 秒")
@@ -1619,28 +1675,25 @@ class MainActivity : ComponentActivity() {
             13f,
             Colors.TextTertiary,
             maxLines = 1,
-        )
-        val time = label("0:00 / 0:00", 15f, Colors.TextSecondary, maxLines = 1)
-        controlsRow.addView(hint, LinearLayout.LayoutParams(0, wrap(), 1f))
-        controlsRow.addView(time, LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(16)))
-        bottom.addView(controlsRow, linearMatch())
-        if (previousTitle != null) {
-            bottom.addView(label("上一个:$previousTitle", 13f, Colors.TextSecondary, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(8)))
-        }
-        if (nextTitle != null) {
-            bottom.addView(label("下一个:$nextTitle", 13f, Colors.TextSecondary, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(8)))
-        }
+        ).apply { gravity = Gravity.CENTER }
+        bottom.addView(hint, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(16)))
+
         overlay.addView(bottom, FrameLayout.LayoutParams(match(), wrap(), Gravity.BOTTOM))
 
         fun updateProgress() {
             val duration = player.duration.takeIf { it > 0 } ?: 0L
             val position = player.currentPosition.coerceAtLeast(0L)
+            val buffered = player.bufferedPosition.coerceAtLeast(position)
+            val trackWidth = progressTrack.width
             val fraction = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
-            val filledWidth = (progressTrack.width * fraction).toInt()
+            val bufferedFraction = if (duration > 0) (buffered.toFloat() / duration).coerceIn(0f, 1f) else 0f
+            val filledWidth = (trackWidth * fraction).toInt()
+            bufferedFill.layoutParams = FrameLayout.LayoutParams((trackWidth * bufferedFraction).toInt(), dp(6), Gravity.START or Gravity.CENTER_VERTICAL)
             progressFill.layoutParams = FrameLayout.LayoutParams(filledWidth, dp(6), Gravity.START or Gravity.CENTER_VERTICAL)
-            val maxKnobX = (progressTrack.width - dp(14)).coerceAtLeast(0).toFloat()
+            val maxKnobX = (trackWidth - dp(14)).coerceAtLeast(0).toFloat()
             progressKnob.translationX = (filledWidth - dp(14) / 2f).coerceIn(0f, maxKnobX)
-            time.text = "${formatTime(position)} / ${formatTime(duration)}"
+            timeCurrent.text = formatTime(position)
+            timeTotal.text = formatTime(duration)
         }
         val progressTick = object : Runnable {
             override fun run() {
@@ -1650,9 +1703,20 @@ class MainActivity : ComponentActivity() {
             }
         }
         fun updatePlaybackGlyph() {
-            glyph.setPlaying(player.playWhenReady && player.playbackState != Player.STATE_ENDED)
-            playbackStatus.text = playbackStatusText()
-            center.visibility = View.VISIBLE
+            val isPlaying = player.playWhenReady && player.playbackState != Player.STATE_ENDED
+            centerControlGlyph.setPlaying(isPlaying)
+            statusText.text = when {
+                player.playbackState == Player.STATE_ENDED -> "已结束 · ${stream.label.ifBlank { "默认" }}"
+                player.playbackState == Player.STATE_BUFFERING -> "缓冲中 · ${stream.label.ifBlank { "默认" }}"
+                player.playWhenReady -> "正在播放 · ${stream.label.ifBlank { "默认" }}"
+                else -> "已暂停 · ${stream.label.ifBlank { "默认" }}"
+            }
+            val dotColor = when {
+                player.playbackState == Player.STATE_BUFFERING -> Colors.TextTertiary
+                isPlaying -> Colors.AppleBlue
+                else -> Colors.TextSecondary
+            }
+            statusDot.background = rounded(dotColor, 999)
         }
         val listener = object : Player.Listener {
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
@@ -1668,6 +1732,7 @@ class MainActivity : ComponentActivity() {
         overlay.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(view: View) {
                 updateProgress()
+                updatePlaybackGlyph()
                 overlay.post(progressTick)
             }
 
@@ -2798,6 +2863,78 @@ private class PlaybackGlyphView(context: Context) : View(context) {
     }
 }
 
+private enum class TransportIcon {
+    Previous,
+    Rewind,
+    Forward,
+    Next,
+}
+
+// 播放页传输控制图标:统一用 Canvas 绘制(不用 Unicode 符号),与全局图标风格一致。
+private class TransportIconView(
+    context: Context,
+    private val icon: TransportIcon,
+) : View(context) {
+    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val path = Path()
+    private val bar = RectF()
+    private var iconColor: Int = Colors.TextPrimary
+
+    fun setIconColor(color: Int) {
+        if (iconColor == color) return
+        iconColor = color
+        invalidate()
+    }
+
+    private fun Canvas.triangleRight(left: Float, apexX: Float, top: Float, bottom: Float) {
+        path.reset()
+        path.moveTo(left, top)
+        path.lineTo(left, bottom)
+        path.lineTo(apexX, (top + bottom) / 2f)
+        path.close()
+        drawPath(path, fillPaint)
+    }
+
+    private fun Canvas.triangleLeft(right: Float, apexX: Float, top: Float, bottom: Float) {
+        path.reset()
+        path.moveTo(right, top)
+        path.lineTo(right, bottom)
+        path.lineTo(apexX, (top + bottom) / 2f)
+        path.close()
+        drawPath(path, fillPaint)
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        fillPaint.color = iconColor
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val top = h * 0.20f
+        val bottom = h * 0.80f
+        val barRadius = w * 0.06f
+        when (icon) {
+            TransportIcon.Forward -> {
+                canvas.triangleRight(w * 0.10f, w * 0.50f, top, bottom)
+                canvas.triangleRight(w * 0.50f, w * 0.90f, top, bottom)
+            }
+            TransportIcon.Rewind -> {
+                canvas.triangleLeft(w * 0.90f, w * 0.50f, top, bottom)
+                canvas.triangleLeft(w * 0.50f, w * 0.10f, top, bottom)
+            }
+            TransportIcon.Next -> {
+                canvas.triangleRight(w * 0.14f, w * 0.62f, top, bottom)
+                bar.set(w * 0.74f, top, w * 0.86f, bottom)
+                canvas.drawRoundRect(bar, barRadius, barRadius, fillPaint)
+            }
+            TransportIcon.Previous -> {
+                canvas.triangleLeft(w * 0.86f, w * 0.38f, top, bottom)
+                bar.set(w * 0.14f, top, w * 0.26f, bottom)
+                canvas.drawRoundRect(bar, barRadius, barRadius, fillPaint)
+            }
+        }
+    }
+}
+
 private class ChevronDownView(context: Context) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Colors.TextTertiary
@@ -2844,8 +2981,11 @@ private class WarningGlyphView(context: Context) : View(context) {
     }
 }
 
+// 播放请求 User-Agent:必须用桌面浏览器标识。部分上游 CDN(如 bilibili)对
+// 含 "Android" 的 UA 做防盗链拦截会返回 403(实测桌面 Chrome / 裸 Mozilla 可 206,
+// 任意 Android UA 均 403),与下发的 Referer/Origin(bilibili.com 网页源)保持一致。
 private const val PlaybackUserAgent =
-    "Mozilla/5.0 (Linux; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 private const val MaxPlaybackRetries = 3
 private const val MaxThumbnailBytes = 6 * 1024 * 1024
 private const val BackdropAlpha = 0.55f
