@@ -14,8 +14,8 @@ WORKDIR /app
 
 RUN apk add --no-cache ca-certificates wget \
     && adduser -D -u 10001 appuser \
-    && mkdir -p /config \
-    && chown -R appuser:appuser /app /config
+    && mkdir -p /config /cache \
+    && chown -R appuser:appuser /app /config /cache
 
 ENV HOST=0.0.0.0 \
     PORT=8787 \
@@ -23,7 +23,7 @@ ENV HOST=0.0.0.0 \
 
 COPY --from=builder /out/media_server /app/media_server
 
-VOLUME ["/config"]
+VOLUME ["/config", "/cache"]
 EXPOSE 8787
 
 USER appuser

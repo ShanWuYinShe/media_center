@@ -15,11 +15,13 @@ type mediaServer struct {
 	config         AppConfig
 	categories     []ContentCategory
 	categoriesByID map[string]ContentCategory
-	bilibili       *BilibiliClient
+	providers      map[string]VideoProvider
+	enabledSources []string
 	idCodec        *IDCodec
 	asset          *AssetSigner
 	assetClient    *http.Client
-	deliveryMode   string
+	assetCache     *AssetCache
+	deliveryModes  map[string]string
 }
 
 func main() {
@@ -27,22 +29,28 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-	categories, sources, err := loadCategories(config.CategoriesPath)
+	content, err := loadContentConfig(config.CategoriesPath)
 	if err != nil {
 		log.Fatalf("load categories: %v", err)
 	}
+	providers, enabledSources, err := newVideoProviders(config, content.Sources)
+	if err != nil {
+		log.Fatalf("load providers: %v", err)
+	}
 	server := &mediaServer{
 		config:         config,
-		categories:     categories,
-		categoriesByID: indexCategories(categories),
-		bilibili:       NewBilibiliClient(config.ProviderTimeout),
+		categories:     content.Categories,
+		categoriesByID: indexCategories(content.Categories),
+		providers:      providers,
+		enabledSources: enabledSources,
 		idCodec:        NewIDCodec(config.SigningKey),
 		asset:          NewAssetSigner(config.SigningKey, config.AssetURLTTL),
 		assetClient:    newAssetHTTPClient(),
-		deliveryMode:   sourceDeliveryMode(sources, "bilibili"),
+		assetCache:     NewAssetCache(config.AssetCacheDir, config.AssetCacheMax),
+		deliveryModes:  sourceDeliveryModes(content.Sources, enabledSources),
 	}
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
-	log.Printf("media_server listening on %s (bilibili delivery=%s)", addr, server.deliveryMode)
+	log.Printf("media_server listening on %s (sources=%s)", addr, strings.Join(enabledSources, ","))
 	if err := http.ListenAndServe(addr, server); err != nil {
 		log.Fatal(err)
 	}
@@ -98,7 +106,7 @@ func (s *mediaServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, err)
 		return
 	}
-	resp, searchErr := s.bilibili.Search(r.Context(), query, page, pageSize, s.idCodec)
+	resp, searchErr := s.searchProviders(r.Context(), query, page, pageSize)
 	if searchErr != nil {
 		s.writeError(w, searchErr)
 		return
@@ -151,7 +159,7 @@ func (s *mediaServer) handleVideos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	videoID := strings.TrimSuffix(path, "/")
-	bvid, err := s.idCodec.DecodeVideoID(videoID)
+	ref, err := s.idCodec.DecodeVideoRef(videoID)
 	if err != nil {
 		s.writeError(w, &apiError{
 			Status:  http.StatusBadRequest,
@@ -160,17 +168,22 @@ func (s *mediaServer) handleVideos(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	details, detailErr := s.bilibili.GetDetails(r.Context(), bvid, s.idCodec)
+	provider := s.providers[ref.Provider]
+	if provider == nil {
+		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "视频来源不受支持。"})
+		return
+	}
+	details, detailErr := provider.GetDetails(r.Context(), ref.ID, s.idCodec)
 	if detailErr != nil {
 		s.writeError(w, detailErr)
 		return
 	}
-	s.applyDeliveryToDetails(s.assetBaseURL(r), &details)
+	s.applyDeliveryToDetailsForProvider(s.assetBaseURL(r), ref.Provider, &details)
 	s.writeJSON(w, http.StatusOK, details)
 }
 
 func (s *mediaServer) handlePlayback(w http.ResponseWriter, r *http.Request, videoID string) {
-	bvid, err := s.idCodec.DecodeVideoID(videoID)
+	ref, err := s.idCodec.DecodeVideoRef(videoID)
 	if err != nil {
 		s.writeError(w, &apiError{
 			Status:  http.StatusBadRequest,
@@ -179,13 +192,40 @@ func (s *mediaServer) handlePlayback(w http.ResponseWriter, r *http.Request, vid
 		})
 		return
 	}
-	options, playbackErr := s.bilibili.GetPlaybackOptions(r.Context(), bvid, s.idCodec)
+	provider := s.providers[ref.Provider]
+	if provider == nil {
+		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "视频来源不受支持。"})
+		return
+	}
+	options, playbackErr := provider.GetPlaybackOptions(r.Context(), ref.ID, s.idCodec)
 	if playbackErr != nil {
 		s.writeError(w, playbackErr)
 		return
 	}
-	s.applyDeliveryToOptions(s.assetBaseURL(r), options)
+	s.applyDeliveryToOptionsForProvider(s.assetBaseURL(r), ref.Provider, options)
 	s.writeJSON(w, http.StatusOK, PlaybackOptionsResponse{Items: options})
+}
+
+func (s *mediaServer) searchProviders(ctx context.Context, query string, page int, pageSize int) (SearchResponse, error) {
+	var items []VideoSummary
+	total := 0
+	for _, providerID := range s.enabledSources {
+		provider := s.providers[providerID]
+		if provider == nil {
+			continue
+		}
+		result, err := provider.Search(ctx, query, page, pageSize, s.idCodec)
+		if err != nil {
+			return SearchResponse{}, err
+		}
+		total += result.Total
+		items = append(items, result.Items...)
+	}
+	items = dedupeVideoSummaries(items)
+	if total <= 0 {
+		total = len(items)
+	}
+	return SearchResponse{Query: query, Page: page, PageSize: pageSize, Total: total, Items: items}, nil
 }
 
 func (s *mediaServer) collectCategoryPage(
@@ -195,10 +235,6 @@ func (s *mediaServer) collectCategoryPage(
 	pageSize int,
 ) (SearchResponse, error) {
 	targetCount := page * pageSize
-	providerQuery := category.Query
-	if query, ok := category.SourceQueries["bilibili"]; ok && strings.TrimSpace(query) != "" {
-		providerQuery = strings.TrimSpace(query)
-	}
 	type scoredItem struct {
 		item  VideoSummary
 		score int
@@ -207,32 +243,42 @@ func (s *mediaServer) collectCategoryPage(
 	collected := make([]scoredItem, 0, targetCount)
 	seen := make(map[string]struct{}, targetCount)
 	total := 0
-	for providerPage := 1; providerPage <= s.config.MaxCategoryPages; providerPage++ {
-		result, err := s.bilibili.Search(ctx, providerQuery, providerPage, 50, s.idCodec)
-		if err != nil {
-			return SearchResponse{}, err
+	for _, providerID := range s.enabledSources {
+		provider := s.providers[providerID]
+		if provider == nil {
+			continue
 		}
-		total = max(total, result.Total)
-		if len(result.Items) == 0 {
-			break
+		providerQuery := category.Query
+		if query, ok := category.SourceQueries[providerID]; ok && strings.TrimSpace(query) != "" {
+			providerQuery = strings.TrimSpace(query)
 		}
-		for _, item := range result.Items {
-			if _, ok := seen[item.ID]; ok {
-				continue
+		for providerPage := 1; providerPage <= s.config.MaxCategoryPages; providerPage++ {
+			result, err := provider.Search(ctx, providerQuery, providerPage, 50, s.idCodec)
+			if err != nil {
+				return SearchResponse{}, err
 			}
-			seen[item.ID] = struct{}{}
-			score := relevanceScore(item, category)
-			if score < 0 {
-				continue
+			total += result.Total
+			if len(result.Items) == 0 {
+				break
 			}
-			collected = append(collected, scoredItem{
-				item:  item,
-				score: score,
-				order: len(collected),
-			})
-		}
-		if len(collected) >= targetCount {
-			break
+			for _, item := range result.Items {
+				if _, ok := seen[item.ID]; ok {
+					continue
+				}
+				seen[item.ID] = struct{}{}
+				score := relevanceScore(item, category)
+				if score < 0 {
+					continue
+				}
+				collected = append(collected, scoredItem{
+					item:  item,
+					score: score,
+					order: len(collected),
+				})
+			}
+			if len(collected) >= targetCount {
+				break
+			}
 		}
 	}
 	sort.SliceStable(collected, func(i, j int) bool {
@@ -259,6 +305,19 @@ func (s *mediaServer) collectCategoryPage(
 		Total:    total,
 		Items:    items[start:end],
 	}, nil
+}
+
+func dedupeVideoSummaries(items []VideoSummary) []VideoSummary {
+	seen := make(map[string]struct{}, len(items))
+	out := make([]VideoSummary, 0, len(items))
+	for _, item := range items {
+		if _, ok := seen[item.ID]; ok {
+			continue
+		}
+		seen[item.ID] = struct{}{}
+		out = append(out, item)
+	}
+	return out
 }
 
 func paginationFromRequest(r *http.Request) (int, int, *apiError) {
@@ -335,7 +394,14 @@ func (s *mediaServer) assetBaseURL(r *http.Request) string {
 	if forwarded := firstForwardedValue(r.Header.Get("X-Forwarded-Host")); forwarded != "" {
 		host = forwarded
 	}
-	return scheme + "://" + host + "/api"
+	prefix := firstForwardedValue(r.Header.Get("X-Forwarded-Prefix"))
+	if prefix == "" {
+		prefix = "/api"
+	}
+	if !strings.HasPrefix(prefix, "/") {
+		prefix = "/" + prefix
+	}
+	return scheme + "://" + host + strings.TrimRight(prefix, "/")
 }
 
 func firstForwardedValue(raw string) string {
@@ -348,20 +414,37 @@ func firstForwardedValue(raw string) string {
 // deliver 决定单个资源的下发方式：
 //   - direct：原样返回上游 URL + companion headers，由 App 直连。
 //   - proxy：返回 /asset 签名代理地址，上游请求头由服务端回源时附加，不下发。
-func (s *mediaServer) deliver(base, rawURL string, headers map[string]string) (string, map[string]string, string) {
-	if s.deliveryMode == DeliveryProxy && strings.TrimSpace(rawURL) != "" {
+func (s *mediaServer) deliver(providerID, base, rawURL string, headers map[string]string) (string, map[string]string, string) {
+	mode := s.deliveryModeForProvider(providerID)
+	if mode == DeliveryProxy && strings.TrimSpace(rawURL) != "" {
 		return s.asset.ProxyURL(base, rawURL, headers), nil, DeliveryProxy
 	}
 	return rawURL, headers, DeliveryDirect
 }
 
-func (s *mediaServer) applyDeliveryToSummary(base string, v *VideoSummary) {
-	v.ThumbnailURL, v.ThumbnailHeaders, v.ThumbnailDelivery = s.deliver(base, v.ThumbnailURL, v.ThumbnailHeaders)
+func (s *mediaServer) deliveryModeForProvider(providerID string) string {
+	if mode := s.deliveryModes[providerID]; mode != "" {
+		return mode
+	}
+	return sourceDeliveryMode(nil, providerID)
 }
 
-func (s *mediaServer) applyDeliveryToOptions(base string, options []PlaybackOption) {
+func (s *mediaServer) providerFromVideoID(videoID string) string {
+	ref, err := s.idCodec.DecodeVideoRef(videoID)
+	if err != nil {
+		return ""
+	}
+	return ref.Provider
+}
+
+func (s *mediaServer) applyDeliveryToSummary(base string, v *VideoSummary) {
+	providerID := s.providerFromVideoID(v.ID)
+	v.ThumbnailURL, v.ThumbnailHeaders, v.ThumbnailDelivery = s.deliver(providerID, base, v.ThumbnailURL, v.ThumbnailHeaders)
+}
+
+func (s *mediaServer) applyDeliveryToOptionsForProvider(base, providerID string, options []PlaybackOption) {
 	for i := range options {
-		options[i].URL, options[i].Headers, options[i].Delivery = s.deliver(base, options[i].URL, options[i].Headers)
+		options[i].URL, options[i].Headers, options[i].Delivery = s.deliver(providerID, base, options[i].URL, options[i].Headers)
 	}
 }
 
@@ -371,9 +454,9 @@ func (s *mediaServer) applyDeliveryToSearch(base string, resp *SearchResponse) {
 	}
 }
 
-func (s *mediaServer) applyDeliveryToDetails(base string, details *VideoDetails) {
-	details.ThumbnailURL, details.ThumbnailHeaders, details.ThumbnailDelivery = s.deliver(base, details.ThumbnailURL, details.ThumbnailHeaders)
-	s.applyDeliveryToOptions(base, details.PlaybackOptions)
+func (s *mediaServer) applyDeliveryToDetailsForProvider(base, providerID string, details *VideoDetails) {
+	details.ThumbnailURL, details.ThumbnailHeaders, details.ThumbnailDelivery = s.deliver(providerID, base, details.ThumbnailURL, details.ThumbnailHeaders)
+	s.applyDeliveryToOptionsForProvider(base, providerID, details.PlaybackOptions)
 }
 
 func relevanceScore(item VideoSummary, category ContentCategory) int {

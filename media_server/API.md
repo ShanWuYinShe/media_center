@@ -10,7 +10,7 @@ App 应把配置值当作 **API base URL**。当前线上默认是：
 
 ## 当前契约
 
-- 后端负责：分类/搜索/详情/播放选项聚合，并按来源决定每个资源的**下发方式**（`deliveryMode`）。
+- 后端负责：多来源分类/搜索/详情/播放选项聚合，并按来源决定每个资源的**下发方式**（`deliveryMode`）。
 - **`direct`（国内可直连源，如 Bilibili）**：后端直接返回上游 `thumbnailUrl` / `playbackOptions[].url`，
   并通过 `thumbnailHeaders` / `playbackOptions[].headers` 下发直连所需请求头，由 **App 直连上游**，
   避免后端被国内源限流。
@@ -120,7 +120,7 @@ type PagedVideos = {
 
 ### `GET /categories/{id}/videos?page=1&pageSize=20`
 
-返回某个分类下的视频列表。当前会基于该分类的 Bilibili 查询词搜索并做关键词/排除词/时长过滤。
+返回某个分类下的视频列表。会按启用来源聚合搜索；分类可通过 `sourceQueries` 为不同来源指定查询词，并做关键词/排除词/时长过滤。
 
 示例：
 
@@ -156,7 +156,7 @@ type PagedVideos = {
 
 ### `GET /search?q=关键词&page=1&pageSize=20`
 
-临时关键词搜索。当前直接调用 Bilibili 搜索接口并过滤明显的解说/混剪/短视频。
+临时关键词搜索。会调用所有启用来源并过滤明显的解说/混剪/短视频。
 
 ### `GET /videos/{id}`
 

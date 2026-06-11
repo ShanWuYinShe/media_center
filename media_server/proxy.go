@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -78,6 +79,21 @@ func (s *mediaServer) handleAsset(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, &apiError{Status: status, Code: "BAD_REQUEST", Message: message})
 		return
 	}
+	cacheKey := ""
+	if r.Method == http.MethodGet && s.assetCache != nil {
+		cacheKey = s.assetCache.Key(payload, r)
+		cached, err := s.assetCache.Get(cacheKey)
+		if err == nil {
+			defer cached.Close()
+			copyAssetResponseHeaders(w.Header(), cached.Header())
+			w.WriteHeader(cached.Status())
+			_, _ = io.Copy(w, cached.Body())
+			return
+		}
+		if err != errAssetCacheMiss {
+			log.Printf("asset cache lookup failed: %v", err)
+		}
+	}
 
 	upstream, err := http.NewRequestWithContext(r.Context(), r.Method, payload.URL, nil)
 	if err != nil {
@@ -111,8 +127,39 @@ func (s *mediaServer) handleAsset(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	header := w.Header()
-	for key, values := range resp.Header {
+	responseHeader := cacheableAssetResponseHeader(resp.Header)
+	copyAssetResponseHeaders(w.Header(), responseHeader)
+	var recorder *assetCacheRecorder
+	if s.assetCache != nil {
+		recorder, err = s.assetCache.NewRecorder(cacheKey, resp.StatusCode, responseHeader)
+		if err != nil {
+			log.Printf("asset cache writer unavailable: %v", err)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	if r.Method == http.MethodHead {
+		return
+	}
+	body := io.Reader(resp.Body)
+	if recorder != nil {
+		body = io.TeeReader(resp.Body, recorder)
+	}
+	if _, err := io.Copy(w, body); err != nil {
+		if recorder != nil {
+			recorder.Discard()
+		}
+		return
+	}
+	if recorder != nil {
+		if err := recorder.Commit(); err != nil {
+			log.Printf("asset cache commit failed: %v", err)
+		}
+	}
+}
+
+func cacheableAssetResponseHeader(upstream http.Header) http.Header {
+	header := http.Header{}
+	for key, values := range upstream {
 		if _, skip := stripResponseHeaders[strings.ToLower(key)]; skip {
 			continue
 		}
@@ -123,9 +170,13 @@ func (s *mediaServer) handleAsset(w http.ResponseWriter, r *http.Request) {
 	if header.Get("Accept-Ranges") == "" {
 		header.Set("Accept-Ranges", "bytes")
 	}
-	w.WriteHeader(resp.StatusCode)
-	if r.Method == http.MethodHead {
-		return
+	return header
+}
+
+func copyAssetResponseHeaders(dst, src http.Header) {
+	for key, values := range src {
+		for _, value := range values {
+			dst.Add(key, value)
+		}
 	}
-	_, _ = io.Copy(w, resp.Body)
 }

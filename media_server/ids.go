@@ -18,6 +18,7 @@ type signedVideoID struct {
 	Version  int    `json:"v"`
 	Type     string `json:"t"`
 	Provider string `json:"p"`
+	ID       string `json:"id,omitempty"`
 	BVID     string `json:"bvid"`
 }
 
@@ -25,8 +26,15 @@ type signedPlaybackID struct {
 	Version  int    `json:"v"`
 	Type     string `json:"t"`
 	Provider string `json:"p"`
+	ID       string `json:"id,omitempty"`
+	Variant  string `json:"variant,omitempty"`
 	BVID     string `json:"bvid"`
 	Quality  int    `json:"q"`
+}
+
+type ProviderVideoRef struct {
+	Provider string
+	ID       string
 }
 
 func NewIDCodec(secret string) *IDCodec {
@@ -34,36 +42,85 @@ func NewIDCodec(secret string) *IDCodec {
 }
 
 func (c *IDCodec) EncodeVideoID(bvid string) string {
-	return c.mustEncode(signedVideoID{
+	return c.EncodeProviderVideoID("bilibili", bvid)
+}
+
+func (c *IDCodec) EncodeProviderVideoID(provider, id string) string {
+	payload := signedVideoID{
 		Version:  1,
 		Type:     "video",
-		Provider: "bilibili",
-		BVID:     bvid,
+		Provider: provider,
+		ID:       id,
+	}
+	if provider == "bilibili" {
+		payload.BVID = id
+	}
+	return c.mustEncode(signedVideoID{
+		Version:  payload.Version,
+		Type:     payload.Type,
+		Provider: payload.Provider,
+		ID:       payload.ID,
+		BVID:     payload.BVID,
 	})
 }
 
 func (c *IDCodec) DecodeVideoID(value string) (string, error) {
+	ref, err := c.DecodeVideoRef(value)
+	if err != nil {
+		return "", err
+	}
+	if ref.Provider != "bilibili" {
+		return "", errors.New("invalid video provider")
+	}
+	return ref.ID, nil
+}
+
+func (c *IDCodec) DecodeVideoRef(value string) (ProviderVideoRef, error) {
 	trimmed := strings.TrimSpace(value)
 	if strings.HasPrefix(strings.ToUpper(trimmed), "BV") {
-		return trimmed, nil
+		return ProviderVideoRef{Provider: "bilibili", ID: trimmed}, nil
 	}
 	var payload signedVideoID
 	if err := c.decode(trimmed, &payload); err != nil {
-		return "", err
+		return ProviderVideoRef{}, err
 	}
-	if payload.Type != "video" || payload.Provider != "bilibili" || payload.BVID == "" {
-		return "", errors.New("invalid video id")
+	if payload.Type != "video" || payload.Provider == "" {
+		return ProviderVideoRef{}, errors.New("invalid video id")
 	}
-	return payload.BVID, nil
+	id := payload.ID
+	if id == "" {
+		id = payload.BVID
+	}
+	if id == "" {
+		return ProviderVideoRef{}, errors.New("invalid video id")
+	}
+	return ProviderVideoRef{Provider: payload.Provider, ID: id}, nil
 }
 
 func (c *IDCodec) EncodePlaybackID(bvid string, quality int) string {
-	return c.mustEncode(signedPlaybackID{
+	return c.EncodeProviderPlaybackID("bilibili", bvid, qualityLabel(quality), quality)
+}
+
+func (c *IDCodec) EncodeProviderPlaybackID(provider, id, variant string, quality int) string {
+	payload := signedPlaybackID{
 		Version:  1,
 		Type:     "playback",
-		Provider: "bilibili",
-		BVID:     bvid,
+		Provider: provider,
+		ID:       id,
+		Variant:  variant,
 		Quality:  quality,
+	}
+	if provider == "bilibili" {
+		payload.BVID = id
+	}
+	return c.mustEncode(signedPlaybackID{
+		Version:  payload.Version,
+		Type:     payload.Type,
+		Provider: payload.Provider,
+		ID:       payload.ID,
+		Variant:  payload.Variant,
+		BVID:     payload.BVID,
+		Quality:  payload.Quality,
 	})
 }
 

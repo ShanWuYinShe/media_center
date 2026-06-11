@@ -90,9 +90,8 @@ func TestHandleAssetProxiesRangeAndHeaders(t *testing.T) {
 
 	signer := NewAssetSigner("secret", time.Hour)
 	server := &mediaServer{
-		asset:        signer,
-		assetClient:  newAssetHTTPClient(),
-		deliveryMode: DeliveryProxy,
+		asset:       signer,
+		assetClient: newAssetHTTPClient(),
 	}
 	proxyURL := signer.ProxyURL("http://example/api", upstream.URL+"/video.mp4", map[string]string{
 		"Referer": "https://www.bilibili.com",
@@ -124,11 +123,70 @@ func TestHandleAssetProxiesRangeAndHeaders(t *testing.T) {
 	}
 }
 
+func TestHandleAssetCachesByRange(t *testing.T) {
+	requests := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch r.Header.Get("Range") {
+		case "bytes=0-3":
+			w.Header().Set("Content-Range", "bytes 0-3/8")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write([]byte("mp4!"))
+		case "bytes=4-7":
+			w.Header().Set("Content-Range", "bytes 4-7/8")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write([]byte("tail"))
+		default:
+			t.Fatalf("unexpected range: %q", r.Header.Get("Range"))
+		}
+	}))
+	defer upstream.Close()
+
+	signer := NewAssetSigner("secret", time.Hour)
+	server := &mediaServer{
+		asset:       signer,
+		assetClient: newAssetHTTPClient(),
+		assetCache:  NewAssetCache(t.TempDir(), 1024),
+	}
+	proxyURL := signer.ProxyURL("http://example/api", upstream.URL+"/video.mp4", nil)
+	values := queryFromURL(t, proxyURL)
+	path := "/api/asset?p=" + values.Get("p") + "&sig=" + values.Get("sig")
+
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Range", "bytes=0-3")
+		rec := httptest.NewRecorder()
+		server.handleAsset(rec, req)
+		if rec.Code != http.StatusPartialContent {
+			t.Fatalf("request %d: expected 206, got %d", i+1, rec.Code)
+		}
+		if body, _ := io.ReadAll(rec.Result().Body); string(body) != "mp4!" {
+			t.Fatalf("request %d: unexpected body %q", i+1, body)
+		}
+	}
+	if requests != 1 {
+		t.Fatalf("expected second identical range to hit cache, got %d upstream requests", requests)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Range", "bytes=4-7")
+	rec := httptest.NewRecorder()
+	server.handleAsset(rec, req)
+	if rec.Code != http.StatusPartialContent {
+		t.Fatalf("different range: expected 206, got %d", rec.Code)
+	}
+	if body, _ := io.ReadAll(rec.Result().Body); string(body) != "tail" {
+		t.Fatalf("different range: unexpected body %q", body)
+	}
+	if requests != 2 {
+		t.Fatalf("expected different range to miss cache, got %d upstream requests", requests)
+	}
+}
+
 func TestHandleAssetRejectsBadSignature(t *testing.T) {
 	server := &mediaServer{
-		asset:        NewAssetSigner("secret", time.Hour),
-		assetClient:  newAssetHTTPClient(),
-		deliveryMode: DeliveryProxy,
+		asset:       NewAssetSigner("secret", time.Hour),
+		assetClient: newAssetHTTPClient(),
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/asset?p=abc&sig=def", nil)
 	rec := httptest.NewRecorder()
@@ -159,8 +217,8 @@ func TestUpstreamHTTPClientsIgnoreProxyEnvironment(t *testing.T) {
 
 func TestApplyDeliveryProxyRewritesURLs(t *testing.T) {
 	server := &mediaServer{
-		asset:        NewAssetSigner("secret", time.Hour),
-		deliveryMode: DeliveryProxy,
+		asset:         NewAssetSigner("secret", time.Hour),
+		deliveryModes: map[string]string{"bilibili": DeliveryProxy},
 	}
 	details := VideoDetails{
 		ThumbnailURL:     "https://i0.hdslb.com/a.jpg",
@@ -171,7 +229,7 @@ func TestApplyDeliveryProxyRewritesURLs(t *testing.T) {
 			Headers: map[string]string{"Referer": "https://www.bilibili.com"},
 		}},
 	}
-	server.applyDeliveryToDetails("https://host/api", &details)
+	server.applyDeliveryToDetailsForProvider("https://host/api", "bilibili", &details)
 
 	if details.ThumbnailDelivery != DeliveryProxy {
 		t.Fatalf("expected proxy delivery, got %s", details.ThumbnailDelivery)
@@ -190,8 +248,8 @@ func TestApplyDeliveryProxyRewritesURLs(t *testing.T) {
 
 func TestApplyDeliveryDirectPassthrough(t *testing.T) {
 	server := &mediaServer{
-		asset:        NewAssetSigner("secret", time.Hour),
-		deliveryMode: DeliveryDirect,
+		asset:         NewAssetSigner("secret", time.Hour),
+		deliveryModes: map[string]string{"bilibili": DeliveryDirect},
 	}
 	details := VideoDetails{
 		ThumbnailURL:     "https://i0.hdslb.com/a.jpg",
@@ -202,7 +260,7 @@ func TestApplyDeliveryDirectPassthrough(t *testing.T) {
 			Headers: map[string]string{"Referer": "https://www.bilibili.com"},
 		}},
 	}
-	server.applyDeliveryToDetails("https://host/api", &details)
+	server.applyDeliveryToDetailsForProvider("https://host/api", "bilibili", &details)
 
 	if details.ThumbnailDelivery != DeliveryDirect {
 		t.Fatalf("expected direct delivery, got %s", details.ThumbnailDelivery)
@@ -215,6 +273,19 @@ func TestApplyDeliveryDirectPassthrough(t *testing.T) {
 	}
 	if details.PlaybackOptions[0].Delivery != DeliveryDirect {
 		t.Fatalf("expected direct option delivery")
+	}
+}
+
+func TestAssetBaseURLUsesForwardedPrefix(t *testing.T) {
+	server := &mediaServer{}
+	req := httptest.NewRequest(http.MethodGet, "/api/videos/id", nil)
+	req.Host = "internal:8787"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "yinghuoren.com")
+	req.Header.Set("X-Forwarded-Prefix", "/api/media")
+
+	if got := server.assetBaseURL(req); got != "https://yinghuoren.com/api/media" {
+		t.Fatalf("unexpected asset base url: %s", got)
 	}
 }
 

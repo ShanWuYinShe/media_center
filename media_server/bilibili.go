@@ -118,6 +118,10 @@ func NewBilibiliClient(timeout time.Duration) *BilibiliClient {
 	}
 }
 
+func (c *BilibiliClient) ID() string {
+	return "bilibili"
+}
+
 func (c *BilibiliClient) Search(
 	ctx context.Context,
 	query string,

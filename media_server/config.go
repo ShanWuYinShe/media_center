@@ -19,6 +19,15 @@ type AppConfig struct {
 	AssetURLTTL      time.Duration
 	ProviderTimeout  time.Duration
 	MaxCategoryPages int
+	VODExtractorURL  string
+	YouTubeAPIKey    string
+	AssetCacheDir    string
+	AssetCacheMax    int64
+}
+
+type contentConfig struct {
+	Sources    []sourceConfig
+	Categories []ContentCategory
 }
 
 func loadAppConfig() (AppConfig, error) {
@@ -31,6 +40,10 @@ func loadAppConfig() (AppConfig, error) {
 		AssetURLTTL:      durationFromSeconds(os.Getenv("MEDIA_SERVER_ASSET_URL_TTL_SECONDS"), 6*time.Hour),
 		ProviderTimeout:  durationFromMillis(os.Getenv("PROVIDER_FETCH_TIMEOUT_MS"), 15*time.Second),
 		MaxCategoryPages: positiveInt(os.Getenv("MEDIA_SERVER_CATEGORY_MAX_PAGES"), 6),
+		VODExtractorURL:  strings.TrimSpace(os.Getenv("VOD_EXTRACTOR_URL")),
+		YouTubeAPIKey:    strings.TrimSpace(os.Getenv("YOUTUBE_API_KEY")),
+		AssetCacheDir:    getenv("MEDIA_ASSET_CACHE_DIR", "/cache"),
+		AssetCacheMax:    positiveInt64(os.Getenv("MEDIA_ASSET_CACHE_MAX_BYTES"), 50*1024*1024*1024),
 	}
 	if cfg.SigningKey == "" {
 		random := make([]byte, 32)
@@ -42,29 +55,34 @@ func loadAppConfig() (AppConfig, error) {
 	return cfg, nil
 }
 
-func loadCategories(path string) ([]ContentCategory, []sourceConfig, error) {
+func loadCategories(path string) ([]ContentCategory, error) {
+	cfg, err := loadContentConfig(path)
+	if err != nil {
+		return nil, err
+	}
+	return cfg.Categories, nil
+}
+
+func loadContentConfig(path string) (contentConfig, error) {
 	rawBytes, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read categories config: %w", err)
+		return contentConfig{}, fmt.Errorf("read categories config: %w", err)
 	}
 	var raw rawConfig
 	if err := json.Unmarshal(rawBytes, &raw); err != nil {
-		return nil, nil, fmt.Errorf("decode categories config: %w", err)
-	}
-	if !bilibiliEnabled(raw.Sources) {
-		return nil, nil, fmt.Errorf("contentCategories.json currently must enable bilibili")
+		return contentConfig{}, fmt.Errorf("decode categories config: %w", err)
 	}
 	if len(raw.Categories) == 0 {
-		return nil, nil, fmt.Errorf("contentCategories.json must include at least one category")
+		return contentConfig{}, fmt.Errorf("contentCategories.json must include at least one category")
 	}
 	seen := make(map[string]struct{}, len(raw.Categories))
 	categories := make([]ContentCategory, 0, len(raw.Categories))
 	for _, item := range raw.Categories {
 		if item.ID == "" || item.Title == "" || item.Description == "" {
-			return nil, nil, fmt.Errorf("category id/title/description must be non-empty")
+			return contentConfig{}, fmt.Errorf("category id/title/description must be non-empty")
 		}
 		if _, ok := seen[item.ID]; ok {
-			return nil, nil, fmt.Errorf("duplicate category id: %s", item.ID)
+			return contentConfig{}, fmt.Errorf("duplicate category id: %s", item.ID)
 		}
 		seen[item.ID] = struct{}{}
 		query := strings.TrimSpace(item.SearchQuery)
@@ -72,7 +90,7 @@ func loadCategories(path string) ([]ContentCategory, []sourceConfig, error) {
 			query = strings.TrimSpace(item.Keywords[0])
 		}
 		if query == "" {
-			return nil, nil, fmt.Errorf("category %s must define searchQuery or keywords", item.ID)
+			return contentConfig{}, fmt.Errorf("category %s must define searchQuery or keywords", item.ID)
 		}
 		categories = append(categories, ContentCategory{
 			ID:            item.ID,
@@ -84,7 +102,22 @@ func loadCategories(path string) ([]ContentCategory, []sourceConfig, error) {
 			Excludes:      trimStrings(item.Excludes),
 		})
 	}
-	return categories, raw.Sources, nil
+	return contentConfig{Sources: normalizeSourceConfig(raw.Sources), Categories: categories}, nil
+}
+
+func normalizeSourceConfig(sources []sourceConfig) []sourceConfig {
+	if len(sources) == 0 {
+		return []sourceConfig{{ID: "bilibili", Enabled: true}}
+	}
+	out := make([]sourceConfig, 0, len(sources))
+	for _, source := range sources {
+		id := strings.TrimSpace(source.ID)
+		if id == "" {
+			continue
+		}
+		out = append(out, sourceConfig{ID: id, Enabled: source.Enabled, Direct: source.Direct})
+	}
+	return out
 }
 
 // defaultSourceDirect 是各内置源“国内是否可直连”的默认判断：
@@ -120,16 +153,12 @@ func deliveryModeFromDirect(direct bool) string {
 	return DeliveryProxy
 }
 
-func bilibiliEnabled(sources []sourceConfig) bool {
-	if len(sources) == 0 {
-		return true
+func sourceDeliveryModes(sources []sourceConfig, providerIDs []string) map[string]string {
+	modes := make(map[string]string, len(providerIDs))
+	for _, id := range providerIDs {
+		modes[id] = sourceDeliveryMode(sources, id)
 	}
-	for _, source := range sources {
-		if source.ID == "bilibili" && source.Enabled {
-			return true
-		}
-	}
-	return false
+	return modes
 }
 
 func positiveInt(raw string, fallback int) int {
@@ -137,6 +166,17 @@ func positiveInt(raw string, fallback int) int {
 		return fallback
 	}
 	var value int
+	if _, err := fmt.Sscanf(strings.TrimSpace(raw), "%d", &value); err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func positiveInt64(raw string, fallback int64) int64 {
+	if raw == "" {
+		return fallback
+	}
+	var value int64
 	if _, err := fmt.Sscanf(strings.TrimSpace(raw), "%d", &value); err != nil || value <= 0 {
 		return fallback
 	}

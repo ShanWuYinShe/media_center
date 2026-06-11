@@ -55,9 +55,15 @@ class MediaRepository(
             throw error
         }
         require(details.videoKind == "vod") { "当前只支持普通视频点播" }
+        val resolvedThumbnailUrl = details.thumbnailUrl ?: video.thumbnailUrl
         val normalizedDetails = details.copy(
-            thumbnailUrl = details.thumbnailUrl ?: video.thumbnailUrl,
-            thumbnailHeaders = details.thumbnailHeaders.ifEmpty { video.thumbnailHeaders },
+            thumbnailUrl = resolvedThumbnailUrl,
+            thumbnailHeaders = when {
+                details.thumbnailUrl == null -> video.thumbnailHeaders
+                details.thumbnailHeaders.isNotEmpty() -> details.thumbnailHeaders
+                details.thumbnailUrl == video.thumbnailUrl -> video.thumbnailHeaders
+                else -> details.thumbnailHeaders
+            },
             thumbnailDelivery = if (details.thumbnailUrl != null) details.thumbnailDelivery else video.thumbnailDelivery,
         )
         cache?.put(normalizedDetails)
