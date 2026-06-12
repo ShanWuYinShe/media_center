@@ -254,7 +254,7 @@ class MainActivity : ComponentActivity() {
         }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(56), 0, dp(56), 0)
+            setPadding(dp(48), 0, dp(48), 0)
             clipChildren = false
             clipToPadding = false
         }
@@ -341,7 +341,7 @@ class MainActivity : ComponentActivity() {
         val row = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(22), 0, dp(12))
+            setPadding(0, dp(16), 0, dp(10))
             clipChildren = false
             clipToPadding = false
             // 分类栏作为吸顶头:用不透明背景 + 高于卡片(聚焦卡片 elevation 为 dp14)的
@@ -553,7 +553,7 @@ class MainActivity : ComponentActivity() {
             setSingleLine(true)
             setTextColor(Colors.TextPrimary)
             setHintTextColor(Colors.TextTertiary)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+            setTextSize(TypedValue.COMPLEX_UNIT_PX, 22f * tvDensity)
             setPadding(0, 0, 0, 0)
             background = null
             imeOptions = EditorInfo.IME_ACTION_SEARCH
@@ -1188,10 +1188,34 @@ class MainActivity : ComponentActivity() {
         screen.addView(backdrop, frameMatch())
         screen.addView(detailBackdropScrim(), frameMatch())
         loadBackdropImage(details.thumbnailUrl, details.thumbnailHeaders, backdrop)
+        // 详情页采用 Android TV / Material 设计规范的固定 dp/sp 值:
+        // 标题 30sp(headline)、正文 18sp、说明 14sp(caption,均 ≥ TV 最小可读字号),
+        // 主操作与可聚焦控件 ≥ 48dp 焦点目标,页边距满足 48/27dp overscan 安全区。
+        // 这些固定值由 tvDensity 统一换算,因此在任意分辨率/上报 density 下都按比例缩放,
+        // 既符合规范又能灵活适配所有设备,无需写死像素或临时比例。
+        val hPad = dp(56)
+        val vPad = dp(40)
+        val heroEndGap = dp(44)
+        val heroW = minOf(dp(480), (resources.displayMetrics.widthPixels * 0.42f).toInt())
+        val heroH = (heroW / 1.6f).toInt()
+        val titleSize = 30f
+        val descSize = 18f
+        val metaSize = 14f
+        val playTextSize = 20f
+        val descLines = 3
+        val playH = 56
+        val chipH = 48
+        val playHPad = 34
+        val chipHPad = 22
+        val gapTitle = 10
+        val gapDesc = 14
+        val gapDisclosure = 10
+        val gapPlay = 22
+        val gapQuality = 18
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(64), dp(48), dp(64), dp(48))
+            setPadding(hPad, vPad, hPad, vPad)
             clipChildren = false
         }
         screen.addView(row, frameMatch())
@@ -1226,8 +1250,8 @@ class MainActivity : ComponentActivity() {
             image = heroImage,
             placeholder = heroInitials,
             title = details.title,
-            maxWidthPx = dp(500),
-            maxHeightPx = dp(308),
+            maxWidthPx = heroW,
+            maxHeightPx = heroH,
         )
         hero.addView(
             View(this).apply {
@@ -1238,13 +1262,15 @@ class MainActivity : ComponentActivity() {
             },
             frameMatch(),
         )
-        row.addView(hero, LinearLayout.LayoutParams(dp(500), dp(308)).withEndMargin(dp(48)))
+        row.addView(hero, LinearLayout.LayoutParams(heroW, heroH).withEndMargin(heroEndGap))
 
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
+            clipChildren = false
+            clipToPadding = false
         }
-        row.addView(info, LinearLayout.LayoutParams(0, match(), 1f))
+        row.addView(info, LinearLayout.LayoutParams(0, wrap(), 1f))
 
         val metadata = listOfNotNull(
             details.durationSeconds?.let { formatDurationSeconds(it) },
@@ -1253,46 +1279,46 @@ class MainActivity : ComponentActivity() {
         ).joinToString(" · ")
         if (metadata.isNotBlank()) {
             info.addView(
-                label(metadata, 13f, Colors.TextTertiary, bold = true, maxLines = 1).apply {
+                label(metadata, metaSize, Colors.TextTertiary, bold = true, maxLines = 1).apply {
                     letterSpacingCompat(0.04f)
                 },
                 linearMatch(),
             )
         }
         info.addView(
-            label(details.title, 36f, Colors.TextPrimary, bold = true, maxLines = 2).apply {
+            label(details.title, titleSize, Colors.TextPrimary, bold = true, maxLines = 2).apply {
                 letterSpacingCompat(-0.01f)
             },
-            LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(if (metadata.isNotBlank()) 10 else 0)),
+            LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(if (metadata.isNotBlank()) gapTitle else 0)),
         )
         info.addView(
-            label(details.description.ifBlank { "暂无简介" }, 16f, Colors.TextSecondary, maxLines = 3).apply {
+            label(details.description.ifBlank { "暂无简介" }, descSize, Colors.TextSecondary, maxLines = descLines).apply {
                 setLineSpacing(dp(4).toFloat(), 1f)
             },
-            LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(12)),
+            LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapDesc)),
         )
 
         if (details.description.length > 96) {
             info.addView(
-                pill("查看完整简介", selected = false, heightDp = 38, horizontalPaddingDp = 18) {
+                pill("查看完整简介", selected = false, heightDp = chipH, horizontalPaddingDp = chipHPad) {
                     showDescriptionDialog(details.title, details.description)
                 },
-                LinearLayout.LayoutParams(wrap(), dp(38)).withTopMargin(dp(8)),
+                LinearLayout.LayoutParams(wrap(), dp(chipH)).withTopMargin(dp(gapDisclosure)),
             )
         }
 
         val options = details.playbackOptions
         var detailErrorRetry: () -> Unit = viewModel::refreshSelectedPlayback
         if (options.isEmpty()) {
-            info.addView(label("暂无可播放视频", 15f, Colors.TextTertiary, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(24)))
+            info.addView(label("暂无可播放视频", 15f, Colors.TextTertiary, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapPlay)))
             if (detailFocusTarget == DetailFocusTarget.Play) {
                 detailFocusTarget = DetailFocusTarget.Refresh
             }
             val refresh = pill(
                 "刷新播放地址",
                 selected = false,
-                heightDp = 44,
-                horizontalPaddingDp = 22,
+                heightDp = chipH,
+                horizontalPaddingDp = chipHPad,
                 onFocusChange = { focused ->
                     if (focused) detailFocusTarget = DetailFocusTarget.Refresh
                 },
@@ -1302,7 +1328,7 @@ class MainActivity : ComponentActivity() {
                 },
             )
             registerDetailFocus(DetailFocusTarget.Refresh, refresh)
-            info.addView(refresh, LinearLayout.LayoutParams(wrap(), dp(44)).withTopMargin(dp(12)))
+            info.addView(refresh, LinearLayout.LayoutParams(wrap(), dp(chipH)).withTopMargin(dp(12)))
         } else {
             val selectedOption = options.firstOrNull { it.id == selectedPlaybackOptionId } ?: options.first()
             selectedPlaybackOptionId = selectedOption.id
@@ -1312,9 +1338,9 @@ class MainActivity : ComponentActivity() {
                     append("播放")
                     selectedOption.label.takeIf { it.isNotBlank() }?.let { append(" · $it") }
                 },
-                heightDp = 58,
-                horizontalPaddingDp = 38,
-                textSizeSp = 20f,
+                heightDp = playH,
+                horizontalPaddingDp = playHPad,
+                textSizeSp = playTextSize,
                 icon = PillIcon.Play,
                 onFocusChange = { focused ->
                     if (focused) detailFocusTarget = DetailFocusTarget.Play
@@ -1322,22 +1348,22 @@ class MainActivity : ComponentActivity() {
                 onClick = { viewModel.play(selectedOption) },
             )
             registerDetailFocus(DetailFocusTarget.Play, playButton)
-            info.addView(playButton, LinearLayout.LayoutParams(wrap(), dp(58)).withTopMargin(dp(24)))
+            info.addView(playButton, LinearLayout.LayoutParams(wrap(), dp(playH)).withTopMargin(dp(gapPlay)))
 
             if (options.size > 1) {
-                info.addView(label("清晰度", 13f, Colors.TextTertiary, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(20)))
+                info.addView(label("清晰度", metaSize, Colors.TextTertiary, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapQuality)))
                 val optionRow = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     clipChildren = false
                     clipToPadding = false
-                    setPadding(0, dp(10), 0, 0)
+                    setPadding(0, dp(gapDisclosure), 0, dp(4))
                 }
                 options.take(5).forEach { option ->
                     val chip = pill(
                         text = option.label.ifBlank { "播放" },
                         selected = option.id == selectedOption.id,
-                        heightDp = 44,
-                        horizontalPaddingDp = 22,
+                        heightDp = chipH,
+                        horizontalPaddingDp = chipHPad,
                         onFocusChange = { focused ->
                             if (focused) detailFocusTarget = DetailFocusTarget.Option(option.id)
                         },
@@ -1350,7 +1376,7 @@ class MainActivity : ComponentActivity() {
                     registerDetailFocus(DetailFocusTarget.Option(option.id), chip)
                     optionRow.addView(
                         chip,
-                        LinearLayout.LayoutParams(wrap(), dp(44)).withEndMargin(dp(14)),
+                        LinearLayout.LayoutParams(wrap(), dp(chipH)).withEndMargin(dp(14)),
                     )
                 }
                 info.addView(optionRow, linearMatch())
@@ -1996,7 +2022,9 @@ class MainActivity : ComponentActivity() {
         return TextView(this).apply {
             this.text = text
             setTextColor(color)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
+            // 字号同样按 TV 设计密度换算成像素,与 dp() 布局保持同一比例基准,
+            // 避免设备上报 density 异常时文字与布局比例不一致。
+            setTextSize(TypedValue.COMPLEX_UNIT_PX, sizeSp * tvDensity)
             typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
             setIncludeFontPadding(true)
             setMaxLines(maxLines)
@@ -2582,13 +2610,13 @@ class MainActivity : ComponentActivity() {
 
     private fun gridColumns(): Int {
         val width = resources.displayMetrics.widthPixels
-        val available = width - dp(112)
-        return max(1, (available + dp(16)) / (dp(130) + dp(16)))
+        val available = width - dp(96)
+        return max(1, (available + dp(16)) / (dp(116) + dp(16)))
     }
 
     private fun posterCardWidth(columns: Int): Int {
-        val available = resources.displayMetrics.widthPixels - dp(112) - dp(16 * columns)
-        return max(dp(130), available / columns)
+        val available = resources.displayMetrics.widthPixels - dp(96) - dp(16 * columns)
+        return max(dp(116), available / columns)
     }
 
     private fun match(): Int = ViewGroup.LayoutParams.MATCH_PARENT
@@ -2621,8 +2649,22 @@ class MainActivity : ComponentActivity() {
         return this
     }
 
+    // TV 设计密度:以 Android TV 标准设计画布 960×540dp(1080p=xhdpi)为基准,
+    // 用真实像素尺寸反推有效密度,使布局尺寸与字号只取决于真实分辨率比例,
+    // 不受设备上报 density 影响。在正确上报的 1080p 设备上结果等于系统 density(2.0),
+    // 因此对规范设备零副作用;在误报 density 的电视/盒子上则自动校正,
+    // 让全部页面在 720p/1080p/4K 上保持一致的 10ft 视觉比例与可读性。
+    private val tvDensity: Float
+        get() {
+            val metrics = resources.displayMetrics
+            val byHeight = metrics.heightPixels / 540f
+            val byWidth = metrics.widthPixels / 960f
+            val derived = minOf(byHeight, byWidth)
+            return if (derived.isFinite() && derived > 0f) derived else metrics.density
+        }
+
     private fun dp(value: Int): Int {
-        return (value * resources.displayMetrics.density + 0.5f).toInt()
+        return (value * tvDensity + 0.5f).toInt()
     }
 }
 
