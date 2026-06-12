@@ -55,6 +55,7 @@ import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.mediacenter.data.ContentCategory
+import com.example.mediacenter.data.DeliveryMode
 import com.example.mediacenter.data.isTransientHttpStatusCode
 import com.example.mediacenter.data.MediaApi
 import com.example.mediacenter.data.MediaRepository
@@ -126,6 +127,9 @@ class MainActivity : ComponentActivity() {
     private val playbackLoadErrorHandlingPolicy = CappedLoadErrorHandlingPolicy(MaxPlaybackRetries)
     // 瞬时 5xx 自动恢复期间盖在播放画面上的“正在重试…”提示,避免重试窗口里只剩黑屏/卡帧。
     private var playerRetryOverlay: View? = null
+    // “播放已稳定”计时器:STATE_READY 后延迟触发;只有同一地址连续顺畅播放超过窗口
+    // 才把 ViewModel 的恢复额度清零,防止“就绪即失败”的流陷入无限恢复循环。
+    private var playbackStabilityRunnable: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -291,8 +295,8 @@ class MainActivity : ComponentActivity() {
         }
 
         val body = FrameLayout(this).apply {
-            clipChildren = false
-            clipToPadding = false
+            clipChildren = true
+            clipToPadding = true
         }
         content.addView(body, LinearLayout.LayoutParams(match(), 0, 1f))
         if (state.items.isEmpty()) {
@@ -344,18 +348,23 @@ class MainActivity : ComponentActivity() {
             setPadding(0, dp(16), 0, dp(10))
             clipChildren = false
             clipToPadding = false
-            // 分类栏作为吸顶头:用不透明背景 + 高于卡片(聚焦卡片 elevation 为 dp14)的
-            // elevation,保证向上滚动的视频卡片绘制在分类栏“之下”,不会盖住分类。
-            setBackgroundColor(Colors.BackgroundTop)
+            // 分类栏保持透明，只让 chip / 搜索按钮自身提供玻璃底；主体列表在下方裁剪。
             elevationCompat(dp(20).toFloat())
         }
 
         val searchButton = circleIconButton(
             icon = PillIcon.Search,
             onClick = {
+                cancelPendingCategorySelect()
                 homeFocusArea = HomeFocusArea.Search
                 searchVisible = true
                 invalidateUi()
+            },
+            onFocusChange = { focused ->
+                if (focused) {
+                    cancelPendingCategorySelect()
+                    homeFocusArea = HomeFocusArea.Search
+                }
             },
         ).apply {
             setOnKeyListener { _, keyCode, event ->
@@ -431,6 +440,7 @@ class MainActivity : ComponentActivity() {
                         KeyEvent.KEYCODE_DPAD_LEFT -> index == 0
                         KeyEvent.KEYCODE_DPAD_RIGHT -> {
                             if (index == categories.lastIndex) {
+                                cancelPendingCategorySelect()
                                 homeFocusArea = HomeFocusArea.Search
                                 requestHomeFocus(HomeFocusTarget.Search)
                             } else {
@@ -710,7 +720,12 @@ class MainActivity : ComponentActivity() {
         cancelPendingCategorySelect()
         val runnable = Runnable {
             pendingCategorySelect = null
-            if (!searchVisible && rememberedCategoryId == category.id) {
+            if (!searchVisible &&
+                homeFocusArea != HomeFocusArea.Search &&
+                currentState.selected == null &&
+                currentState.playing == null &&
+                rememberedCategoryId == category.id
+            ) {
                 pendingHomeFocus = HomeFocusTarget.Category(category.id)
                 viewModel.selectCategory(category)
             }
@@ -1077,7 +1092,10 @@ class MainActivity : ComponentActivity() {
                 if (card.isAttachedToWindow) {
                     loadVisibleThumbnail()
                 }
-                card.setOnClickListener { viewModel.openDetails(video) }
+                card.setOnClickListener {
+                    cancelPendingCategorySelect()
+                    viewModel.openDetails(video)
+                }
                 card.setOnKeyListener { _, keyCode, event ->
                     if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
                     // loadMore 追加后,bind 时捕获的 index/itemCount 会变陈旧,
@@ -1442,16 +1460,24 @@ class MainActivity : ComponentActivity() {
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         when (playbackState) {
-                            Player.STATE_READY -> viewModel.playbackReady(stream.id)
-                            Player.STATE_ENDED -> viewModel.playNext()
+                            // 就绪后才开始计稳定计时;持续顺畅播放超过窗口才清零恢复额度,
+                            // 避免“就绪即失败”的流靠 STATE_READY 反复复位计数器造成无限恢复循环。
+                            Player.STATE_READY -> schedulePlaybackStabilityReset(stream.id)
+                            Player.STATE_ENDED -> {
+                                cancelPlaybackStabilityReset()
+                                viewModel.playNext()
+                            }
+                            else -> cancelPlaybackStabilityReset()
                         }
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
                         Log.w("MediaCenterPlayer", "Playback failed for ${stream.id}", error)
+                        cancelPlaybackStabilityReset()
                         viewModel.playbackFailed(
                             playbackErrorMessage(error),
                             recoverable = isRecoverablePlaybackError(error),
+                            preferProxyPlayback = shouldUseProxyPlaybackFallback(error, stream),
                         )
                     }
                 })
@@ -1487,6 +1513,16 @@ class MainActivity : ComponentActivity() {
             overlay.alpha = 1f
             updateOverlayAutoHide()
         }
+        fun controlsVisible(): Boolean = overlay.alpha > 0.5f
+        fun isDirectionalDpad(keyCode: Int): Boolean {
+            return keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
+                keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ||
+                keyCode == KeyEvent.KEYCODE_DPAD_UP ||
+                keyCode == KeyEvent.KEYCODE_DPAD_DOWN
+        }
+        fun isPrimaryDpadAction(keyCode: Int): Boolean {
+            return keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER
+        }
         fun playFromCurrentPosition() {
             if (nextPlayer.playbackState == Player.STATE_ENDED) {
                 nextPlayer.seekTo(0)
@@ -1514,6 +1550,10 @@ class MainActivity : ComponentActivity() {
             isFocusableInTouchMode = true
             setOnKeyListener { _, keyCode, event ->
                 if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                if ((isDirectionalDpad(keyCode) || isPrimaryDpadAction(keyCode)) && !controlsVisible()) {
+                    showOverlay()
+                    return@setOnKeyListener true
+                }
                 when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_CENTER,
                     KeyEvent.KEYCODE_ENTER,
@@ -1694,7 +1734,7 @@ class MainActivity : ComponentActivity() {
 
         val hint = label(
             buildString {
-                append("OK 播放/暂停 · ←→ 快退/快进 10 秒")
+                append("方向键先显示控制层 · OK 播放/暂停 · ←→ 快退/快进 10 秒")
                 if (hasPrevious) append(" · ↑ 上一个")
                 if (hasNext) append(" · ↓ 下一个")
             },
@@ -1845,9 +1885,34 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun releasePlayer() {
+        cancelPlaybackStabilityReset()
         player?.release()
         player = null
         currentPlayerUrl = null
+    }
+
+    // STATE_READY 后启动稳定计时:延迟 [PlaybackStabilityResetMs] 后,若仍在顺畅播放
+    // 同一条流,则通知 ViewModel 这条流确实可用、重置恢复额度。任何失败/结束/缓冲
+    // 或重建播放器都会取消该计时,从而不会被“就绪即失败”的流误判为稳定。
+    private fun schedulePlaybackStabilityReset(streamId: String) {
+        cancelPlaybackStabilityReset()
+        val runnable = Runnable {
+            playbackStabilityRunnable = null
+            val activePlayer = player
+            if (activePlayer != null &&
+                activePlayer.playbackState == Player.STATE_READY &&
+                activePlayer.playWhenReady
+            ) {
+                viewModel.playbackSustained(streamId)
+            }
+        }
+        playbackStabilityRunnable = runnable
+        root.postDelayed(runnable, PlaybackStabilityResetMs)
+    }
+
+    private fun cancelPlaybackStabilityReset() {
+        playbackStabilityRunnable?.let { root.removeCallbacks(it) }
+        playbackStabilityRunnable = null
     }
 
     private fun exitSearchMode() {
@@ -3029,6 +3094,10 @@ private class WarningGlyphView(context: Context) : View(context) {
 private const val PlaybackUserAgent =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 private const val MaxPlaybackRetries = 3
+// 判定“播放已稳定”所需的连续顺畅播放时长。需明显大于单次恢复退避(≤4.5s)+ 缓冲,
+// 以可靠区分“真正在正常播放”与“就绪后数秒又失败”的流;后者不会被计时器误判为稳定,
+// 因而无法复位恢复额度,可在封顶次数内退场而非无限重试。
+private const val PlaybackStabilityResetMs = 12_000L
 private const val MaxThumbnailBytes = 6 * 1024 * 1024
 private const val BackdropAlpha = 0.55f
 // 瞬时 5xx/网络抖动最多重试 2 次,退避 400ms / 1200ms,总附加等待 ≤ 1.6s。
@@ -3084,17 +3153,35 @@ private fun playbackErrorMessage(error: PlaybackException): String {
             PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
             PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE,
             -> "当前播放格式不受支持，请换个清晰度或让服务端转码"
-            else -> "视频播放失败，请稍后重试"
+            else -> if (error.findCause<HttpDataSource.HttpDataSourceException>() != null) {
+                "播放连接中断，请稍后重试"
+            } else {
+                "视频播放失败，请稍后重试"
+            }
         }
     }
 }
 
-// 过期/拒绝的短期播放 URL(401/403),以及网关超时/限流/瞬时 5xx 都可通过
-// 刷新 /playback 拿到新地址后恢复,不应直接弹回详情页。
+// 过期/拒绝的短期播放 URL(401/403)、网关超时/限流/瞬时 5xx,以及 Bilibili CDN
+// 读首包时偶发的连接重置,都可通过刷新 /playback 拿到新地址/新 CDN 后恢复。
 private fun isRecoverablePlaybackError(error: PlaybackException): Boolean {
     val responseCode = error.findCause<HttpDataSource.InvalidResponseCodeException>()?.responseCode
-        ?: return false
+        ?: return when (error.errorCode) {
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DECODING_FAILED,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE,
+            -> false
+            else -> error.findCause<HttpDataSource.HttpDataSourceException>() != null
+        }
     return responseCode == 401 || responseCode == 403 || responseCode.isTransientHttpStatusCode()
+}
+
+private fun shouldUseProxyPlaybackFallback(error: PlaybackException, stream: PlaybackOption): Boolean {
+    return stream.delivery == DeliveryMode.DIRECT && isRecoverablePlaybackError(error)
 }
 
 private fun playbackMimeType(mimeType: String?): String {

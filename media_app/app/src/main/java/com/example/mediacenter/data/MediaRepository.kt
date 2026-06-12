@@ -77,9 +77,9 @@ class MediaRepository(
         details(video, cacheScope)
     }
 
-    suspend fun playbackOptions(videoId: String): List<PlaybackOption> {
+    suspend fun playbackOptions(videoId: String, preferProxy: Boolean = false): List<PlaybackOption> {
         return try {
-            api.playback(videoId).items.filter { it.kind == "vod" }
+            api.playback(videoId, preferProxy).items.filter { it.kind == "vod" }
         } catch (error: Throwable) {
             if (error.isNoPlayableStream) emptyList() else throw error
         }

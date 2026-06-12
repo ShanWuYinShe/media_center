@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.mediacenter.data.ContentCategory
+import com.example.mediacenter.data.DeliveryMode
 import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.PlaybackOption
 import com.example.mediacenter.data.VideoDetails
@@ -66,6 +67,12 @@ private const val MaxPlaybackRecoveryAttempts = 3
 // warmup 时间。3 次重试合计约 1.5s + 3s + 4.5s = 9s,避免对仍在预热的网关连发请求。
 private const val PlaybackRecoveryBackoffStepMs = 1_500L
 
+// 判定“播放已稳定”的持续时长:只有同一播放地址连续顺畅播放超过该时长,才把
+// [playbackRecoveryAttempts] 清零、重新积攒恢复额度。仅凭 STATE_READY 就清零会导致
+// “就绪→播放数秒→再次失败”的流(典型:上游分段 403 / 签名中途过期)每轮都把计数器
+// 复位,使 [MaxPlaybackRecoveryAttempts] 上限永远失效,陷入“刷新地址→重建播放器”的
+// 无限恢复循环,持续吃内存/CPU/网络直至进程被杀、重启回首页。
+
 class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     private val mutableState = MutableStateFlow(MediaUiState())
     val state: StateFlow<MediaUiState> = mutableState
@@ -81,7 +88,9 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     private var pendingAutoAdvanceFromId: String? = null
     // 播放发生短期 URL 失效或瞬时 5xx(典型 502 Bad Gateway)时,自动刷新
     // 地址 / 切换到下一清晰度重试,而不是直接把用户弹回详情页。计数器在新播放开始
-    // 或播放器成功就绪时清零,封顶 [MaxPlaybackRecoveryAttempts] 次后转为展示错误。
+    // 或播放“持续稳定”一段时间后清零(见 [playbackSustained]),封顶
+    // [MaxPlaybackRecoveryAttempts] 次后转为展示错误。注意:不能仅凭 STATE_READY
+    // 就清零,否则“就绪即失败”的流会绕过上限陷入无限恢复循环。
     private var playbackRecoveryAttempts = 0
 
     init {
@@ -317,36 +326,51 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         }
     }
 
-    fun playbackReady(streamId: String) {
+    /**
+     * 播放“持续稳定”信号:同一播放地址已连续顺畅播放超过稳定窗口(由 UI 层计时,
+     * 见 MainActivity 的稳定计时器)时调用,表示这条流确实可用,可以把恢复额度清零、
+     * 重新积攒。**不要**在 STATE_READY 一就绪时就调用——“就绪即失败”的流会借此
+     * 反复复位计数器,使 [MaxPlaybackRecoveryAttempts] 失效并陷入无限恢复循环。
+     */
+    fun playbackSustained(streamId: String) {
         if (mutableState.value.playing?.id == streamId) {
             playbackRecoveryAttempts = 0
         }
     }
 
-    fun playbackFailed(message: String, recoverable: Boolean = false) {
+    fun playbackFailed(
+        message: String,
+        recoverable: Boolean = false,
+        preferProxyPlayback: Boolean = false,
+    ) {
         val current = mutableState.value
-        val selected = current.selected
         val failedOption = current.playing
-        // 短期 URL 失效 / 瞬时 5xx 且仍有恢复额度时,自动刷新播放地址
+        val selected = current.selected
+            ?: current.playingVideo?.toPlaybackFailureDetails(failedOption)
+        if (current.selected == null && selected != null) {
+            mutableState.update { it.copy(selected = selected) }
+        }
+        // 短期 URL 失效 / 瞬时 5xx / CDN 断流且仍有恢复额度时,自动刷新播放地址
         // 并尝试切换清晰度续播,不打断用户;额度耗尽或非瞬时错误才落到错误态。
         if (recoverable && selected != null && failedOption != null &&
             playbackRecoveryAttempts < MaxPlaybackRecoveryAttempts
         ) {
-            // 只有一个清晰度时,重试同源收益低,限制为单次恢复。
-            val maxAttempts = if (selected.playbackOptions.size <= 1) 1
-                              else MaxPlaybackRecoveryAttempts
-            if (playbackRecoveryAttempts < maxAttempts) {
-                playbackRecoveryAttempts++
-                recoverPlayback(selected.id, failedOption, message)
-                return
-            }
+            playbackRecoveryAttempts++
+            recoverPlayback(
+                videoId = selected.id,
+                failedOption = failedOption,
+                fallbackMessage = message,
+                preferProxyPlayback = preferProxyPlayback || failedOption.delivery == DeliveryMode.PROXY,
+            )
+            return
         }
         playbackRecoveryAttempts = 0
         mutableState.update {
+            val fallbackSelected = it.selected ?: selected
             if (it.playing == null) {
-                it.copy(error = message)
+                it.copy(selected = fallbackSelected, error = message)
             } else {
-                it.copy(playing = null, error = message)
+                it.copy(playing = null, selected = fallbackSelected, error = message)
             }
         }
     }
@@ -362,6 +386,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         videoId: String,
         failedOption: PlaybackOption,
         fallbackMessage: String,
+        preferProxyPlayback: Boolean,
     ) {
         val attempt = playbackRecoveryAttempts
         recoveryJob?.cancel()
@@ -374,7 +399,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                 mutableState.update { it.copy(loading = false) }
                 return@launch
             }
-            runCatchingCancellable { repository.playbackOptions(videoId) }
+            runCatchingCancellable { repository.playbackOptions(videoId, preferProxyPlayback) }
                 .onSuccess { options ->
                     val sameIdx = options.indexOfFirst { it.id == failedOption.id }
                     val candidate = when {
@@ -633,6 +658,23 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             VideoDetailsCacheScope.Category -> categoryDetailsPrefetchCompletedIds
             VideoDetailsCacheScope.Search -> searchDetailsPrefetchCompletedIds
         }
+    }
+
+    private fun VideoSummary.toPlaybackFailureDetails(failedOption: PlaybackOption?): VideoDetails {
+        return VideoDetails(
+            id = id,
+            videoKind = videoKind,
+            title = title,
+            description = description,
+            year = year,
+            creators = creators,
+            thumbnailUrl = thumbnailUrl,
+            thumbnailHeaders = thumbnailHeaders,
+            thumbnailDelivery = thumbnailDelivery,
+            durationSeconds = durationSeconds,
+            playbackKind = playbackKind,
+            playbackOptions = listOfNotNull(failedOption),
+        )
     }
 }
 

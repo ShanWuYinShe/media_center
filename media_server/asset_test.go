@@ -276,6 +276,41 @@ func TestApplyDeliveryDirectPassthrough(t *testing.T) {
 	}
 }
 
+func TestApplyDeliveryForcedProxyForPlaybackOptions(t *testing.T) {
+	server := &mediaServer{
+		asset:         NewAssetSigner("secret", time.Hour),
+		deliveryModes: map[string]string{"bilibili": DeliveryDirect},
+	}
+	options := []PlaybackOption{{
+		ID:      "p1",
+		URL:     "https://upos.example/v.mp4",
+		Headers: map[string]string{"Referer": "https://www.bilibili.com"},
+	}}
+
+	server.applyDeliveryToOptionsForProviderWithMode("https://host/api", "bilibili", DeliveryProxy, options)
+
+	option := options[0]
+	if option.Delivery != DeliveryProxy || !strings.HasPrefix(option.URL, "https://host/api/asset?") || option.Headers != nil {
+		t.Fatalf("forced proxy option not rewritten correctly: %+v", option)
+	}
+}
+
+func TestPlaybackDeliveryOverride(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/videos/v/playback?delivery=proxy", nil)
+	mode, err := playbackDeliveryOverride(req)
+	if err != nil {
+		t.Fatalf("unexpected delivery override error: %v", err)
+	}
+	if mode != DeliveryProxy {
+		t.Fatalf("expected proxy override, got %s", mode)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/videos/v/playback?delivery=invalid", nil)
+	if _, err := playbackDeliveryOverride(req); err == nil {
+		t.Fatal("expected invalid delivery override to fail")
+	}
+}
+
 func TestAssetBaseURLUsesForwardedPrefix(t *testing.T) {
 	server := &mediaServer{}
 	req := httptest.NewRequest(http.MethodGet, "/api/videos/id", nil)

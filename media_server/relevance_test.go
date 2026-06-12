@@ -73,6 +73,26 @@ func TestDefaultDotaFiltersRejectHighlightNoise(t *testing.T) {
 	}
 }
 
+func TestDefaultDotaFiltersRejectShortVideos(t *testing.T) {
+	cfg, err := loadContentConfig("src/contentCategories.json")
+	if err != nil {
+		t.Fatalf("load content config: %v", err)
+	}
+	dota := mustCategory(t, cfg.Categories, "dota-zone")
+
+	score := relevanceScore(
+		VideoSummary{
+			Title:           "dota冷冷透露为什么不再打dota2，也不打dota1了",
+			Description:     "Dota 相关短视频",
+			DurationSeconds: 85,
+		},
+		dota,
+	)
+	if score >= 0 {
+		t.Fatalf("expected short dota candidate to be rejected, got %d", score)
+	}
+}
+
 func mustCategory(t *testing.T, categories []ContentCategory, id string) ContentCategory {
 	t.Helper()
 	for _, category := range categories {

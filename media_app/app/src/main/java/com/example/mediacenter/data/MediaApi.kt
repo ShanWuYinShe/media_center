@@ -60,8 +60,9 @@ class MediaApi(
         pathSegments = listOf("videos", id),
     )
 
-    suspend fun playback(id: String): PlaybackOptionsResponse = get(
+    suspend fun playback(id: String, preferProxy: Boolean = false): PlaybackOptionsResponse = get(
         pathSegments = listOf("videos", id, "playback"),
+        query = if (preferProxy) mapOf("delivery" to DeliveryMode.PROXY) else emptyMap(),
     )
 
     private suspend inline fun <reified T> get(

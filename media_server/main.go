@@ -202,7 +202,12 @@ func (s *mediaServer) handlePlayback(w http.ResponseWriter, r *http.Request, vid
 		s.writeError(w, playbackErr)
 		return
 	}
-	s.applyDeliveryToOptionsForProvider(s.assetBaseURL(r), ref.Provider, options)
+	deliveryOverride, deliveryErr := playbackDeliveryOverride(r)
+	if deliveryErr != nil {
+		s.writeError(w, deliveryErr)
+		return
+	}
+	s.applyDeliveryToOptionsForProviderWithMode(s.assetBaseURL(r), ref.Provider, deliveryOverride, options)
 	s.writeJSON(w, http.StatusOK, PlaybackOptionsResponse{Items: options})
 }
 
@@ -336,6 +341,21 @@ func paginationFromRequest(r *http.Request) (int, int, *apiError) {
 	return page, pageSize, nil
 }
 
+func playbackDeliveryOverride(r *http.Request) (string, *apiError) {
+	raw := strings.TrimSpace(r.URL.Query().Get("delivery"))
+	if raw == "" {
+		return "", nil
+	}
+	if raw == DeliveryProxy {
+		return raw, nil
+	}
+	return "", &apiError{
+		Status:  http.StatusBadRequest,
+		Code:    "BAD_REQUEST",
+		Message: "delivery 参数不合法。",
+	}
+}
+
 func (s *mediaServer) writeJSON(w http.ResponseWriter, status int, payload any) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -415,7 +435,19 @@ func firstForwardedValue(raw string) string {
 //   - direct：原样返回上游 URL + companion headers，由 App 直连。
 //   - proxy：返回 /asset 签名代理地址，上游请求头由服务端回源时附加，不下发。
 func (s *mediaServer) deliver(providerID, base, rawURL string, headers map[string]string) (string, map[string]string, string) {
-	mode := s.deliveryModeForProvider(providerID)
+	return s.deliverWithMode(providerID, base, rawURL, headers, "")
+}
+
+func (s *mediaServer) deliverWithMode(
+	providerID,
+	base,
+	rawURL string,
+	headers map[string]string,
+	mode string,
+) (string, map[string]string, string) {
+	if mode == "" {
+		mode = s.deliveryModeForProvider(providerID)
+	}
 	if mode == DeliveryProxy && strings.TrimSpace(rawURL) != "" {
 		return s.asset.ProxyURL(base, rawURL, headers), nil, DeliveryProxy
 	}
@@ -443,8 +475,23 @@ func (s *mediaServer) applyDeliveryToSummary(base string, v *VideoSummary) {
 }
 
 func (s *mediaServer) applyDeliveryToOptionsForProvider(base, providerID string, options []PlaybackOption) {
+	s.applyDeliveryToOptionsForProviderWithMode(base, providerID, "", options)
+}
+
+func (s *mediaServer) applyDeliveryToOptionsForProviderWithMode(
+	base,
+	providerID,
+	mode string,
+	options []PlaybackOption,
+) {
 	for i := range options {
-		options[i].URL, options[i].Headers, options[i].Delivery = s.deliver(providerID, base, options[i].URL, options[i].Headers)
+		options[i].URL, options[i].Headers, options[i].Delivery = s.deliverWithMode(
+			providerID,
+			base,
+			options[i].URL,
+			options[i].Headers,
+			mode,
+		)
 	}
 }
 
@@ -468,7 +515,7 @@ func relevanceScore(item VideoSummary, category ContentCategory) int {
 	if containsAny(text, category.Excludes) {
 		return -1
 	}
-	if category.ID != "dota-zone" && item.DurationSeconds > 0 && item.DurationSeconds < 20*60 {
+	if item.DurationSeconds > 0 && item.DurationSeconds < 20*60 {
 		return -1
 	}
 	keywordScore := 0
