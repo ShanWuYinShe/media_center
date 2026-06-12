@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-`media_center` 的合规公开视频聚合后端：Go HTTP 服务，对外提供分类、搜索、详情、播放地址与 asset 代理接口（当前 Provider：Bilibili）。仓库级约定见上层 `media_center/CLAUDE.md`，通用约束见全局 `~/.claude/CLAUDE.md`；本文件只补充本目录的本地命令与约束，不得放宽上层约束。
+`media_center` 的合规公开视频聚合后端：Go HTTP 服务，对外提供分类、搜索、详情、播放地址与 asset 代理接口（当前 Provider：Bilibili）。
 
 ## 构建 & 测试
 
