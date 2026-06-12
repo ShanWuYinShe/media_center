@@ -11,6 +11,7 @@ import com.example.mediacenter.data.PlaybackOption
 import com.example.mediacenter.data.VideoDetails
 import com.example.mediacenter.data.VideoDetailsCacheScope
 import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.log.AppLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -275,6 +276,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         val selected = current.selected
         val video = current.playingVideo
             ?: selected?.let { sel -> current.items.find { it.id == sel.id } }
+        AppLog.i("Playback", "play requested video=${selected?.id ?: "<none>"} option=${stream.id} kind=${stream.kind}")
         if (selected == null) {
             mutableState.update { state ->
                 state.copy(playing = stream, playingVideo = video ?: state.playingVideo)
@@ -334,6 +336,9 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
      */
     fun playbackSustained(streamId: String) {
         if (mutableState.value.playing?.id == streamId) {
+            if (playbackRecoveryAttempts > 0) {
+                AppLog.i("Playback", "stream $streamId sustained, reset recovery budget (was $playbackRecoveryAttempts)")
+            }
             playbackRecoveryAttempts = 0
         }
     }
@@ -356,6 +361,11 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             playbackRecoveryAttempts < MaxPlaybackRecoveryAttempts
         ) {
             playbackRecoveryAttempts++
+            AppLog.w(
+                "Playback",
+                "failed (recoverable) video=${selected.id} option=${failedOption.id} " +
+                    "-> recover attempt $playbackRecoveryAttempts/$MaxPlaybackRecoveryAttempts: $message",
+            )
             recoverPlayback(
                 videoId = selected.id,
                 failedOption = failedOption,
@@ -364,6 +374,11 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             )
             return
         }
+        AppLog.w(
+            "Playback",
+            "failed video=${selected?.id} option=${failedOption?.id} recoverable=$recoverable " +
+                "attempts=$playbackRecoveryAttempts -> show error, back to ${if (selected != null) "details" else "home"}: $message",
+        )
         playbackRecoveryAttempts = 0
         mutableState.update {
             val fallbackSelected = it.selected ?: selected
@@ -396,6 +411,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             val afterDelay = mutableState.value
             // 退避期间用户离开播放页或切换了清晰度 → 放弃恢复
             if (afterDelay.selected?.id != videoId || afterDelay.playing?.id != failedOption.id) {
+                AppLog.d("Playback", "recover attempt $attempt aborted: user left or switched stream")
                 mutableState.update { it.copy(loading = false) }
                 return@launch
             }
@@ -411,6 +427,11 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                         // 同档是列表末尾或已消失:回绕到首档
                         else -> options.first()
                     }
+                    AppLog.i(
+                        "Playback",
+                        "recover attempt $attempt fetched ${options.size} options, " +
+                            "candidate=${candidate?.id ?: "<none>"} proxy=$preferProxyPlayback",
+                    )
                     mutableState.update { state ->
                         if (state.selected?.id != videoId || state.playing?.id != failedOption.id) {
                             state.copy(loading = false)
@@ -430,6 +451,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     }
                 }
                 .onFailure { error ->
+                    AppLog.w("Playback", "recover attempt $attempt fetch failed for video=$videoId", error)
                     mutableState.update { state ->
                         if (state.selected?.id != videoId || state.playing?.id != failedOption.id) {
                             state.copy(loading = false)
@@ -503,6 +525,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             return
         }
         pendingAutoAdvanceFromId = null
+        AppLog.i("Nav", "playNext to index $nextIndex of ${items.size}")
         playVideoAt(nextIndex, items)
     }
 
@@ -516,6 +539,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         val idx = items.indexOfFirst { it.id == curId }
         if (idx <= 0) return
         pendingAutoAdvanceFromId = null
+        AppLog.i("Nav", "playPrevious to index ${idx - 1} of ${items.size}")
         playVideoAt(idx - 1, items, prefetchNextPage = false)
     }
 
@@ -531,6 +555,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     ) {
         playbackRecoveryAttempts = 0
         val nextVideo = items[index]
+        AppLog.i("Playback", "playVideoAt index=$index video=${nextVideo.id}")
         val cacheScope = currentDetailsCacheScope()
         // 临近列表末尾时顺便预取下一页,保证“下一个”能持续可用
         if (prefetchNextPage && index >= items.size - 3) loadMore()
@@ -546,6 +571,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                 .onSuccess { details ->
                     val option = details.playbackOptions.firstOrNull()
                     if (option == null) {
+                        AppLog.w("Playback", "video ${details.id} has no playable option")
                         mutableState.update {
                             it.copy(
                                 loading = false,
@@ -567,6 +593,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     }
                 }
                 .onFailure { error ->
+                    AppLog.w("Playback", "playVideoAt failed for ${nextVideo.id}: ${error.message}")
                     mutableState.update {
                         it.copy(
                             loading = false,
@@ -602,6 +629,12 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         detailsJob?.cancel()
         recoveryJob?.cancel()
         pendingAutoAdvanceFromId = null
+        val before = mutableState.value
+        AppLog.i("Nav", "back from " + when {
+            before.playing != null -> "player -> details"
+            before.selected != null -> "details -> home"
+            else -> "home"
+        })
         mutableState.update {
             // 取消 detailsJob 后,其内部的 loading=false 清理可能不再执行(协程在
             // recoverPlayback 的退避 delay 中被取消)。BACK 已无在途加载需要等待,

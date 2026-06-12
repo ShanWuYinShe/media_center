@@ -1,6 +1,6 @@
 package com.example.mediacenter.data
 
-import android.util.Log
+import com.example.mediacenter.log.AppLog
 import java.io.File
 import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
@@ -35,7 +35,7 @@ class VideoDetailsCache(
         try {
             val cached = json.decodeFromString<CachedVideoDetails>(file.readText(Charsets.UTF_8))
             if (cached.id != video.id) {
-                Log.w(LogTag, "Ignoring mismatched cached details for ${video.id}")
+                AppLog.w("Cache", "Ignoring mismatched cached details for ${video.id}")
                 file.delete()
                 null
             } else if (cached.isExpired(maxAgeMillis)) {
@@ -46,7 +46,7 @@ class VideoDetailsCache(
                 cached.toVideoDetails(video)
             }
         } catch (error: Exception) {
-            Log.w(LogTag, "Unable to read cached details for ${video.id}", error)
+            AppLog.w("Cache", "Unable to read cached details for ${video.id}", error)
             file.delete()
             null
         }
@@ -65,7 +65,7 @@ class VideoDetailsCache(
             file.setLastModified(System.currentTimeMillis())
             trimToMaxSize()
         } catch (error: Exception) {
-            Log.w(LogTag, "Unable to cache details for ${details.id}", error)
+            AppLog.w("Cache", "Unable to cache details for ${details.id}", error)
         }
     }
 
@@ -97,7 +97,6 @@ class VideoDetailsCache(
         const val SearchCacheDirectoryName = "video-details-search"
         const val SearchMaxBytes = 20L * 1024L * 1024L
         const val SearchMaxAgeMillis = 60L * 60L * 1000L
-        private const val LogTag = "VideoDetailsCache"
     }
 }
 

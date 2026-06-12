@@ -1,6 +1,7 @@
 package com.example.mediacenter.data
 
 import java.io.IOException
+import com.example.mediacenter.log.AppLog
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
@@ -76,6 +77,8 @@ class MediaApi(
         pathSegments.forEach(builder::addPathSegment)
         query.forEach { (key, value) -> builder.addQueryParameter(key, value) }
         val request = Request.Builder().url(builder.build()).get().build()
+        val label = "/" + pathSegments.joinToString("/")
+        val startedAt = System.currentTimeMillis()
 
         // 重试覆盖两类瞬时故障：
         //   1. IOException —— 冷启动握手抖动、连接重置等网络层错误。
@@ -84,27 +87,40 @@ class MediaApi(
         //      保持一致;业务类 4xx 与反序列化错误不重试,立即上抛。
         var attempt = 0
         var lastError: Throwable? = null
+        AppLog.d("Api", "GET $label query=${query.keys}")
         while (true) {
             try {
                 val body = execute(request)
-                return withContext(Dispatchers.Default) {
+                val result = withContext(Dispatchers.Default) {
                     json.decodeFromString<T>(body)
                 }
+                AppLog.i(
+                    "Api",
+                    "GET $label ok in ${System.currentTimeMillis() - startedAt}ms" +
+                        if (attempt > 0) " (after $attempt retr${if (attempt == 1) "y" else "ies"})" else "",
+                )
+                return result
             } catch (error: IOException) {
                 lastError = error
                 if (attempt >= MAX_RETRIES) break
+                AppLog.w("Api", "GET $label IO error, retry ${attempt + 1}/$MAX_RETRIES: ${error.message}")
                 // 退避 500ms / 1500ms,总附加等待 ≤ 2s,不会让用户感觉卡顿。
                 kotlinx.coroutines.delay(RETRY_BACKOFF_MS[attempt])
                 attempt++
             } catch (error: ApiException) {
-                if (!error.isTransient || attempt >= MAX_RETRIES) throw error
+                if (!error.isTransient || attempt >= MAX_RETRIES) {
+                    AppLog.w("Api", "GET $label http ${error.statusCode} code=${error.errorCode}")
+                    throw error
+                }
                 lastError = error
+                AppLog.w("Api", "GET $label transient ${error.statusCode}, retry ${attempt + 1}/$MAX_RETRIES")
                 kotlinx.coroutines.delay(RETRY_BACKOFF_MS[attempt])
                 attempt++
             }
         }
         // 走到这里只可能是网络层 IOException 重试耗尽(瞬时 5xx 在上方已直接抛出),
         // 统一包装成面向用户的友好文案,同时保留原始异常便于排查。
+        AppLog.w("Api", "GET $label failed after ${attempt} retries in ${System.currentTimeMillis() - startedAt}ms", lastError)
         throw IOException(NETWORK_FAILURE_MESSAGE, lastError)
     }
 

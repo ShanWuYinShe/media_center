@@ -65,6 +65,7 @@ import com.example.mediacenter.data.VideoDetailsCache
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.player.CappedLoadErrorHandlingPolicy
 import com.example.mediacenter.player.TolerantDashManifestParser
+import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.MediaViewModel
 import com.example.mediacenter.ui.MediaViewModelFactory
@@ -133,7 +134,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Log.i("MediaCenter", "MEDIA_SERVER_URL=${BuildConfig.MEDIA_SERVER_URL}")
+        AppLog.i("Activity", "onCreate restored=${savedInstanceState != null} server=${BuildConfig.MEDIA_SERVER_URL}")
 
         root = FrameLayout(this)
         setContentView(root)
@@ -178,12 +179,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        AppLog.i("Activity", "onStop, releasing player")
         player?.pause()
         releasePlayer()
         renderedState = null
     }
 
     override fun onDestroy() {
+        AppLog.i("Activity", "onDestroy")
         releasePlayer()
         super.onDestroy()
     }
@@ -1422,6 +1425,11 @@ class MainActivity : ComponentActivity() {
 
         val playbackUrl = stream.url
         val requestHeaders = playbackRequestHeaders(stream.headers)
+        AppLog.i(
+            "Player",
+            "prepare stream=${stream.id} kind=${stream.kind} mime=${stream.mimeType} " +
+                "delivery=${stream.delivery} url=${AppLog.redactUrl(playbackUrl)}",
+        )
         val dataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(8_000)
@@ -1462,21 +1470,35 @@ class MainActivity : ComponentActivity() {
                         when (playbackState) {
                             // 就绪后才开始计稳定计时;持续顺畅播放超过窗口才清零恢复额度,
                             // 避免“就绪即失败”的流靠 STATE_READY 反复复位计数器造成无限恢复循环。
-                            Player.STATE_READY -> schedulePlaybackStabilityReset(stream.id)
+                            Player.STATE_READY -> {
+                                AppLog.i("Player", "stream ${stream.id} READY")
+                                schedulePlaybackStabilityReset(stream.id)
+                            }
                             Player.STATE_ENDED -> {
+                                AppLog.i("Player", "stream ${stream.id} ENDED -> playNext")
                                 cancelPlaybackStabilityReset()
                                 viewModel.playNext()
+                            }
+                            Player.STATE_BUFFERING -> {
+                                AppLog.d("Player", "stream ${stream.id} BUFFERING")
+                                cancelPlaybackStabilityReset()
                             }
                             else -> cancelPlaybackStabilityReset()
                         }
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
-                        Log.w("MediaCenterPlayer", "Playback failed for ${stream.id}", error)
+                        val recoverable = isRecoverablePlaybackError(error)
+                        AppLog.w(
+                            "Player",
+                            "stream ${stream.id} error code=${error.errorCode} " +
+                                "name=${error.errorCodeName} recoverable=$recoverable",
+                            error,
+                        )
                         cancelPlaybackStabilityReset()
                         viewModel.playbackFailed(
                             playbackErrorMessage(error),
-                            recoverable = isRecoverablePlaybackError(error),
+                            recoverable = recoverable,
                             preferProxyPlayback = shouldUseProxyPlaybackFallback(error, stream),
                         )
                     }
@@ -1903,6 +1925,7 @@ class MainActivity : ComponentActivity() {
                 activePlayer.playbackState == Player.STATE_READY &&
                 activePlayer.playWhenReady
             ) {
+                AppLog.i("Player", "stream $streamId stable for ${PlaybackStabilityResetMs}ms")
                 viewModel.playbackSustained(streamId)
             }
         }
