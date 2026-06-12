@@ -262,7 +262,11 @@ func (s *mediaServer) collectCategoryPage(
 			if err != nil {
 				return SearchResponse{}, err
 			}
-			total += result.Total
+			// result.Total 是该 provider 对应查询的总命中数（每页相同），
+			// 只在首页累加一次，避免按页数重复累加导致 Total 被放大数倍。
+			if providerPage == 1 {
+				total += result.Total
+			}
 			if len(result.Items) == 0 {
 				break
 			}
