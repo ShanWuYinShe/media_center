@@ -102,55 +102,89 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         query: String,
         categoryId: String? = if (query.isBlank()) mutableState.value.selectedCategoryId else null,
     ) {
+        val current = mutableState.value
+        val silentRefresh = current.isContentScreen
+        if (silentRefresh &&
+            (query != current.query || categoryId != current.selectedCategoryId)
+        ) {
+            AppLog.i(
+                "Search",
+                "ignore offscreen search while content is visible: " +
+                    "queryChanged=${query != current.query} categoryChanged=${categoryId != current.selectedCategoryId}",
+            )
+            return
+        }
         // 防御:服务端要求 q / category 至少一个,空 + null 直接拒绝避免反复 400。
         if (query.isBlank() && categoryId == null) {
-            mutableState.update {
-                it.copy(loading = false, error = "请选择一个分类或输入关键词")
+            if (!silentRefresh) {
+                mutableState.update {
+                    it.copy(loading = false, error = "请选择一个分类或输入关键词")
+                }
+            } else {
+                AppLog.w("Search", "ignore invalid silent refresh while content is visible")
             }
             return
         }
-        detailsJob?.cancel()
-        recoveryJob?.cancel()
+        if (!silentRefresh) {
+            detailsJob?.cancel()
+            recoveryJob?.cancel()
+            loadMoreJob?.cancel()
+            pendingAutoAdvanceFromId = null
+        }
         detailsPrefetchJob?.cancel()
-        loadMoreJob?.cancel()
         searchJob?.cancel()
         if (query.isNotBlank()) {
             searchDetailsPrefetchCompletedIds.clear()
         }
-        pendingAutoAdvanceFromId = null
         searchJob = viewModelScope.launch {
             mutableState.update {
-                it.copy(
-                    query = query,
-                    selectedCategoryId = categoryId,
-                    items = emptyList(),
-                    loading = true,
-                    loadingMore = false,
-                    loadMoreError = null,
-                    canLoadMore = false,
-                    page = 1,
-                    error = null,
-                    selected = null,
-                    playing = null,
-                    playingVideo = null,
-                )
+                if (silentRefresh || it.isContentScreen) {
+                    it.copy(
+                        loadMoreError = null,
+                    )
+                } else {
+                    it.copy(
+                        query = query,
+                        selectedCategoryId = categoryId,
+                        items = emptyList(),
+                        loading = true,
+                        loadingMore = false,
+                        loadMoreError = null,
+                        canLoadMore = false,
+                        page = 1,
+                        error = null,
+                        selected = null,
+                        playing = null,
+                        playingVideo = null,
+                    )
+                }
             }
             runCatchingCancellable {
                 repository.search(query, categoryId, page = 1, pageSize = PageSize)
             }
                 .onSuccess { response ->
-                    mutableState.update {
-                        it.copy(
+                    mutableState.update { state ->
+                        state.copy(
                             items = response.items,
-                            loading = false,
+                            loading = if (silentRefresh || state.isContentScreen) state.loading else false,
                             canLoadMore = response.items.size >= PageSize,
                             page = 1,
+                            loadMoreError = null,
                         )
                     }
                 }
                 .onFailure { error ->
-                    mutableState.update {
-                        it.copy(loading = false, error = error.message ?: "搜索失败")
+                    if (silentRefresh) {
+                        AppLog.w("Search", "silent refresh failed: ${error.message}", error)
+                    } else {
+                        mutableState.update { state ->
+                            if (state.isContentScreen) {
+                                AppLog.w("Search", "discard search error while content is visible: ${error.message}", error)
+                                state
+                            } else {
+                                state.copy(loading = false, error = error.message ?: "搜索失败")
+                            }
+                        }
                     }
                 }
         }
@@ -651,15 +685,30 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         viewModelScope.launch {
             // categories 失败时直接 setError 退出,**不再**调 search()。
             // 避免:网络持续不通 → categories 失败 + search(query="", null) 也 400 失败 → 用户陷入"重试 → 失败 → 重试"的死循环。
-            mutableState.update { it.copy(loading = true, loadMoreError = null, error = null) }
+            val silentRefresh = mutableState.value.isContentScreen
+            mutableState.update {
+                if (silentRefresh) {
+                    it.copy(loadMoreError = null)
+                } else {
+                    it.copy(loading = true, loadMoreError = null, error = null)
+                }
+            }
             val categoriesResult = runCatchingCancellable { repository.categories() }
             val categories = categoriesResult.getOrNull()
             if (categories == null) {
-                mutableState.update {
-                    it.copy(
-                        loading = false,
-                        error = categoriesResult.exceptionOrNull()?.message ?: "加载分类失败",
+                if (silentRefresh) {
+                    AppLog.w(
+                        "Search",
+                        "silent category refresh failed: ${categoriesResult.exceptionOrNull()?.message}",
+                        categoriesResult.exceptionOrNull(),
                     )
+                } else {
+                    mutableState.update {
+                        it.copy(
+                            loading = false,
+                            error = categoriesResult.exceptionOrNull()?.message ?: "加载分类失败",
+                        )
+                    }
                 }
                 return@launch
             }
@@ -670,11 +719,21 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                 val validId = current.selectedCategoryId
                     ?.takeIf { id -> categories.any { it.id == id } }
                 val nextId = validId ?: categories.firstOrNull()?.id
-                current.copy(categories = categories, selectedCategoryId = nextId)
+                current.copy(
+                    categories = categories,
+                    selectedCategoryId = if (silentRefresh || current.isContentScreen) {
+                        current.selectedCategoryId
+                    } else {
+                        nextId
+                    },
+                )
             }
             search(mutableState.value.query)
         }
     }
+
+    private val MediaUiState.isContentScreen: Boolean
+        get() = selected != null || playing != null
 
     private fun currentDetailsCacheScope(): VideoDetailsCacheScope {
         return if (mutableState.value.query.isNotBlank()) {

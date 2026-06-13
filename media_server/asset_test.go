@@ -246,7 +246,7 @@ func TestApplyDeliveryProxyRewritesURLs(t *testing.T) {
 	}
 }
 
-func TestApplyDeliveryDirectPassthrough(t *testing.T) {
+func TestApplyDeliveryDirectKeepsPlaybackDirectAndProxiesThumbnail(t *testing.T) {
 	server := &mediaServer{
 		asset:         NewAssetSigner("secret", time.Hour),
 		deliveryModes: map[string]string{"bilibili": DeliveryDirect},
@@ -262,17 +262,46 @@ func TestApplyDeliveryDirectPassthrough(t *testing.T) {
 	}
 	server.applyDeliveryToDetailsForProvider("https://host/api", "bilibili", &details)
 
-	if details.ThumbnailDelivery != DeliveryDirect {
-		t.Fatalf("expected direct delivery, got %s", details.ThumbnailDelivery)
+	if details.ThumbnailDelivery != DeliveryProxy {
+		t.Fatalf("expected proxy thumbnail delivery, got %s", details.ThumbnailDelivery)
 	}
-	if details.ThumbnailURL != "https://i0.hdslb.com/a.jpg" {
-		t.Fatalf("direct thumbnail url should pass through, got %s", details.ThumbnailURL)
+	if !strings.HasPrefix(details.ThumbnailURL, "https://host/api/asset?") {
+		t.Fatalf("thumbnail should be proxied, got %s", details.ThumbnailURL)
 	}
-	if details.ThumbnailHeaders["Referer"] != "https://www.bilibili.com" {
-		t.Fatalf("direct thumbnail must keep companion headers: %v", details.ThumbnailHeaders)
+	if details.ThumbnailHeaders != nil {
+		t.Fatalf("proxy thumbnail must not expose upstream headers: %v", details.ThumbnailHeaders)
 	}
 	if details.PlaybackOptions[0].Delivery != DeliveryDirect {
 		t.Fatalf("expected direct option delivery")
+	}
+	if details.PlaybackOptions[0].URL != "https://upos.example/v.mp4" {
+		t.Fatalf("direct playback url should pass through, got %s", details.PlaybackOptions[0].URL)
+	}
+	if details.PlaybackOptions[0].Headers["Referer"] != "https://www.bilibili.com" {
+		t.Fatalf("direct playback must keep companion headers: %v", details.PlaybackOptions[0].Headers)
+	}
+}
+
+func TestApplyDeliveryToSummaryProxiesThumbnail(t *testing.T) {
+	server := &mediaServer{
+		asset:         NewAssetSigner("secret", time.Hour),
+		deliveryModes: map[string]string{"bilibili": DeliveryDirect},
+	}
+	summary := VideoSummary{
+		ID:               "BV1example",
+		ThumbnailURL:     "https://i0.hdslb.com/a.jpg",
+		ThumbnailHeaders: map[string]string{"Referer": "https://www.bilibili.com"},
+	}
+	server.applyDeliveryToSummary("https://host/api", &summary)
+
+	if summary.ThumbnailDelivery != DeliveryProxy {
+		t.Fatalf("expected proxy thumbnail delivery, got %s", summary.ThumbnailDelivery)
+	}
+	if !strings.HasPrefix(summary.ThumbnailURL, "https://host/api/asset?") {
+		t.Fatalf("summary thumbnail should be proxied, got %s", summary.ThumbnailURL)
+	}
+	if summary.ThumbnailHeaders != nil {
+		t.Fatalf("proxy thumbnail must not expose upstream headers: %v", summary.ThumbnailHeaders)
 	}
 }
 

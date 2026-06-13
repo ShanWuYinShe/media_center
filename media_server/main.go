@@ -442,6 +442,15 @@ func (s *mediaServer) deliver(providerID, base, rawURL string, headers map[strin
 	return s.deliverWithMode(providerID, base, rawURL, headers, "")
 }
 
+func (s *mediaServer) deliverThumbnail(providerID, base, rawURL string, headers map[string]string) (string, map[string]string, string) {
+	// 缩略图体积小,统一走签名 asset 代理,避免 Android 客户端直连上游时被老旧
+	// 证书链、Referer/UA 差异或区域网络策略影响;播放流仍按来源走 direct/proxy。
+	if strings.TrimSpace(rawURL) == "" {
+		return rawURL, headers, DeliveryDirect
+	}
+	return s.deliverWithMode(providerID, base, rawURL, headers, DeliveryProxy)
+}
+
 func (s *mediaServer) deliverWithMode(
 	providerID,
 	base,
@@ -475,7 +484,7 @@ func (s *mediaServer) providerFromVideoID(videoID string) string {
 
 func (s *mediaServer) applyDeliveryToSummary(base string, v *VideoSummary) {
 	providerID := s.providerFromVideoID(v.ID)
-	v.ThumbnailURL, v.ThumbnailHeaders, v.ThumbnailDelivery = s.deliver(providerID, base, v.ThumbnailURL, v.ThumbnailHeaders)
+	v.ThumbnailURL, v.ThumbnailHeaders, v.ThumbnailDelivery = s.deliverThumbnail(providerID, base, v.ThumbnailURL, v.ThumbnailHeaders)
 }
 
 func (s *mediaServer) applyDeliveryToOptionsForProvider(base, providerID string, options []PlaybackOption) {
@@ -506,7 +515,7 @@ func (s *mediaServer) applyDeliveryToSearch(base string, resp *SearchResponse) {
 }
 
 func (s *mediaServer) applyDeliveryToDetailsForProvider(base, providerID string, details *VideoDetails) {
-	details.ThumbnailURL, details.ThumbnailHeaders, details.ThumbnailDelivery = s.deliver(providerID, base, details.ThumbnailURL, details.ThumbnailHeaders)
+	details.ThumbnailURL, details.ThumbnailHeaders, details.ThumbnailDelivery = s.deliverThumbnail(providerID, base, details.ThumbnailURL, details.ThumbnailHeaders)
 	s.applyDeliveryToOptionsForProvider(base, providerID, details.PlaybackOptions)
 }
 

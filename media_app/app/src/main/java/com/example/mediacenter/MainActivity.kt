@@ -41,16 +41,20 @@ import androidx.annotation.OptIn
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -72,6 +76,7 @@ import com.example.mediacenter.ui.MediaViewModelFactory
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.util.Locale
+import java.util.WeakHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -114,6 +119,13 @@ class MainActivity : ComponentActivity() {
     private var searchVisible: Boolean = false
     private var player: ExoPlayer? = null
     private var currentPlayerUrl: String? = null
+    // 播放页画面旋转。TV 本身不能像手机一样物理转屏,所以对“竖向编码但需要横看”的视频
+    // 旋转播放器画面本身。自动恢复重建同一视频时保持手动选择;换视频后重新自动检测。
+    private var playerRotationVideoId: String? = null
+    private var playerVideoRotationDegrees: Int = 0
+    private var playerVideoRotationUserSet: Boolean = false
+    private var playerSurface: PlayerView? = null
+    private var orientationIndicator: TextView? = null
     private var homeFocusArea: HomeFocusArea = HomeFocusArea.Category
     private var rememberedCategoryId: String? = null
     private val rememberedVideoFocusByCategory = mutableMapOf<String, String>()
@@ -131,6 +143,7 @@ class MainActivity : ComponentActivity() {
     // “播放已稳定”计时器:STATE_READY 后延迟触发;只有同一地址连续顺畅播放超过窗口
     // 才把 ViewModel 的恢复额度清零,防止“就绪即失败”的流陷入无限恢复循环。
     private var playbackStabilityRunnable: Runnable? = null
+    private val pendingTextUpdates = WeakHashMap<TextView, String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -218,10 +231,12 @@ class MainActivity : ComponentActivity() {
                 clearHomeVideoList()
                 resetHomeDetailsPrefetch()
                 releasePlayer()
+                resetPlayerOrientationToDefault()
                 renderDetails(state)
             }
             else -> {
                 releasePlayer()
+                resetPlayerOrientationToDefault()
                 renderHome(state)
             }
         }
@@ -1425,6 +1440,14 @@ class MainActivity : ComponentActivity() {
 
         val playbackUrl = stream.url
         val requestHeaders = playbackRequestHeaders(stream.headers)
+        // 换视频时复位画面旋转并重新自动检测(签名 URL 自动恢复重建播放器时 playingVideo.id
+        // 不变,故只在视频真正切换时复位,保留用户在同一视频内手动选择的旋转角度)。
+        val playingVideoId = state.playingVideo?.id
+        if (playingVideoId != null && playingVideoId != playerRotationVideoId) {
+            playerRotationVideoId = playingVideoId
+            playerVideoRotationDegrees = 0
+            playerVideoRotationUserSet = false
+        }
         AppLog.i(
             "Player",
             "prepare stream=${stream.id} kind=${stream.kind} mime=${stream.mimeType} " +
@@ -1445,6 +1468,17 @@ class MainActivity : ComponentActivity() {
                 DefaultMediaSourceFactory(dataSourceFactory)
                     .setLoadErrorHandlingPolicy(playbackLoadErrorHandlingPolicy),
             )
+            // 交给 ExoPlayer 管理音频焦点:被系统提示音/其他应用抢占焦点时自动暂停或压低,
+            // 焦点恢复后续播,避免长时间播放被抢焦点后“没声音”;同时在耳机/音频路由断开
+            // (becoming noisy)时暂停,符合 TV/移动端音频惯例。
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build(),
+                /* handleAudioFocus = */ true,
+            )
+            .setHandleAudioBecomingNoisy(true)
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
             .build()
@@ -1566,19 +1600,62 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // OK 键:短按播放/暂停,长按(按住约 0.5 秒)旋转画面 —— 遥控器方向键已被
+        // 快退/快进、上一个/下一个占满,且 Android TV 不把 MENU 键派发给应用,长按 OK 是
+        // 所有遥控器都具备、可靠的“直接操作”入口。短按动作放到抬起时判定,以便区分长按。
+        val longPressMs = 450L
+        var centerDownTime = 0L
+        var centerConsumedByLong = false
+        var centerRevealOnly = false
+        fun isCenterKey(keyCode: Int): Boolean =
+            keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER
+
         val screen = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             isFocusable = true
             isFocusableInTouchMode = true
             setOnKeyListener { _, keyCode, event ->
+                AppLog.i("PlayerKey", "code=$keyCode action=${event.action} repeat=${event.repeatCount} long=${event.isLongPress} dt=${event.eventTime - centerDownTime}")
+                if (event.action == KeyEvent.ACTION_UP) {
+                    if (!isCenterKey(keyCode)) return@setOnKeyListener false
+                    val handledByLong = centerConsumedByLong
+                    val revealOnly = centerRevealOnly
+                    centerConsumedByLong = false
+                    centerRevealOnly = false
+                    if (!handledByLong && !revealOnly) {
+                        if (event.eventTime - centerDownTime >= longPressMs) {
+                            togglePlayerOrientation()
+                            showOverlay()
+                        } else {
+                            togglePlayback()
+                        }
+                    }
+                    return@setOnKeyListener true
+                }
                 if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
                 if ((isDirectionalDpad(keyCode) || isPrimaryDpadAction(keyCode)) && !controlsVisible()) {
                     showOverlay()
+                    if (isCenterKey(keyCode) && event.repeatCount == 0) {
+                        centerDownTime = event.eventTime
+                        centerConsumedByLong = false
+                        centerRevealOnly = true
+                    }
+                    return@setOnKeyListener true
+                }
+                if (isCenterKey(keyCode)) {
+                    if (event.repeatCount == 0) {
+                        centerDownTime = event.eventTime
+                        centerConsumedByLong = false
+                        centerRevealOnly = false
+                        event.startTracking()
+                    } else if (event.isLongPress && !centerConsumedByLong) {
+                        togglePlayerOrientation()
+                        centerConsumedByLong = true
+                        showOverlay()
+                    }
                     return@setOnKeyListener true
                 }
                 when (keyCode) {
-                    KeyEvent.KEYCODE_DPAD_CENTER,
-                    KeyEvent.KEYCODE_ENTER,
                     KeyEvent.KEYCODE_SPACE,
                     KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
                     -> {
@@ -1613,16 +1690,28 @@ class MainActivity : ComponentActivity() {
                         showOverlay()
                         true
                     }
+                    // 部分遥控器/机型若仍能派发 MENU/INFO,则作为长按 OK 之外的备用入口。
+                    KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO -> {
+                        if (event.repeatCount == 0) {
+                            togglePlayerOrientation()
+                            showOverlay()
+                        }
+                        true
+                    }
                     else -> false
                 }
             }
         }
-        val playerView = PlayerView(this).apply {
+        val playerView = (layoutInflater.inflate(R.layout.view_player_texture, screen, false) as PlayerView).apply {
             player = nextPlayer
             useController = false
             setBackgroundColor(Color.BLACK)
+            // FIT 会按视频真实宽高比自动 letterbox/pillarbox;旋转时外层会交换视图宽高。
+            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
         }
-        screen.addView(playerView, frameMatch())
+        playerSurface = playerView
+        screen.addView(playerView, FrameLayout.LayoutParams(match(), match(), Gravity.CENTER))
+        screen.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyPlayerVideoRotation() }
         // 缓冲指示:独立于自动隐藏的控制层,只要播放器处于 BUFFERING 就常驻显示,
         // 避免控制层淡出后用户以为卡死。
         val bufferingSpinner = ProgressBar(this).apply {
@@ -1642,7 +1731,16 @@ class MainActivity : ComponentActivity() {
                     if (playbackState == Player.STATE_BUFFERING) View.VISIBLE else View.GONE
                 syncOverlayVisibilityForPlaybackState()
             }
+
+            // 拿到真实分辨率后自动判定是否需要把画面旋转到 TV 横屏上;
+            // 一旦用户手动选择过旋转角度,则不再自动覆盖。
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    autoDetectPlayerVideoRotation(videoSize)
+                }
+            }
         })
+        applyPlayerVideoRotation()
         setContent(screen)
         screen.requestFocus()
         showOverlay()
@@ -1697,41 +1795,48 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        // 传输控制图例:DPAD 驱动,非可聚焦,作为操作提示并反映播放状态。
-        fun transportIcon(icon: TransportIcon, enabled: Boolean): TransportIconView {
-            return TransportIconView(this, icon).apply {
+        // 播放/暂停、快退/快进、上/下集全部由遥控器按键直接驱动(见底部按键提示),不在画面上
+        // 放可点击/可聚焦的控制按钮——那是触屏播放器的交互。这里只保留状态(顶部“正在播放/已暂停”)、
+        // 进度条与画面比例指示等只读信息。`transportIcon` 仅用于画面比例指示的小图标。
+        fun transportIcon(icon: TransportIcon, enabled: Boolean): TransportIconView =
+            TransportIconView(this, icon).apply {
                 setIconColor(Colors.TextPrimary)
                 alpha = if (enabled) 1f else 0.3f
+                isFocusable = false
+                isClickable = false
             }
-        }
-        val prevIcon = transportIcon(TransportIcon.Previous, hasPrevious)
-        val rewindIcon = transportIcon(TransportIcon.Rewind, true)
-        val forwardIcon = transportIcon(TransportIcon.Forward, true)
-        val nextIcon = transportIcon(TransportIcon.Next, hasNext)
-        val centerControlGlyph = PlaybackGlyphView(this).apply {
-            setPlaying(player.playWhenReady && player.playbackState != Player.STATE_ENDED)
-        }
-        val centerControl = FrameLayout(this).apply {
-            background = rounded(Colors.GlassFillStrong, 999, 2, Colors.GlassBorderFocused)
-            addView(centerControlGlyph, FrameLayout.LayoutParams(dp(26), dp(26), Gravity.CENTER))
-        }
-        val transport = LinearLayout(this).apply {
+
+        // 画面旋转只读指示:由长按 OK/MENU 键直接切换,这里展示当前角度,非交互。
+        val orientationRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            addView(prevIcon, LinearLayout.LayoutParams(dp(28), dp(28)).withEndMargin(dp(34)))
-            addView(rewindIcon, LinearLayout.LayoutParams(dp(30), dp(30)).withEndMargin(dp(34)))
-            addView(centerControl, LinearLayout.LayoutParams(dp(58), dp(58)))
-            addView(forwardIcon, LinearLayout.LayoutParams(dp(30), dp(30)).withStartMargin(dp(34)))
-            addView(nextIcon, LinearLayout.LayoutParams(dp(28), dp(28)).withStartMargin(dp(34)))
+            gravity = Gravity.CENTER
+            addView(
+                transportIcon(TransportIcon.Aspect, true),
+                LinearLayout.LayoutParams(dp(18), dp(18)).withEndMargin(dp(8)),
+            )
+            addView(
+                label("画面 · ${videoRotationLabel()}", 13f, Colors.TextTertiary, maxLines = 1)
+                    .apply { gravity = Gravity.CENTER }
+                    .also { orientationIndicator = it },
+                linearWrap(),
+            )
         }
         bottom.addView(
-            transport,
-            LinearLayout.LayoutParams(wrap(), wrap()).apply { gravity = Gravity.CENTER_HORIZONTAL },
+            orientationRow,
+            LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(12)),
         )
 
         // 进度条:缓冲段 + 已播段 + 拖动点。
-        val bufferedFill = View(this).apply { background = rounded(Color.argb(64, 255, 255, 255), 999) }
-        val progressFill = View(this).apply { background = rounded(Colors.AppleBlue, 999) }
+        val bufferedFill = View(this).apply {
+            background = rounded(Color.argb(64, 255, 255, 255), 999)
+            pivotX = 0f
+            scaleX = 0f
+        }
+        val progressFill = View(this).apply {
+            background = rounded(Colors.AppleBlue, 999)
+            pivotX = 0f
+            scaleX = 0f
+        }
         val progressKnob = View(this).apply {
             background = rounded(Color.WHITE, 999)
             elevationCompat(dp(2).toFloat())
@@ -1739,8 +1844,8 @@ class MainActivity : ComponentActivity() {
         val progressTrack = FrameLayout(this).apply {
             background = rounded(Color.argb(38, 255, 255, 255), 999)
             clipChildren = false
-            addView(bufferedFill, FrameLayout.LayoutParams(0, dp(6), Gravity.START or Gravity.CENTER_VERTICAL))
-            addView(progressFill, FrameLayout.LayoutParams(0, dp(6), Gravity.START or Gravity.CENTER_VERTICAL))
+            addView(bufferedFill, FrameLayout.LayoutParams(match(), dp(6), Gravity.START or Gravity.CENTER_VERTICAL))
+            addView(progressFill, FrameLayout.LayoutParams(match(), dp(6), Gravity.START or Gravity.CENTER_VERTICAL))
             addView(progressKnob, FrameLayout.LayoutParams(dp(14), dp(14), Gravity.START or Gravity.CENTER_VERTICAL))
         }
         val timeCurrent = label("0:00", 14f, Colors.TextSecondary, bold = true, maxLines = 1)
@@ -1754,12 +1859,14 @@ class MainActivity : ComponentActivity() {
         }
         bottom.addView(scrubberRow, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(24)))
 
+        val hintBase = "方向键唤出控制层 · OK 播放/暂停 · ← → 快退/快进 10 秒 · 长按 OK 旋转画面"
+        val hintText = buildString {
+            append(hintBase)
+            if (hasPrevious) append(" · ↑ 上一个")
+            if (hasNext) append(" · ↓ 下一个")
+        }
         val hint = label(
-            buildString {
-                append("方向键先显示控制层 · OK 播放/暂停 · ←→ 快退/快进 10 秒")
-                if (hasPrevious) append(" · ↑ 上一个")
-                if (hasNext) append(" · ↓ 下一个")
-            },
+            hintText,
             13f,
             Colors.TextTertiary,
             maxLines = 1,
@@ -1776,12 +1883,12 @@ class MainActivity : ComponentActivity() {
             val fraction = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
             val bufferedFraction = if (duration > 0) (buffered.toFloat() / duration).coerceIn(0f, 1f) else 0f
             val filledWidth = (trackWidth * fraction).toInt()
-            bufferedFill.layoutParams = FrameLayout.LayoutParams((trackWidth * bufferedFraction).toInt(), dp(6), Gravity.START or Gravity.CENTER_VERTICAL)
-            progressFill.layoutParams = FrameLayout.LayoutParams(filledWidth, dp(6), Gravity.START or Gravity.CENTER_VERTICAL)
+            bufferedFill.scaleX = bufferedFraction
+            progressFill.scaleX = fraction
             val maxKnobX = (trackWidth - dp(14)).coerceAtLeast(0).toFloat()
             progressKnob.translationX = (filledWidth - dp(14) / 2f).coerceIn(0f, maxKnobX)
-            timeCurrent.text = formatTime(position)
-            timeTotal.text = formatTime(duration)
+            timeCurrent.setTextIfChanged(formatTime(position))
+            timeTotal.setTextIfChanged(formatTime(duration))
         }
         val progressTick = object : Runnable {
             override fun run() {
@@ -1792,13 +1899,12 @@ class MainActivity : ComponentActivity() {
         }
         fun updatePlaybackGlyph() {
             val isPlaying = player.playWhenReady && player.playbackState != Player.STATE_ENDED
-            centerControlGlyph.setPlaying(isPlaying)
-            statusText.text = when {
+            statusText.setTextIfChanged(when {
                 player.playbackState == Player.STATE_ENDED -> "已结束 · ${stream.label.ifBlank { "默认" }}"
                 player.playbackState == Player.STATE_BUFFERING -> "缓冲中 · ${stream.label.ifBlank { "默认" }}"
                 player.playWhenReady -> "正在播放 · ${stream.label.ifBlank { "默认" }}"
                 else -> "已暂停 · ${stream.label.ifBlank { "默认" }}"
-            }
+            })
             val dotColor = when {
                 player.playbackState == Player.STATE_BUFFERING -> Colors.TextTertiary
                 isPlaying -> Colors.AppleBlue
@@ -1911,6 +2017,99 @@ class MainActivity : ComponentActivity() {
         player?.release()
         player = null
         currentPlayerUrl = null
+        playerSurface = null
+        orientationIndicator = null
+    }
+
+    private fun applyPlayerVideoRotation() {
+        val surface = playerSurface
+        val parent = surface?.parent as? FrameLayout
+        if (surface != null && parent != null) {
+            val parentWidth = parent.width
+            val parentHeight = parent.height
+            if (parentWidth > 0 && parentHeight > 0) {
+                val swapSize = playerVideoRotationDegrees % 180 != 0
+                val targetWidth = if (swapSize) parentHeight else parentWidth
+                val targetHeight = if (swapSize) parentWidth else parentHeight
+                val params = (surface.layoutParams as? FrameLayout.LayoutParams)
+                    ?: FrameLayout.LayoutParams(targetWidth, targetHeight, Gravity.CENTER)
+                if (params.width != targetWidth ||
+                    params.height != targetHeight ||
+                    params.gravity != Gravity.CENTER
+                ) {
+                    params.width = targetWidth
+                    params.height = targetHeight
+                    params.gravity = Gravity.CENTER
+                    surface.layoutParams = params
+                }
+                surface.rotation = playerVideoRotationDegrees.toFloat()
+            }
+        }
+        updateOrientationIndicator()
+    }
+
+    // 用户用长按 OK / MENU 在旋转角度间切换;标记为手动选择,后续不再被自动检测覆盖。
+    private fun togglePlayerOrientation() {
+        playerVideoRotationDegrees = nextManualVideoRotation(playerVideoRotationDegrees)
+        playerVideoRotationUserSet = true
+        AppLog.i("PlayerKey", "togglePlayerOrientation -> rotation=$playerVideoRotationDegrees")
+        applyPlayerVideoRotation()
+    }
+
+    // 根据视频真实分辨率自动判定:竖向编码的视频在 TV 上默认旋转 90 度横看;
+    // 若流本身带有未应用的旋转元数据,优先使用元数据角度。用户手动选择过则不覆盖。
+    private fun autoDetectPlayerVideoRotation(videoSize: VideoSize) {
+        if (playerVideoRotationUserSet) return
+        val metadataRotation = normalizeVideoRotation(videoSize.unappliedRotationDegrees)
+        val displayWidth = videoSize.width * videoSize.pixelWidthHeightRatio
+        val detectedRotation = if (metadataRotation != 0) {
+            metadataRotation
+        } else if (videoSize.height > displayWidth) {
+            90
+        } else {
+            0
+        }
+        if (detectedRotation != playerVideoRotationDegrees) {
+            playerVideoRotationDegrees = detectedRotation
+            applyPlayerVideoRotation()
+        } else {
+            updateOrientationIndicator()
+        }
+    }
+
+    private fun updateOrientationIndicator() {
+        orientationIndicator?.setTextIfChanged("画面 · ${videoRotationLabel()}")
+    }
+
+    private fun nextManualVideoRotation(currentDegrees: Int): Int {
+        return when (normalizeVideoRotation(currentDegrees)) {
+            0 -> 90
+            90 -> 270
+            270 -> 180
+            else -> 0
+        }
+    }
+
+    private fun normalizeVideoRotation(degrees: Int): Int {
+        val normalized = ((degrees % 360) + 360) % 360
+        return when (normalized) {
+            90, 180, 270 -> normalized
+            else -> 0
+        }
+    }
+
+    private fun videoRotationLabel(): String {
+        return when (normalizeVideoRotation(playerVideoRotationDegrees)) {
+            90 -> "右转 90°"
+            180 -> "旋转 180°"
+            270 -> "左转 90°"
+            else -> "原始"
+        }
+    }
+
+    // 离开播放页时清空播放页专用的旋转 UI 引用;浏览/详情始终维持 TV 默认横屏布局。
+    private fun resetPlayerOrientationToDefault() {
+        orientationIndicator = null
     }
 
     // STATE_READY 后启动稳定计时:延迟 [PlaybackStabilityResetMs] 后,若仍在顺畅播放
@@ -2672,6 +2871,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun TextView.setTextIfChanged(value: String) {
+        if (text?.toString() == value) {
+            pendingTextUpdates.remove(this)
+            return
+        }
+        if (isInLayout) {
+            pendingTextUpdates[this] = value
+            post {
+                val pending = pendingTextUpdates.remove(this@setTextIfChanged) ?: return@post
+                if (text?.toString() != pending) {
+                    text = pending
+                }
+            }
+        } else {
+            pendingTextUpdates.remove(this)
+            text = value
+        }
+    }
+
     private fun videoMeta(video: VideoSummary): String {
         return listOfNotNull(
             video.durationSeconds?.let { formatDurationSeconds(it) },
@@ -2956,48 +3174,13 @@ private class PillIconView(
     }
 }
 
-private class PlaybackGlyphView(context: Context) : View(context) {
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        style = Paint.Style.FILL
-    }
-    private val leftPauseRect = RectF()
-    private val rightPauseRect = RectF()
-    private val path = Path()
-    private var playing: Boolean = true
-
-    fun setPlaying(value: Boolean) {
-        if (playing == value) return
-        playing = value
-        invalidate()
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-        val w = width.toFloat()
-        val h = height.toFloat()
-        if (playing) {
-            val radius = w * 0.05f
-            leftPauseRect.set(w * 0.24f, h * 0.18f, w * 0.46f, h * 0.82f)
-            rightPauseRect.set(w * 0.54f, h * 0.18f, w * 0.76f, h * 0.82f)
-            canvas.drawRoundRect(leftPauseRect, radius, radius, paint)
-            canvas.drawRoundRect(rightPauseRect, radius, radius, paint)
-        } else {
-            path.reset()
-            path.moveTo(w * 0.28f, h * 0.18f)
-            path.lineTo(w * 0.28f, h * 0.82f)
-            path.lineTo(w * 0.82f, h * 0.50f)
-            path.close()
-            canvas.drawPath(path, paint)
-        }
-    }
-}
-
+// 播放页传输控制图标枚举:配合 Canvas 自绘图标使用(不用 Unicode 符号)。
 private enum class TransportIcon {
     Previous,
     Rewind,
     Forward,
     Next,
+    Aspect,
 }
 
 // 播放页传输控制图标:统一用 Canvas 绘制(不用 Unicode 符号),与全局图标风格一致。
@@ -3006,6 +3189,11 @@ private class TransportIconView(
     private val icon: TransportIcon,
 ) : View(context) {
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
     private val path = Path()
     private val bar = RectF()
     private var iconColor: Int = Colors.TextPrimary
@@ -3060,6 +3248,22 @@ private class TransportIconView(
                 canvas.triangleLeft(w * 0.86f, w * 0.38f, top, bottom)
                 bar.set(w * 0.14f, top, w * 0.26f, bottom)
                 canvas.drawRoundRect(bar, barRadius, barRadius, fillPaint)
+            }
+            TransportIcon.Aspect -> {
+                // 四角括号构成的画面边框图标,表示“画面比例/缩放”。
+                strokePaint.color = iconColor
+                strokePaint.strokeWidth = (w.coerceAtMost(h) * 0.1f).coerceAtLeast(2f)
+                val left = w * 0.18f
+                val right = w * 0.82f
+                val arm = w * 0.18f
+                canvas.drawLine(left, top, left + arm, top, strokePaint)
+                canvas.drawLine(left, top, left, top + arm, strokePaint)
+                canvas.drawLine(right - arm, top, right, top, strokePaint)
+                canvas.drawLine(right, top, right, top + arm, strokePaint)
+                canvas.drawLine(left, bottom - arm, left, bottom, strokePaint)
+                canvas.drawLine(left, bottom, left + arm, bottom, strokePaint)
+                canvas.drawLine(right - arm, bottom, right, bottom, strokePaint)
+                canvas.drawLine(right, bottom - arm, right, bottom, strokePaint)
             }
         }
     }

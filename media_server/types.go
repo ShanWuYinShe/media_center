@@ -4,10 +4,12 @@ package main
 //
 // 注意：该区分只看 **App（国内）能否直连上游**，与服务端无关——服务端可访问所有网络，
 // 任何源都能直接回源，永远不需要出站代理。
-//   - DeliveryDirect：App 国内可直连的源（如 Bilibili），服务端只下发上游 URL + companion
-//     headers，由 App 直连上游，避免大量媒体流量集中到服务端 IP 触发上游限流。
-//   - DeliveryProxy：App 国内无法直连的源（国外源），由服务端直连上游并通过 /api/asset
-//     回源转发；下发的是签名代理地址，App 不需要也拿不到上游请求头。
+//   - 缩略图：体积小，统一用 DeliveryProxy，避免 Android 客户端受上游老旧证书链、
+//     Referer/UA 差异或区域网络策略影响。
+//   - 播放流 DeliveryDirect：App 国内可直连的源（如 Bilibili），服务端只下发上游 URL +
+//     companion headers，由 App 直连上游，避免大量媒体流量集中到服务端 IP 触发上游限流。
+//   - 播放流 DeliveryProxy：App 国内无法直连的源（国外源），由服务端直连上游并通过
+//     /api/asset 回源转发；下发的是签名代理地址，App 不需要也拿不到上游请求头。
 const (
 	DeliveryDirect = "direct"
 	DeliveryProxy  = "proxy"

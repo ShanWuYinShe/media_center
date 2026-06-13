@@ -10,14 +10,17 @@ App 应把配置值当作 **API base URL**。当前线上默认是：
 
 ## 当前契约
 
-- 后端负责：多来源分类/搜索/详情/播放选项聚合，并按来源决定每个资源的**下发方式**（`deliveryMode`）。
-- **`direct`（国内可直连源，如 Bilibili）**：后端直接返回上游 `thumbnailUrl` / `playbackOptions[].url`，
-  并通过 `thumbnailHeaders` / `playbackOptions[].headers` 下发直连所需请求头，由 **App 直连上游**，
-  避免后端被国内源限流。
-- **`proxy`（国内不可直连的国外源）**：后端返回的是签名 `/asset` 代理地址，字节由**后端回源**并转发；
+- 后端负责：多来源分类/搜索/详情/播放选项聚合，并决定每个资源的**下发方式**（`deliveryMode`）。
+- **缩略图始终走 `proxy`**：`thumbnailUrl` 是签名 `/asset` 代理地址，字节由**后端回源**并转发；
+  上游请求头由后端附加，`thumbnailHeaders` 为空。这样可避免 Android TV 直连上游时被老旧证书链、
+  Referer/UA 差异或区域网络策略影响。
+- **播放流 `direct`（国内可直连源，如 Bilibili）**：后端直接返回上游 `playbackOptions[].url`，
+  并通过 `playbackOptions[].headers` 下发直连所需请求头，由 **App 直连上游**，
+  避免后端被大流量媒体播放限流。
+- **播放流 `proxy`（国内不可直连的国外源）**：后端返回的是签名 `/asset` 代理地址，字节由**后端回源**并转发；
   上游请求头由后端附加，**不会**下发给 App（对应 `headers` 为空）。
 - App 必须把 URL 当成**可执行地址**，不要根据 host 推断来源；通过 `deliveryMode` 区分两类资源。
-- `thumbnailHeaders` 和 `playbackOptions[].headers` 必须原样带到对应请求里（`proxy` 模式下为空）。
+- `playbackOptions[].headers` 必须原样带到对应请求里（`proxy` 模式下为空）。
 - `proxy` 模式下的 `thumbnailUrl` / `playbackOptions[].url` 是带签名和有效期的代理地址，**不要持久化**。
 - 视频类型当前只支持 `vod`。
 - 视频 `id` 和播放选项 `id` 都是不透明值；App 必须原样保存，并在放入 path 时 URL encode。
@@ -69,7 +72,7 @@ type VideoSummary = {
   creators: string[];
   thumbnailUrl?: string;
   thumbnailHeaders?: Record<string, string>;
-  // 缩略图下发方式：direct=App 直连上游；proxy=经 /asset 后端代理。
+  // 缩略图下发方式；当前始终为 proxy，经 /asset 后端代理。
   thumbnailDelivery?: DeliveryMode;
   durationSeconds?: number;
   playbackKind: "vod";
