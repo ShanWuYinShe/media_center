@@ -445,6 +445,9 @@ class MainActivity : ComponentActivity() {
                     when (keyCode) {
                         KeyEvent.KEYCODE_DPAD_UP -> true
                         KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            // 进入下方视频网格前,取消任何挂起的分类切换防抖,
+                            // 避免迟到的切换在用户已进入网格后触发整屏重建、弹走焦点。
+                            cancelPendingCategorySelect()
                             val target = rememberedVideoFocusByCategory[homeCategoryKey(currentState)]
                                 ?.let(HomeFocusTarget::Video)
                                 ?: currentState.items.firstOrNull()?.id?.let(HomeFocusTarget::Video)
@@ -738,8 +741,12 @@ class MainActivity : ComponentActivity() {
         cancelPendingCategorySelect()
         val runnable = Runnable {
             pendingCategorySelect = null
+            // 只有焦点仍停留在分类 chip 行(Category 区域)时才真正切换分类。
+            // 关键修复:若用户已经按方向键进入下方视频网格(Video 区域)或搜索区,
+            // 这个迟到的防抖切换必须放弃——否则它会清空列表、loading 转圈、触发整屏重建,
+            // 把用户从正在浏览的视频网格里弹回分类行/首页。
             if (!searchVisible &&
-                homeFocusArea != HomeFocusArea.Search &&
+                homeFocusArea == HomeFocusArea.Category &&
                 currentState.selected == null &&
                 currentState.playing == null &&
                 rememberedCategoryId == category.id

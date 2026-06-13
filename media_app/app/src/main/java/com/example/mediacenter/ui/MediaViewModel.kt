@@ -94,6 +94,30 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     // 就清零,否则“就绪即失败”的流会绕过上限陷入无限恢复循环。
     private var playbackRecoveryAttempts = 0
 
+    // 分类级内存缓存:再次进入已加载过的分类时,立即展示缓存内容,不再清空列表、
+    // 不再 loading 转圈阻塞。仅当缓存过期(超过 [CategoryCacheTtlMs])时在后台静默刷新,
+    // 且刷新只更新缓存、不改动当前可见列表/焦点,保证异步加载永不把用户弹离当前页面。
+    private data class CategoryCacheEntry(
+        val items: List<VideoSummary>,
+        val page: Int,
+        val canLoadMore: Boolean,
+        val timestamp: Long,
+    )
+
+    private val categoryListCache = mutableMapOf<String, CategoryCacheEntry>()
+    private var categoryRefreshJob: Job? = null
+
+    private fun cacheCategoryList(
+        categoryId: String,
+        items: List<VideoSummary>,
+        page: Int,
+        canLoadMore: Boolean,
+    ) {
+        if (items.isEmpty()) return
+        categoryListCache[categoryId] =
+            CategoryCacheEntry(items, page, canLoadMore, System.currentTimeMillis())
+    }
+
     init {
         loadCategoriesAndSearch()
     }
@@ -172,6 +196,15 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                             loadMoreError = null,
                         )
                     }
+                    // 分类浏览(空 query + 指定分类)结果写入分类缓存,供下次秒开。
+                    if (query.isBlank() && categoryId != null) {
+                        cacheCategoryList(
+                            categoryId,
+                            response.items,
+                            page = 1,
+                            canLoadMore = response.items.size >= PageSize,
+                        )
+                    }
                 }
                 .onFailure { error ->
                     if (silentRefresh) {
@@ -216,6 +249,16 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                             page = nextPage,
                         )
                     }
+                    // 把翻页后的完整列表写回分类缓存,下次进入该分类时保留已加载的多页内容。
+                    if (current.query.isBlank() && current.selectedCategoryId != null) {
+                        val latest = mutableState.value
+                        cacheCategoryList(
+                            current.selectedCategoryId,
+                            latest.items,
+                            page = nextPage,
+                            canLoadMore = response.items.size >= PageSize,
+                        )
+                    }
                     // 若是"末尾按下一个/自动续播触发的 loadMore",新页到手后
                     // 继续把焦点视频续播下去,补上分页边界的断档。
                     val pendingId = pendingAutoAdvanceFromId
@@ -250,7 +293,67 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     fun selectCategory(category: ContentCategory) {
         // 已选中的分类不再重复搜索，避免焦点自动切换时反复触发无用请求
         if (category.id == mutableState.value.selectedCategoryId) return
-        search(query = "", categoryId = category.id)
+        val cached = categoryListCache[category.id]
+        if (cached != null && cached.items.isNotEmpty()) {
+            // 命中缓存:立即展示,不清空、不 loading 转圈。
+            applyCachedCategory(category.id, cached)
+            // 缓存过期才后台静默刷新(只更新缓存,不动当前可见列表/焦点)。
+            if (System.currentTimeMillis() - cached.timestamp > CategoryCacheTtlMs) {
+                refreshCategoryInBackground(category.id)
+            }
+        } else {
+            // 无缓存(首次进入):正常阻塞加载。
+            search(query = "", categoryId = category.id)
+        }
+    }
+
+    private fun applyCachedCategory(categoryId: String, cached: CategoryCacheEntry) {
+        // 取消上一个分类正在进行的列表/详情请求,直接切到缓存内容,绝不进 loading。
+        detailsJob?.cancel()
+        recoveryJob?.cancel()
+        loadMoreJob?.cancel()
+        searchJob?.cancel()
+        categoryRefreshJob?.cancel()
+        detailsPrefetchJob?.cancel()
+        pendingAutoAdvanceFromId = null
+        mutableState.update {
+            it.copy(
+                query = "",
+                selectedCategoryId = categoryId,
+                items = cached.items,
+                loading = false,
+                loadingMore = false,
+                loadMoreError = null,
+                canLoadMore = cached.canLoadMore,
+                page = cached.page,
+                error = null,
+                selected = null,
+                playing = null,
+                playingVideo = null,
+            )
+        }
+    }
+
+    private fun refreshCategoryInBackground(categoryId: String) {
+        categoryRefreshJob?.cancel()
+        categoryRefreshJob = viewModelScope.launch {
+            runCatchingCancellable {
+                repository.search("", categoryId, page = 1, pageSize = PageSize)
+            }
+                .onSuccess { response ->
+                    // 只刷新缓存,不触碰当前可见列表与焦点;新数据下次进入该分类时生效。
+                    // 这样后台刷新永远不会把用户从当前网格/页面弹走。
+                    cacheCategoryList(
+                        categoryId,
+                        response.items,
+                        page = 1,
+                        canLoadMore = response.items.size >= PageSize,
+                    )
+                }
+                .onFailure { error ->
+                    AppLog.w("Search", "background category refresh failed: ${error.message}", error)
+                }
+        }
     }
 
     fun openDetails(video: VideoSummary) {
@@ -772,6 +875,10 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
 
 private const val PageSize = 18
 private const val PrefetchLogTag = "MediaViewModel"
+
+// 分类缓存有效期:10 分钟内再次进入同一分类直接用缓存,不触发任何网络请求;
+// 超过则在后台静默刷新缓存(不阻塞、不改动当前界面)。
+private const val CategoryCacheTtlMs = 10 * 60 * 1000L
 
 class MediaViewModelFactory(
     private val repository: MediaRepository,
