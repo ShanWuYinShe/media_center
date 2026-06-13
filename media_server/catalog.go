@@ -235,6 +235,82 @@ ORDER BY m.pinned DESC, (m.rank IS NULL), m.rank ASC, m.score DESC, v.native_id 
 	return out, rows.Err()
 }
 
+// PendingReviewItem 是一条待审候选:CatalogVideo 的元数据 + 该视频在某分类下的审校元信息。
+// 供 -catalog-review 子命令逐条展示与放行/拒绝。
+type PendingReviewItem struct {
+	CatalogVideo
+	CategoryID string
+	Score      int
+	Pinned     bool
+	Rank       sql.NullInt64
+	Reason     string
+	Reviewer   string
+	ReviewedAt string
+}
+
+// PendingReviewsOptions 控制 PendingReviews 的查询范围。
+type PendingReviewsOptions struct {
+	CategoryID string // 空=所有分类
+	Limit      int    // <=0 不限
+}
+
+// PendingReviews 返回待审(status='pending')候选,按 score DESC, native_id ASC 排序
+// (与 ApprovedForCategory 的 score 段一致:审校人看到的顺序即上线后排前的顺序)。
+// 可用 CategoryID 限定分类、Limit 限条数。复用 decodeCreators 解 creators。
+func (c *Catalog) PendingReviews(opts PendingReviewsOptions) ([]PendingReviewItem, error) {
+	var (
+		query strings.Builder
+		args  []any
+	)
+	query.WriteString(`
+SELECT v.provider, v.native_id, v.title, v.description, v.creators, v.duration_sec, v.year, v.thumbnail_url, v.source_url,
+       m.category_id, m.score, m.pinned, m.rank, m.reason, m.reviewer, m.reviewed_at
+FROM category_members m
+JOIN videos v ON v.provider = m.provider AND v.native_id = m.native_id
+WHERE m.status = 'pending'`)
+	if categoryID := strings.TrimSpace(opts.CategoryID); categoryID != "" {
+		query.WriteString(" AND m.category_id = ?")
+		args = append(args, categoryID)
+	}
+	query.WriteString("\nORDER BY m.score DESC, v.native_id ASC")
+	if opts.Limit > 0 {
+		query.WriteString("\nLIMIT ?")
+		args = append(args, opts.Limit)
+	}
+	rows, err := c.db.Query(query.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("query pending: %w", err)
+	}
+	defer rows.Close()
+	var out []PendingReviewItem
+	for rows.Next() {
+		var it PendingReviewItem
+		var creators sql.NullString
+		var description, year, thumb, source, reason, reviewer, reviewedAt sql.NullString
+		var duration, score sql.NullInt64
+		var pinned int64
+		if err := rows.Scan(
+			&it.Provider, &it.NativeID, &it.Title, &description, &creators, &duration, &year, &thumb, &source,
+			&it.CategoryID, &score, &pinned, &it.Rank, &reason, &reviewer, &reviewedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan pending: %w", err)
+		}
+		it.Description = description.String
+		it.Year = year.String
+		it.ThumbnailURL = thumb.String
+		it.SourceURL = source.String
+		it.DurationSec = duration.Int64
+		it.Creators = decodeCreators(creators.String)
+		it.Score = int(score.Int64)
+		it.Pinned = pinned != 0
+		it.Reason = reason.String
+		it.Reviewer = reviewer.String
+		it.ReviewedAt = reviewedAt.String
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
 // CountByStatus 统计某分类下某状态的成员数(用于命令行概览)。
 func (c *Catalog) CountByStatus(categoryID, status string) (int, error) {
 	var n int

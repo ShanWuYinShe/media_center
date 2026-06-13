@@ -302,7 +302,22 @@ MEDIA_SERVER_CATALOG_DB=data/catalog.db go run . -catalog-seed
 
 ### 9.3 步骤二：审校(approve / reject)
 
-用任意 SQLite 工具(或你自己的外部工具)按第 4~5 节标准把候选改成 `approved`/`rejected`,
+**首选内置 `-catalog-review` 子命令**(无需手写 SQL),两种模式:
+
+```bash
+cd media_server
+
+# 交互逐条审校:展示 标题/UP/时长/简介/原始观看链接/分数,按 [a]pprove / [r]eject / [s]kip / [q]uit
+MEDIA_SERVER_CATALOG_DB=data/catalog.db go run . -catalog-review
+MEDIA_SERVER_CATALOG_DB=data/catalog.db go run . -catalog-review -catalog-review-category movies   # 只审某分类
+
+# 非交互:按分数自动 approve 前 N 条(reject 留人工——进库候选都已过 relevanceScore 规则)
+MEDIA_SERVER_CATALOG_DB=data/catalog.db go run . -catalog-review -catalog-review-auto -catalog-review-top 30
+MEDIA_SERVER_CATALOG_DB=data/catalog.db go run . -catalog-review -catalog-review-auto -catalog-review-top 30 -catalog-review-dry-run  # 先预览不写库
+```
+
+`-catalog-review-auto` 只 approve、不自动 reject;想精细调序、批量拒绝或翻案已审项,
+也可用任意 SQLite 工具(或你自己的外部工具)按第 4~5 节标准把候选改成 `approved`/`rejected`,
 可选地设 `pinned`/`rank` 调序:
 
 ```sql
@@ -338,5 +353,5 @@ MEDIA_SERVER_CATALOG_DB=data/catalog.db go run . -build-snapshots
 线上运行时,后台定期刷新(`runSnapshotRefresher`)同样走这条 catalog-first 路径:已审分类发固定
 清单、未审分类继续实时聚合。**签名 URL 仍每请求生成**,库与落盘快照只存原始字段(无 sig/token)。
 
-> 一句话:`-catalog-seed` 灌候选 → SQL 审校 → `-build-snapshots`(或后台刷新)物化。
+> 一句话:`-catalog-seed` 灌候选 → `-catalog-review`(或 SQL)审校 → `-build-snapshots`(或后台刷新)物化。
 > 某分类一旦有 approved 行,它就变成“服务端只发你审过的固定清单”。

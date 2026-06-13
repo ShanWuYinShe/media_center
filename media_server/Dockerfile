@@ -22,7 +22,8 @@ RUN apk add --no-cache ca-certificates wget \
 
 ENV HOST=0.0.0.0 \
     PORT=8787 \
-    CONTENT_CATEGORIES_FILE=/config/contentCategories.json
+    CONTENT_CATEGORIES_FILE=/config/contentCategories.json \
+    MEDIA_SERVER_CATALOG_DB=/config/catalog.db
 
 COPY --from=builder /out/media_server /app/media_server
 

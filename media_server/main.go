@@ -31,6 +31,12 @@ type mediaServer struct {
 func main() {
 	buildSnapshots := flag.Bool("build-snapshots", false, "构建所有分类快照后退出(便于本地先生成、人工审校再上线)")
 	catalogSeed := flag.Bool("catalog-seed", false, "把各分类实时聚合结果作为 pending 候选写入分类数据库后退出(供外部工具审校)")
+	catalogReview := flag.Bool("catalog-review", false, "审校分类维护数据库的 pending 候选(approve/reject)后退出")
+	catalogReviewCategory := flag.String("catalog-review-category", "", "限定只审校某个分类 ID(默认全部)")
+	catalogReviewAuto := flag.Bool("catalog-review-auto", false, "非交互:按分数自动 approve 前 N 条(reject 留人工)")
+	catalogReviewTop := flag.Int("catalog-review-top", defaultReviewTopN, "auto 模式每分类放行条数(默认 20)")
+	catalogReviewDryRun := flag.Bool("catalog-review-dry-run", false, "只打印审校结果,不写库")
+	catalogReviewReviewer := flag.String("catalog-review-reviewer", "", "审校人留痕(默认按模式自动填)")
 	flag.Parse()
 
 	config, err := loadAppConfig()
@@ -83,6 +89,26 @@ func main() {
 		log.Printf("seeding catalog candidates (db=%s)…", config.CatalogDBPath)
 		if err := server.seedCatalog(context.Background()); err != nil {
 			log.Fatalf("catalog seed: %v", err)
+		}
+		return
+	}
+
+	// 审校分类维护数据库的 pending 候选:交互逐条,或 -catalog-review-auto 按分数批量 approve。
+	if *catalogReview {
+		if server.catalog == nil {
+			log.Fatalf("catalog review requires a catalog db (set MEDIA_SERVER_CATALOG_DB)")
+		}
+		opts := ReviewOptions{
+			CategoryID: *catalogReviewCategory,
+			Auto:       *catalogReviewAuto,
+			TopN:       *catalogReviewTop,
+			DryRun:     *catalogReviewDryRun,
+			Reviewer:   *catalogReviewReviewer,
+		}
+		log.Printf("reviewing catalog pending (db=%s, auto=%t, top=%d, category=%q, dry-run=%t)…",
+			config.CatalogDBPath, opts.Auto, opts.TopN, opts.CategoryID, opts.DryRun)
+		if err := server.runCatalogReview(context.Background(), opts); err != nil {
+			log.Fatalf("catalog review: %v", err)
 		}
 		return
 	}
