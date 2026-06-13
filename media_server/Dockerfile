@@ -1,4 +1,7 @@
-FROM golang:1.24-alpine AS builder
+ARG GO_VERSION=1.26
+ARG ALPINE_VERSION=3.22
+
+FROM golang:${GO_VERSION}-alpine AS builder
 
 WORKDIR /app
 
@@ -8,7 +11,7 @@ RUN go mod download
 COPY *.go ./
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/media_server .
 
-FROM alpine:3.22
+FROM alpine:${ALPINE_VERSION}
 
 WORKDIR /app
 
