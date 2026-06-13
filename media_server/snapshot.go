@@ -274,6 +274,29 @@ func (s *mediaServer) refreshAllSnapshots(ctx context.Context, onlyStale bool) {
 	}
 }
 
+// refreshSnapshotForCategory 重建单个分类的快照(供内部接口按分类触发)。沿用整体刷新的
+// 安全语义:构建失败或空结果时保留上一版,绝不清空。返回新快照条目数。
+func (s *mediaServer) refreshSnapshotForCategory(ctx context.Context, category ContentCategory) (int, error) {
+	buildCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	snap, err := s.buildCategorySnapshot(buildCtx, category)
+	if err != nil {
+		return 0, err
+	}
+	if len(snap.Items) == 0 {
+		log.Printf("snapshot: build empty category=%s, keeping previous", category.ID)
+		if prev, ok := s.snapshots.Get(category.ID); ok {
+			return len(prev.Items), nil
+		}
+		return 0, nil
+	}
+	if err := s.snapshots.Set(snap); err != nil {
+		return 0, fmt.Errorf("persist snapshot: %w", err)
+	}
+	log.Printf("snapshot: built category=%s items=%d", category.ID, len(snap.Items))
+	return len(snap.Items), nil
+}
+
 // runSnapshotRefresher 启动时补齐缺失/过期的快照,之后按刷新间隔整体重建。
 func (s *mediaServer) runSnapshotRefresher(ctx context.Context) {
 	s.refreshAllSnapshots(ctx, true)

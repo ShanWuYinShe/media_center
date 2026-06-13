@@ -240,6 +240,7 @@ ORDER BY m.pinned DESC, (m.rank IS NULL), m.rank ASC, m.score DESC, v.native_id 
 type PendingReviewItem struct {
 	CatalogVideo
 	CategoryID string
+	Status     string
 	Score      int
 	Pinned     bool
 	Rank       sql.NullInt64
@@ -254,46 +255,53 @@ type PendingReviewsOptions struct {
 	Limit      int    // <=0 不限
 }
 
-// PendingReviews 返回待审(status='pending')候选,按 score DESC, native_id ASC 排序
-// (与 ApprovedForCategory 的 score 段一致:审校人看到的顺序即上线后排前的顺序)。
-// 可用 CategoryID 限定分类、Limit 限条数。复用 decodeCreators 解 creators。
-func (c *Catalog) PendingReviews(opts PendingReviewsOptions) ([]PendingReviewItem, error) {
+// ListMembers 返回某分类下指定状态的成员(status="" 表示所有状态),附带视频元数据与
+// 审校字段。排序与 ApprovedForCategory 一致(置顶 > 人工序 > 分数 > native_id),
+// 这样审校界面看到的顺序即上线后排前的顺序。categoryID="" 表示所有分类,limit<=0 不限。
+func (c *Catalog) ListMembers(categoryID, status string, limit int) ([]PendingReviewItem, error) {
 	var (
 		query strings.Builder
 		args  []any
 	)
 	query.WriteString(`
 SELECT v.provider, v.native_id, v.title, v.description, v.creators, v.duration_sec, v.year, v.thumbnail_url, v.source_url,
-       m.category_id, m.score, m.pinned, m.rank, m.reason, m.reviewer, m.reviewed_at
+       m.category_id, m.status, m.score, m.pinned, m.rank, m.reason, m.reviewer, m.reviewed_at
 FROM category_members m
 JOIN videos v ON v.provider = m.provider AND v.native_id = m.native_id
-WHERE m.status = 'pending'`)
-	if categoryID := strings.TrimSpace(opts.CategoryID); categoryID != "" {
+WHERE 1=1`)
+	if categoryID = strings.TrimSpace(categoryID); categoryID != "" {
 		query.WriteString(" AND m.category_id = ?")
 		args = append(args, categoryID)
 	}
-	query.WriteString("\nORDER BY m.score DESC, v.native_id ASC")
-	if opts.Limit > 0 {
+	if status = strings.TrimSpace(status); status != "" {
+		if !validMemberStatus(status) {
+			return nil, fmt.Errorf("list members: invalid status: %q", status)
+		}
+		query.WriteString(" AND m.status = ?")
+		args = append(args, status)
+	}
+	query.WriteString("\nORDER BY m.pinned DESC, (m.rank IS NULL), m.rank ASC, m.score DESC, v.native_id ASC")
+	if limit > 0 {
 		query.WriteString("\nLIMIT ?")
-		args = append(args, opts.Limit)
+		args = append(args, limit)
 	}
 	rows, err := c.db.Query(query.String(), args...)
 	if err != nil {
-		return nil, fmt.Errorf("query pending: %w", err)
+		return nil, fmt.Errorf("query members: %w", err)
 	}
 	defer rows.Close()
 	var out []PendingReviewItem
 	for rows.Next() {
 		var it PendingReviewItem
 		var creators sql.NullString
-		var description, year, thumb, source, reason, reviewer, reviewedAt sql.NullString
+		var description, year, thumb, source, statusVal, reason, reviewer, reviewedAt sql.NullString
 		var duration, score sql.NullInt64
 		var pinned int64
 		if err := rows.Scan(
 			&it.Provider, &it.NativeID, &it.Title, &description, &creators, &duration, &year, &thumb, &source,
-			&it.CategoryID, &score, &pinned, &it.Rank, &reason, &reviewer, &reviewedAt,
+			&it.CategoryID, &statusVal, &score, &pinned, &it.Rank, &reason, &reviewer, &reviewedAt,
 		); err != nil {
-			return nil, fmt.Errorf("scan pending: %w", err)
+			return nil, fmt.Errorf("scan member: %w", err)
 		}
 		it.Description = description.String
 		it.Year = year.String
@@ -301,12 +309,105 @@ WHERE m.status = 'pending'`)
 		it.SourceURL = source.String
 		it.DurationSec = duration.Int64
 		it.Creators = decodeCreators(creators.String)
+		it.Status = statusVal.String
 		it.Score = int(score.Int64)
 		it.Pinned = pinned != 0
 		it.Reason = reason.String
 		it.Reviewer = reviewer.String
 		it.ReviewedAt = reviewedAt.String
 		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// PendingReviews 返回待审(status='pending')候选,排序同 ListMembers。
+// -catalog-review 子命令复用它逐条展示与放行/拒绝。
+func (c *Catalog) PendingReviews(opts PendingReviewsOptions) ([]PendingReviewItem, error) {
+	return c.ListMembers(opts.CategoryID, "pending", opts.Limit)
+}
+
+// ReviewMember 更新某分类成员的审校字段:status / pinned / rank 任一非 nil 即更新该列,
+// 并记录审校人与时间。三者全为 nil 时报错(避免无意义的空更新)。返回受影响行数(0 表示
+// 该 (分类,视频) 不存在)。admin 管理界面用它做 approve/reject/置顶/排序。
+func (c *Catalog) ReviewMember(categoryID, provider, nativeID string, status *string, pinned *bool, rank *sql.NullInt64, reviewer string) (int64, error) {
+	categoryID = strings.TrimSpace(categoryID)
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	nativeID = strings.TrimSpace(nativeID)
+	if categoryID == "" || provider == "" || nativeID == "" {
+		return 0, fmt.Errorf("review member: category/provider/nativeID required")
+	}
+	var sets []string
+	var args []any
+	if status != nil {
+		st := strings.TrimSpace(*status)
+		if !validMemberStatus(st) {
+			return 0, fmt.Errorf("review member: invalid status: %q", st)
+		}
+		sets = append(sets, "status=?")
+		args = append(args, st)
+	}
+	if pinned != nil {
+		pv := 0
+		if *pinned {
+			pv = 1
+		}
+		sets = append(sets, "pinned=?")
+		args = append(args, pv)
+	}
+	if rank != nil {
+		if rank.Valid {
+			sets = append(sets, "rank=?")
+			args = append(args, rank.Int64)
+		} else {
+			sets = append(sets, "rank=NULL")
+		}
+	}
+	if len(sets) == 0 {
+		return 0, fmt.Errorf("review member: nothing to update")
+	}
+	sets = append(sets, "reviewer=?", "reviewed_at=?")
+	args = append(args, strings.TrimSpace(reviewer), time.Now().UTC().Format(time.RFC3339), categoryID, provider, nativeID)
+	query := "UPDATE category_members SET " + strings.Join(sets, ", ") +
+		" WHERE category_id=? AND provider=? AND native_id=?"
+	res, err := c.db.Exec(query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("review member: %w", err)
+	}
+	affected, _ := res.RowsAffected()
+	return affected, nil
+}
+
+// CategoryStatusCounts 是某分类各审校状态的成员计数,供管理概览展示。
+type CategoryStatusCounts struct {
+	Pending  int `json:"pending"`
+	Approved int `json:"approved"`
+	Rejected int `json:"rejected"`
+}
+
+// OverviewCounts 一次性统计每个分类各状态的成员数。空库返回空 map(非 nil 错误)。
+func (c *Catalog) OverviewCounts() (map[string]CategoryStatusCounts, error) {
+	rows, err := c.db.Query(`SELECT category_id, status, COUNT(*) FROM category_members GROUP BY category_id, status`)
+	if err != nil {
+		return nil, fmt.Errorf("overview counts: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]CategoryStatusCounts)
+	for rows.Next() {
+		var cat, status string
+		var n int
+		if err := rows.Scan(&cat, &status, &n); err != nil {
+			return nil, fmt.Errorf("scan overview: %w", err)
+		}
+		counts := out[cat]
+		switch status {
+		case "pending":
+			counts.Pending = n
+		case "approved":
+			counts.Approved = n
+		case "rejected":
+			counts.Rejected = n
+		}
+		out[cat] = counts
 	}
 	return out, rows.Err()
 }
@@ -339,6 +440,11 @@ func decodeCreators(raw string) []string {
 // seedCatalog 离线把各分类的实时聚合结果写入分类维护数据库作为 pending 候选,
 // 供外部工具/人工审校。重复运行只新增候选,绝不覆盖已有的审校决定(approved/rejected)。
 func (s *mediaServer) seedCatalog(ctx context.Context) error {
+	return s.seedCatalogCategories(ctx, s.categories)
+}
+
+// seedCatalogCategories 对给定分类集合执行 seed(供 -catalog-seed 全量及内部接口按分类触发)。
+func (s *mediaServer) seedCatalogCategories(ctx context.Context, categories []ContentCategory) error {
 	if s.catalog == nil {
 		return fmt.Errorf("seed catalog: catalog not opened")
 	}
@@ -347,7 +453,7 @@ func (s *mediaServer) seedCatalog(ctx context.Context) error {
 	if seedTarget < 120 {
 		seedTarget = 120
 	}
-	for _, category := range s.categories {
+	for _, category := range categories {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

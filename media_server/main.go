@@ -26,6 +26,7 @@ type mediaServer struct {
 	snapshots      *SnapshotStore
 	curation       CurationConfig
 	catalog        *Catalog
+	ops            *opTracker
 }
 
 func main() {
@@ -68,6 +69,7 @@ func main() {
 		deliveryModes:  sourceDeliveryModes(content.Sources, enabledSources),
 		snapshots:      snapshots,
 		curation:       loadCuration(config.CurationPath),
+		ops:            &opTracker{},
 	}
 
 	// 分类维护数据库(SQLite system-of-record):approved 行优先物化为运行时快照。
@@ -137,6 +139,8 @@ func (s *mediaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && (r.URL.Path == "/health" || r.URL.Path == "/api/health"):
 		s.writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	case strings.HasPrefix(r.URL.Path, "/internal/"):
+		s.handleInternal(w, r)
 	case r.URL.Path == "/api/asset":
 		s.handleAsset(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/categories":

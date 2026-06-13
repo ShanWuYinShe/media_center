@@ -17,17 +17,18 @@ WORKDIR /app
 
 RUN apk add --no-cache ca-certificates wget \
     && adduser -D -u 10001 appuser \
-    && mkdir -p /config /cache \
+    && mkdir -p /config /cache /app/data \
     && chown -R appuser:appuser /app /config /cache
 
 ENV HOST=0.0.0.0 \
     PORT=8787 \
     CONTENT_CATEGORIES_FILE=/config/contentCategories.json \
-    MEDIA_SERVER_CATALOG_DB=/config/catalog.db
+    MEDIA_SERVER_CATALOG_DB=/app/data/catalog.db \
+    MEDIA_SERVER_SNAPSHOT_DIR=/app/data/snapshots
 
 COPY --from=builder /out/media_server /app/media_server
 
-VOLUME ["/config", "/cache"]
+VOLUME ["/config", "/cache", "/app/data"]
 EXPOSE 8787
 
 USER appuser
