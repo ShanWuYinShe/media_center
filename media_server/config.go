@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -23,6 +24,15 @@ type AppConfig struct {
 	YouTubeAPIKey    string
 	AssetCacheDir    string
 	AssetCacheMax    int64
+	// 分类视频快照:预聚合 + 持久化 + 定期刷新 + 本地审校,详见 snapshot.go / curation.go。
+	SnapshotEnabled    bool
+	SnapshotDir        string
+	SnapshotRefresh    time.Duration
+	SnapshotTargetSize int
+	CurationPath       string
+	// 分类维护数据库(SQLite, system of record)。approved 行物化成运行时快照;
+	// 路径为空或打开失败时优雅降级为实时聚合,详见 catalog.go。
+	CatalogDBPath string
 }
 
 type contentConfig struct {
@@ -44,7 +54,18 @@ func loadAppConfig() (AppConfig, error) {
 		YouTubeAPIKey:    strings.TrimSpace(os.Getenv("YOUTUBE_API_KEY")),
 		AssetCacheDir:    getenv("MEDIA_ASSET_CACHE_DIR", "/cache"),
 		AssetCacheMax:    positiveInt64(os.Getenv("MEDIA_ASSET_CACHE_MAX_BYTES"), 50*1024*1024*1024),
+
+		SnapshotEnabled:    boolFromEnv(os.Getenv("MEDIA_SERVER_SNAPSHOT_ENABLED"), true),
+		SnapshotDir:        getenv("MEDIA_SERVER_SNAPSHOT_DIR", "data/snapshots"),
+		SnapshotRefresh:    durationFromHours(os.Getenv("MEDIA_SERVER_SNAPSHOT_REFRESH_HOURS"), 6*time.Hour),
+		SnapshotTargetSize: positiveInt(os.Getenv("MEDIA_SERVER_SNAPSHOT_TARGET_SIZE"), 60),
+		CatalogDBPath:      getenv("MEDIA_SERVER_CATALOG_DB", "data/catalog.db"),
 	}
+	cfg.CurationPath = firstNonEmpty(
+		os.Getenv("MEDIA_SERVER_CURATION_FILE"),
+		os.Getenv("CURATION_FILE"),
+		defaultCurationPath(cfg.CategoriesPath),
+	)
 	if cfg.SigningKey == "" {
 		random := make([]byte, 32)
 		if _, err := rand.Read(random); err != nil {
@@ -85,21 +106,30 @@ func loadContentConfig(path string) (contentConfig, error) {
 			return contentConfig{}, fmt.Errorf("duplicate category id: %s", item.ID)
 		}
 		seen[item.ID] = struct{}{}
-		query := strings.TrimSpace(item.SearchQuery)
-		if query == "" && len(item.Keywords) > 0 {
-			query = strings.TrimSpace(item.Keywords[0])
+		queries := trimStrings(item.SearchQueries)
+		if len(queries) == 0 {
+			if q := strings.TrimSpace(item.SearchQuery); q != "" {
+				queries = []string{q}
+			} else if len(item.Keywords) > 0 {
+				if first := strings.TrimSpace(item.Keywords[0]); first != "" {
+					queries = []string{first}
+				}
+			}
 		}
-		if query == "" {
-			return contentConfig{}, fmt.Errorf("category %s must define searchQuery or keywords", item.ID)
+		queries = dedupeStrings(queries)
+		if len(queries) == 0 {
+			return contentConfig{}, fmt.Errorf("category %s must define searchQuery/searchQueries or keywords", item.ID)
 		}
 		categories = append(categories, ContentCategory{
-			ID:            item.ID,
-			Title:         item.Title,
-			Description:   item.Description,
-			Query:         query,
-			SourceQueries: cloneStringMap(item.SourceQueries),
-			Keywords:      trimStrings(item.Keywords),
-			Excludes:      trimStrings(item.Excludes),
+			ID:                 item.ID,
+			Title:              item.Title,
+			Description:        item.Description,
+			Query:              queries[0],
+			Queries:            queries,
+			SourceQueries:      cloneStringMap(item.SourceQueries),
+			Keywords:           trimStrings(item.Keywords),
+			Excludes:           trimStrings(item.Excludes),
+			MinDurationSeconds: item.MinDurationSeconds,
 		})
 	}
 	return contentConfig{Sources: normalizeSourceConfig(raw.Sources), Categories: categories}, nil
@@ -199,6 +229,37 @@ func durationFromSeconds(raw string, fallback time.Duration) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
+func durationFromHours(raw string, fallback time.Duration) time.Duration {
+	if strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+	hours := positiveInt(raw, int(fallback/time.Hour))
+	return time.Duration(hours) * time.Hour
+}
+
+// boolFromEnv 解析布尔型环境变量。空值返回默认;识别 1/true/yes/on 与 0/false/no/off。
+func boolFromEnv(raw string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return fallback
+	case "1", "true", "yes", "on", "enabled":
+		return true
+	case "0", "false", "no", "off", "disabled":
+		return false
+	default:
+		return fallback
+	}
+}
+
+// defaultCurationPath 默认把审校文件放在分类配置同目录下的 curation.json。
+func defaultCurationPath(categoriesPath string) string {
+	dir := filepath.Dir(strings.TrimSpace(categoriesPath))
+	if dir == "" || dir == "." {
+		return "src/curation.json"
+	}
+	return filepath.Join(dir, "curation.json")
+}
+
 // normalizeBaseURL 去掉末尾斜杠，便于后续拼接 /asset。空值原样返回。
 func normalizeBaseURL(value string) string {
 	trimmed := strings.TrimSpace(value)
@@ -234,6 +295,23 @@ func trimStrings(values []string) []string {
 		if trimmed := strings.TrimSpace(value); trimmed != "" {
 			out = append(out, trimmed)
 		}
+	}
+	return out
+}
+
+// dedupeStrings 去掉重复项(保持首次出现顺序),用于规整分类的多搜索词列表。
+func dedupeStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
 	}
 	return out
 }

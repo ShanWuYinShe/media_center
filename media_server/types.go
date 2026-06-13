@@ -35,19 +35,26 @@ type rawCategoryConfig struct {
 	Title         string            `json:"title"`
 	Description   string            `json:"description"`
 	SearchQuery   string            `json:"searchQuery"`
+	SearchQueries []string          `json:"searchQueries"`
 	SourceQueries map[string]string `json:"sourceQueries"`
 	Keywords      []string          `json:"keywords"`
 	Excludes      []string          `json:"excludes"`
+	// MinDurationSeconds 覆盖该分类的最短时长门槛(秒)。<=0 或省略时用按分类内置默认。
+	MinDurationSeconds int `json:"minDurationSeconds"`
 }
 
 type ContentCategory struct {
-	ID            string
-	Title         string
-	Description   string
-	Query         string
-	SourceQueries map[string]string
-	Keywords      []string
-	Excludes      []string
+	ID          string
+	Title       string
+	Description string
+	Query       string
+	// Queries 是该分类聚合时使用的多个搜索词;为空时回退到 [Query]。
+	// 多搜索词能显著扩大候选池,缓解“数据太少”。
+	Queries            []string
+	SourceQueries      map[string]string
+	Keywords           []string
+	Excludes           []string
+	MinDurationSeconds int
 }
 
 type PublicCategory struct {

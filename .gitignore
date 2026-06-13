@@ -35,5 +35,19 @@ $RECYCLE.BIN/
 .env.local
 .env.*.local
 
+# ----- media_server 运行时生成的分类快照(非提交;线上由后台定期刷新生成) -----
+media_server/data/
+**/snapshots/*.json
+
+# ----- media_server 分类维护数据库(SQLite system-of-record;含 WAL/SHM 旁文件) -----
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.sqlite
+**/*.sqlite3
+
+# ----- media_server 编译产物(go build 在包目录生成的同名二进制) -----
+media_server/media_server
+
 # ----- Claude Code Worktree 元数据 -----
 .claude/worktrees/
