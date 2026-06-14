@@ -21,4 +21,4 @@ go test ./...         # 单元测试
 - **内容分类**：默认读取 `src/contentCategories.json`，可用 `CONTENT_CATEGORIES_FILE` 覆盖；线上由 `workwork` 的 admin 注入运行时分类配置。
 - **合规**：只处理公开视频和授权内容，不接入盗版站点、DRM 绕过或未授权下载。
 - **新增 Provider**：复用现有 Bilibili 客户端的模式扩展，使用官方 API 或合规开源工具。
-- **点播解析**：本服务不内置 yt-dlp；需外部解析的来源由 `workwork` 的内部 `vod_extractor` 服务负责（集成方式见 `workwork/CLAUDE.md`）。
+- **点播解析**：本服务不内置 yt-dlp；需外部解析的来源由同仓库 `vod_extractor/` 服务负责（Docker 内网调用；线上由 `workwork` 编排部署，详见 `workwork/CLAUDE.md`）。
