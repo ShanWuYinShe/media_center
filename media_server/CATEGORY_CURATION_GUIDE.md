@@ -300,6 +300,47 @@ MEDIA_SERVER_CATALOG_DB=data/catalog.db go run . -catalog-seed
 # 日志示例:catalog seed: category=movies candidates=120 new=120 pending=120 approved=0
 ```
 
+### 9.2b 外部 AI / 工具收集结果导入待审
+
+如果候选不是由 `media_server` 实时搜索产生，而是你让其他 AI 或脚本按本指南收集好的固定清单，
+不要直接写运行时快照，也不要直接标成 approved。推荐交付一个 JSON，然后通过 admin 代理导入
+catalog 的 `pending` 队列，仍由 admin 做最后审查：
+
+```json
+{
+  "items": [
+    {
+      "categoryId": "movies",
+      "provider": "bilibili",
+      "nativeId": "BV1xxxx",
+      "title": "示例电影 完整版 正片",
+      "description": "简介，可空",
+      "creators": ["公开视频频道"],
+      "durationSeconds": 5400,
+      "year": "1984",
+      "thumbnailUrl": "https://i0.hdslb.com/...",
+      "sourceUrl": "https://www.bilibili.com/video/BV1xxxx",
+      "score": 42
+    }
+  ]
+}
+```
+
+导入方式：
+
+```bash
+curl -X POST https://yinghuoren.com/api/admin/media-center/catalog/import \
+  -H 'Content-Type: application/json' \
+  --data-binary @collected-videos.json
+```
+
+要求与语义：
+
+- `categoryId` 必须是现有分类；`provider/nativeId/title` 必填。Bilibili 用稳定 BV 号。
+- 单次最多 1000 条；重复导入会刷新 `videos` 元数据，但**不会覆盖**既有 `approved/rejected` 审校决定。
+- 导入结果只进入 `pending`，不会自动上线。之后仍按 9.3 审查，按 9.4 rebuild 快照。
+- 外部 AI 应在 `score` 或自己的交付说明中保留判定理由；最终是否通过以 admin 审查为准。
+
 ### 9.3 步骤二：审校(approve / reject)
 
 **首选内置 `-catalog-review` 子命令**(无需手写 SQL),两种模式:

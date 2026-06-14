@@ -73,7 +73,11 @@ import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.MediaViewModel
 import com.example.mediacenter.ui.MediaViewModelFactory
+import com.example.mediacenter.update.AppUpdateResult
+import com.example.mediacenter.update.AppUpdateManager
+import com.example.mediacenter.update.InstallLaunchResult
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.IOException
 import java.util.Locale
 import java.util.WeakHashMap
@@ -140,6 +144,8 @@ class MainActivity : ComponentActivity() {
     private val playbackLoadErrorHandlingPolicy = CappedLoadErrorHandlingPolicy(MaxPlaybackRetries)
     // 瞬时 5xx 自动恢复期间盖在播放画面上的“正在重试…”提示,避免重试窗口里只剩黑屏/卡帧。
     private var playerRetryOverlay: View? = null
+    private lateinit var appUpdateManager: AppUpdateManager
+    private var pendingUpdateApk: File? = null
     // “播放已稳定”计时器:STATE_READY 后延迟触发;只有同一地址连续顺畅播放超过窗口
     // 才把 ViewModel 的恢复额度清零,防止“就绪即失败”的流陷入无限恢复循环。
     private var playbackStabilityRunnable: Runnable? = null
@@ -151,6 +157,7 @@ class MainActivity : ComponentActivity() {
 
         root = FrameLayout(this)
         setContentView(root)
+        appUpdateManager = AppUpdateManager(this, MediaApi(BuildConfig.MEDIA_SERVER_URL))
 
         onBackPressedDispatcher.addCallback(
             this,
@@ -187,6 +194,21 @@ class MainActivity : ComponentActivity() {
                     render(state)
                 }
             }
+        }
+        lifecycleScope.launch {
+            when (val result = appUpdateManager.checkAndDownload()) {
+                AppUpdateResult.NoUpdate -> Unit
+                is AppUpdateResult.Failed -> showUpdateMessage(result.message)
+                is AppUpdateResult.ReadyToInstall -> promptInstallUpdate(result)
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val apk = pendingUpdateApk ?: return
+        if (appUpdateManager.canInstallPackages()) {
+            handleInstallLaunch(appUpdateManager.launchInstaller(apk), apk)
         }
     }
 
@@ -1987,6 +2009,110 @@ class MainActivity : ComponentActivity() {
             setContentView(card)
             window?.setBackgroundDrawableResource(android.R.color.transparent)
             window?.setLayout((resources.displayMetrics.widthPixels * 0.62f).toInt(), (resources.displayMetrics.heightPixels * 0.72f).toInt())
+            close.post { close.requestFocus() }
+        }.show()
+    }
+
+    private fun promptInstallUpdate(result: AppUpdateResult.ReadyToInstall) {
+        pendingUpdateApk = result.apk
+        Dialog(this).apply {
+            requestWindowFeature(Window.FEATURE_NO_TITLE)
+            val card = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(28), dp(24), dp(28), dp(24))
+                background = rounded(Colors.SurfaceElevated, 24, 1, Colors.GlassBorder)
+            }
+            card.addView(
+                label("发现新版本 ${result.update.versionName}", 22f, Colors.TextPrimary, bold = true, maxLines = 2),
+                linearMatch(),
+            )
+            val notes = result.update.releaseNotes.ifBlank { "已下载更新包，安装后可继续使用最新版本。" }
+            card.addView(
+                label(notes, 16f, Colors.TextSecondary, maxLines = 5).apply {
+                    setLineSpacing(dp(4).toFloat(), 1f)
+                },
+                LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(12)),
+            )
+            val actions = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                clipChildren = false
+                clipToPadding = false
+            }
+            val install = primaryPill("安装更新", heightDp = 48, horizontalPaddingDp = 28) {
+                dismiss()
+                handleInstallLaunch(appUpdateManager.launchInstaller(result.apk), result.apk)
+            }
+            val later = pill("稍后", selected = false, heightDp = 48, horizontalPaddingDp = 24) {
+                pendingUpdateApk = null
+                dismiss()
+            }
+            actions.addView(install, LinearLayout.LayoutParams(wrap(), dp(48)).withEndMargin(dp(12)))
+            actions.addView(later, LinearLayout.LayoutParams(wrap(), dp(48)))
+            card.addView(actions, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(18)))
+            setContentView(card)
+            window?.setBackgroundDrawableResource(android.R.color.transparent)
+            window?.setLayout((resources.displayMetrics.widthPixels * 0.48f).toInt(), wrap())
+            install.post { install.requestFocus() }
+        }.show()
+    }
+
+    private fun handleInstallLaunch(result: InstallLaunchResult, apk: File) {
+        when (result) {
+            InstallLaunchResult.Started -> {
+                pendingUpdateApk = null
+            }
+            InstallLaunchResult.NeedsPermission -> {
+                pendingUpdateApk = apk
+                showUpdatePermissionDialog()
+            }
+            is InstallLaunchResult.Failed -> showUpdateMessage(result.message)
+        }
+    }
+
+    private fun showUpdatePermissionDialog() {
+        Dialog(this).apply {
+            requestWindowFeature(Window.FEATURE_NO_TITLE)
+            val card = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(28), dp(24), dp(28), dp(24))
+                background = rounded(Colors.SurfaceElevated, 24, 1, Colors.GlassBorder)
+            }
+            card.addView(
+                label("需要允许安装未知应用", 22f, Colors.TextPrimary, bold = true, maxLines = 2),
+                linearMatch(),
+            )
+            card.addView(
+                label("请在系统设置中允许本应用安装 APK，返回后会自动继续安装。", 16f, Colors.TextSecondary, maxLines = 3),
+                LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(12)),
+            )
+            val open = primaryPill("打开设置", heightDp = 48, horizontalPaddingDp = 28) {
+                dismiss()
+                runCatching { appUpdateManager.launchInstallPermissionSettings() }
+                    .onFailure { showUpdateMessage("无法打开安装权限设置，请在系统设置中手动允许") }
+            }
+            card.addView(open, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(18)))
+            setContentView(card)
+            window?.setBackgroundDrawableResource(android.R.color.transparent)
+            window?.setLayout((resources.displayMetrics.widthPixels * 0.48f).toInt(), wrap())
+            open.post { open.requestFocus() }
+        }.show()
+    }
+
+    private fun showUpdateMessage(message: String) {
+        Dialog(this).apply {
+            requestWindowFeature(Window.FEATURE_NO_TITLE)
+            val card = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(24), dp(22), dp(24), dp(22))
+                background = rounded(Colors.SurfaceElevated, 22, 1, Colors.GlassBorder)
+            }
+            card.addView(label(message, 17f, Colors.TextSecondary, maxLines = 3), linearMatch())
+            val close = pill("知道了", selected = true, heightDp = 44, horizontalPaddingDp = 24) { dismiss() }
+            card.addView(close, LinearLayout.LayoutParams(wrap(), dp(44)).withTopMargin(dp(16)))
+            setContentView(card)
+            window?.setBackgroundDrawableResource(android.R.color.transparent)
+            window?.setLayout((resources.displayMetrics.widthPixels * 0.42f).toInt(), wrap())
             close.post { close.requestFocus() }
         }.show()
     }

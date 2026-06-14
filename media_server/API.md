@@ -209,6 +209,26 @@ type PagedVideos = {
 }
 ```
 
+### `GET /app/update?versionCode=1`
+
+返回 Android TV App 的最新发布版本。若当前版本已是最新，返回 `204 No Content`。
+
+```json
+{
+  "versionCode": 2,
+  "versionName": "1.1.0",
+  "apkUrl": "https://yinghuoren.com/api/media/app/download",
+  "sizeBytes": 12345678,
+  "sha256": "64 字符 SHA-256 hex",
+  "releaseNotes": "修复播放失败后跳回首页的问题",
+  "publishedAt": "2026-06-14T04:00:00Z"
+}
+```
+
+### `GET /app/download`
+
+下载 admin 发布并审查过的 Android TV App APK。服务端只负责下发已发布文件和元数据；APK 搜集/发布由 admin 管理页完成。
+
 ### `GET /asset?p=...&sig=...`
 
 `proxy` 模式资源（缩略图 / 播放流）的后端回源端点。它存在的原因是 **App（国内）无法直连国外源**，

@@ -215,6 +215,52 @@ func TestInternalTokenGuard(t *testing.T) {
 	}
 }
 
+func TestInternalCatalogImportCreatesPendingOnly(t *testing.T) {
+	s, c := newInternalTestServer(t, "secret")
+	w := doInternal(s, http.MethodPost, "/internal/catalog/import", "secret", map[string]any{
+		"items": []map[string]any{
+			{
+				"categoryId": "movies",
+				"provider":   "bilibili",
+				"nativeId":   "BV1new",
+				"title":      "经典电影 完整版 正片",
+				"score":      42,
+				"sourceUrl":  "https://www.bilibili.com/video/BV1new",
+			},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("import status = %d, body=%s", w.Code, w.Body.String())
+	}
+	items, err := c.ListMembers("movies", "pending", 0)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	if len(items) != 1 || items[0].NativeID != "BV1new" || items[0].Status != "pending" || items[0].Score != 42 {
+		t.Fatalf("unexpected pending import: %+v", items)
+	}
+
+	approved := "approved"
+	if _, err := c.ReviewMember("movies", "bilibili", "BV1new", &approved, nil, nil, "tester"); err != nil {
+		t.Fatalf("approve imported: %v", err)
+	}
+	w = doInternal(s, http.MethodPost, "/internal/catalog/import", "secret", map[string]any{
+		"items": []map[string]any{
+			{"categoryId": "movies", "provider": "bilibili", "nativeId": "BV1new", "title": "标题刷新", "score": 1},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("reimport status = %d, body=%s", w.Code, w.Body.String())
+	}
+	approvedItems, err := c.ListMembers("movies", "approved", 0)
+	if err != nil {
+		t.Fatalf("list approved: %v", err)
+	}
+	if len(approvedItems) != 1 || approvedItems[0].NativeID != "BV1new" {
+		t.Fatalf("approved decision should be preserved, got %+v", approvedItems)
+	}
+}
+
 func TestInternalDisabledWhenNoToken(t *testing.T) {
 	s, _ := newInternalTestServer(t, "")
 	// Even with a header, an unset token disables the whole /internal tree (404).

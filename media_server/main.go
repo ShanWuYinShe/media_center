@@ -145,6 +145,10 @@ func (s *mediaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleAsset(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/categories":
 		s.handleCategories(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/app/update":
+		s.handleAppUpdate(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/app/download":
+		s.handleAppDownload(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/search":
 		s.handleSearch(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/categories/") && strings.HasSuffix(r.URL.Path, "/videos"):

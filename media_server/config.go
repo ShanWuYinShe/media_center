@@ -36,7 +36,9 @@ type AppConfig struct {
 	// 内部管理接口令牌:非空时启用 /internal/* 管理接口(catalog 审校/seed/快照重建),
 	// 请求需带匹配的 X-Internal-Token。为空则整组 /internal/* 接口关闭(404)。
 	// 仅供内网可信调用方(workwork 的 admin)使用,绝不经公网暴露。详见 internal_api.go。
-	InternalToken string
+	InternalToken         string
+	AppUpdateManifestPath string
+	AppUpdateAPKPath      string
 }
 
 type contentConfig struct {
@@ -65,6 +67,14 @@ func loadAppConfig() (AppConfig, error) {
 		SnapshotTargetSize: positiveInt(os.Getenv("MEDIA_SERVER_SNAPSHOT_TARGET_SIZE"), 60),
 		CatalogDBPath:      getenv("MEDIA_SERVER_CATALOG_DB", "data/catalog.db"),
 		InternalToken:      strings.TrimSpace(os.Getenv("MEDIA_SERVER_INTERNAL_TOKEN")),
+		AppUpdateManifestPath: getenv(
+			"MEDIA_SERVER_APP_UPDATE_MANIFEST",
+			"/config/app-update.json",
+		),
+		AppUpdateAPKPath: getenv(
+			"MEDIA_SERVER_APP_UPDATE_APK",
+			"/config/media-center-app.apk",
+		),
 	}
 	cfg.CurationPath = firstNonEmpty(
 		os.Getenv("MEDIA_SERVER_CURATION_FILE"),

@@ -66,6 +66,25 @@ class MediaApi(
         query = if (preferProxy) mapOf("delivery" to DeliveryMode.PROXY) else emptyMap(),
     )
 
+    suspend fun appUpdate(currentVersionCode: Int): AppUpdateInfo? {
+        val body = getOptionalBody(
+            pathSegments = listOf("app", "update"),
+            query = mapOf("versionCode" to currentVersionCode.toString()),
+        ) ?: return null
+        return withContext(Dispatchers.Default) {
+            json.decodeFromString<AppUpdateInfo>(body)
+        }
+    }
+
+    fun resolveApiUrl(pathSegments: List<String>): String {
+        val builder = apiRoot.newBuilder()
+        if (!baseUrlIncludesApiPrefix) {
+            builder.addPathSegment("api")
+        }
+        pathSegments.forEach(builder::addPathSegment)
+        return builder.build().toString()
+    }
+
     private suspend inline fun <reified T> get(
         pathSegments: List<String>,
         query: Map<String, String> = emptyMap(),
@@ -152,6 +171,46 @@ class MediaApi(
                 }
             }
         })
+    }
+
+    private suspend fun getOptionalBody(
+        pathSegments: List<String>,
+        query: Map<String, String> = emptyMap(),
+    ): String? {
+        val builder = apiRoot.newBuilder()
+        if (!baseUrlIncludesApiPrefix) {
+            builder.addPathSegment("api")
+        }
+        pathSegments.forEach(builder::addPathSegment)
+        query.forEach { (key, value) -> builder.addQueryParameter(key, value) }
+        val request = Request.Builder().url(builder.build()).get().build()
+        return suspendCancellableCoroutine { continuation ->
+            val call = client.newCall(request)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, error: IOException) {
+                    if (continuation.isActive) continuation.resumeWithException(error)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    try {
+                        response.use {
+                            if (it.code() == 204) {
+                                if (continuation.isActive) continuation.resume(null)
+                                return
+                            }
+                            val body = it.requiredBody()
+                            if (!it.isSuccessful) {
+                                throw apiException(it.code(), body)
+                            }
+                            if (continuation.isActive) continuation.resume(body)
+                        }
+                    } catch (error: Throwable) {
+                        if (continuation.isActive) continuation.resumeWithException(error)
+                    }
+                }
+            })
+        }
     }
 
     private fun Response.requiredBody(): String {

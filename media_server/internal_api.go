@@ -115,6 +115,8 @@ func (s *mediaServer) handleInternal(w http.ResponseWriter, r *http.Request) {
 		s.handleInternalItems(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/internal/catalog/review":
 		s.handleInternalReview(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/internal/catalog/import":
+		s.handleInternalImport(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/internal/catalog/seed":
 		s.handleInternalSeed(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/internal/snapshots/rebuild":
@@ -122,6 +124,92 @@ func (s *mediaServer) handleInternal(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.writeError(w, &apiError{Status: http.StatusNotFound, Code: "NOT_FOUND", Message: "请求的资源不存在。"})
 	}
+}
+
+type internalImportRequest struct {
+	Items []internalImportItem `json:"items"`
+}
+
+type internalImportItem struct {
+	CategoryID      string   `json:"categoryId"`
+	Provider        string   `json:"provider"`
+	NativeID        string   `json:"nativeId"`
+	Title           string   `json:"title"`
+	Description     string   `json:"description,omitempty"`
+	Creators        []string `json:"creators,omitempty"`
+	DurationSeconds int64    `json:"durationSeconds,omitempty"`
+	Year            string   `json:"year,omitempty"`
+	ThumbnailURL    string   `json:"thumbnailUrl,omitempty"`
+	SourceURL       string   `json:"sourceUrl,omitempty"`
+	Score           int      `json:"score,omitempty"`
+}
+
+// handleInternalImport 把外部工具/AI 已收集并初筛的视频导入 catalog 待审列表。
+// 只写 pending 候选,绝不直接 approved;已存在的审校决定不会被覆盖。
+func (s *mediaServer) handleInternalImport(w http.ResponseWriter, r *http.Request) {
+	if s.catalog == nil {
+		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "CATALOG_DISABLED", Message: "分类维护数据库未启用。"})
+		return
+	}
+	var req internalImportRequest
+	dec := json.NewDecoder(io.LimitReader(r.Body, 4<<20))
+	if err := dec.Decode(&req); err != nil {
+		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "请求体不是合法 JSON。"})
+		return
+	}
+	if len(req.Items) == 0 {
+		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "items 不能为空。"})
+		return
+	}
+	if len(req.Items) > 1000 {
+		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "单次最多导入 1000 条。"})
+		return
+	}
+
+	items := make([]CatalogImportItem, 0, len(req.Items))
+	for i, item := range req.Items {
+		categoryID := strings.TrimSpace(item.CategoryID)
+		if categoryID == "" {
+			s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: fmt.Sprintf("items[%d].categoryId 不能为空。", i)})
+			return
+		}
+		if _, ok := s.categoriesByID[categoryID]; !ok {
+			s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: fmt.Sprintf("items[%d].categoryId 未知:%s", i, categoryID)})
+			return
+		}
+		provider := strings.ToLower(strings.TrimSpace(item.Provider))
+		nativeID := strings.TrimSpace(item.NativeID)
+		title := strings.TrimSpace(item.Title)
+		if provider == "" || nativeID == "" || title == "" {
+			s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: fmt.Sprintf("items[%d] provider/nativeId/title 不能为空。", i)})
+			return
+		}
+		items = append(items, CatalogImportItem{
+			CategoryID: categoryID,
+			Video: CatalogVideo{
+				Provider:     provider,
+				NativeID:     nativeID,
+				Title:        title,
+				Description:  item.Description,
+				Creators:     item.Creators,
+				DurationSec:  item.DurationSeconds,
+				Year:         item.Year,
+				ThumbnailURL: item.ThumbnailURL,
+				SourceURL:    item.SourceURL,
+			},
+			Score: item.Score,
+		})
+	}
+	updatedVideos, imported, skipped, err := s.catalog.ImportPending(items)
+	if err != nil {
+		s.writeError(w, fmt.Errorf("import catalog: %w", err))
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"videos":   updatedVideos,
+		"imported": imported,
+		"skipped":  skipped,
+	})
 }
 
 type internalSnapshotInfo struct {

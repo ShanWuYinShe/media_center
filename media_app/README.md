@@ -22,3 +22,5 @@ App 现在按 Android 4.4.2/API 19 作为主目标设计，使用单一原生 Vi
 首页会从服务端读取内容分类，默认展示服务端返回的第一个分类。内置一级专区包括电影、电视剧、纪录片、红色经典和 Dota 专区。App 只消费服务端返回的统一 opaque 视频 ID、opaque 播放选项 ID、`videoKind=vod` 和点播播放地址，并原样播放服务端返回的图片/播放 URL；不处理直播、视频来源、网页播放、外部打开或代理 URL 签名。
 
 播放前会重新请求 `/videos/{id}/playback` 获取新鲜 opaque 代理播放地址，播放器使用 Media3 `DefaultHttpDataSource` 直接流式读取服务端返回的 URL；客户端不使用下载器或落盘媒体缓存。
+
+启动后 App 会请求 `/app/update?versionCode=当前版本` 检查更新；发现新版本时自动下载 APK、校验 SHA-256，然后拉起系统安装器。普通 Android TV 应用不能绕过系统权限静默安装，首次需要用户允许“安装未知应用”并确认安装。

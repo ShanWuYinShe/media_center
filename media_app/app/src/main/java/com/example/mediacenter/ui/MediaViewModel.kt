@@ -93,6 +93,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     // [MaxPlaybackRecoveryAttempts] 次后转为展示错误。注意:不能仅凭 STATE_READY
     // 就清零,否则“就绪即失败”的流会绕过上限陷入无限恢复循环。
     private var playbackRecoveryAttempts = 0
+    private var playbackSession = 0L
 
     // 分类级内存缓存:再次进入已加载过的分类时,立即展示缓存内容,不再清空列表、
     // 不再 loading 转圈阻塞。仅当缓存过期(超过 [CategoryCacheTtlMs])时在后台静默刷新,
@@ -408,6 +409,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     }
 
     fun play(stream: PlaybackOption) {
+        playbackSession++
         playbackRecoveryAttempts = 0
         val current = mutableState.value
         val selected = current.selected
@@ -504,6 +506,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     "-> recover attempt $playbackRecoveryAttempts/$MaxPlaybackRecoveryAttempts: $message",
             )
             recoverPlayback(
+                session = playbackSession,
                 videoId = selected.id,
                 failedOption = failedOption,
                 fallbackMessage = message,
@@ -535,6 +538,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
      * 选项时落错误态。退避期间用户离开播放页或切换了清晰度则放弃,不写回过期状态。
      */
     private fun recoverPlayback(
+        session: Long,
         videoId: String,
         failedOption: PlaybackOption,
         fallbackMessage: String,
@@ -547,7 +551,10 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             delay(attempt.coerceIn(1, MaxPlaybackRecoveryAttempts) * PlaybackRecoveryBackoffStepMs)
             val afterDelay = mutableState.value
             // 退避期间用户离开播放页或切换了清晰度 → 放弃恢复
-            if (afterDelay.selected?.id != videoId || afterDelay.playing?.id != failedOption.id) {
+            if (session != playbackSession ||
+                afterDelay.selected?.id != videoId ||
+                afterDelay.playing?.id != failedOption.id
+            ) {
                 AppLog.d("Playback", "recover attempt $attempt aborted: user left or switched stream")
                 mutableState.update { it.copy(loading = false) }
                 return@launch
@@ -570,7 +577,10 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                             "candidate=${candidate?.id ?: "<none>"} proxy=$preferProxyPlayback",
                     )
                     mutableState.update { state ->
-                        if (state.selected?.id != videoId || state.playing?.id != failedOption.id) {
+                        if (session != playbackSession ||
+                            state.selected?.id != videoId ||
+                            state.playing?.id != failedOption.id
+                        ) {
                             state.copy(loading = false)
                         } else if (candidate == null) {
                             state.copy(
@@ -590,7 +600,10 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                 .onFailure { error ->
                     AppLog.w("Playback", "recover attempt $attempt fetch failed for video=$videoId", error)
                     mutableState.update { state ->
-                        if (state.selected?.id != videoId || state.playing?.id != failedOption.id) {
+                        if (session != playbackSession ||
+                            state.selected?.id != videoId ||
+                            state.playing?.id != failedOption.id
+                        ) {
                             state.copy(loading = false)
                         } else {
                             state.copy(
@@ -691,7 +704,9 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         prefetchNextPage: Boolean = true,
     ) {
         playbackRecoveryAttempts = 0
+        playbackSession++
         val nextVideo = items[index]
+        val session = playbackSession
         AppLog.i("Playback", "playVideoAt index=$index video=${nextVideo.id}")
         val cacheScope = currentDetailsCacheScope()
         // 临近列表末尾时顺便预取下一页,保证“下一个”能持续可用
@@ -706,6 +721,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                 details.copy(playbackOptions = playbackOptions)
             }
                 .onSuccess { details ->
+                    if (session != playbackSession) return@onSuccess
                     val option = details.playbackOptions.firstOrNull()
                     if (option == null) {
                         AppLog.w("Playback", "video ${details.id} has no playable option")
@@ -730,10 +746,13 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     }
                 }
                 .onFailure { error ->
+                    if (session != playbackSession) return@onFailure
                     AppLog.w("Playback", "playVideoAt failed for ${nextVideo.id}: ${error.message}")
                     mutableState.update {
                         it.copy(
                             loading = false,
+                            selected = nextVideo.toPlaybackFailureDetails(null),
+                            playingVideo = nextVideo,
                             playing = null,
                             error = error.message ?: "播放下一个失败",
                         )
@@ -765,6 +784,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         // 触发自动续播再次跳回播放页。
         detailsJob?.cancel()
         recoveryJob?.cancel()
+        playbackSession++
         pendingAutoAdvanceFromId = null
         val before = mutableState.value
         AppLog.i("Nav", "back from " + when {

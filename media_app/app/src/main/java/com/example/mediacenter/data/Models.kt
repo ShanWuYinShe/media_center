@@ -70,6 +70,17 @@ data class PlaybackOption(
     val delivery: String = DeliveryMode.DIRECT,
 )
 
+@Serializable
+data class AppUpdateInfo(
+    val versionCode: Int,
+    val versionName: String,
+    val apkUrl: String,
+    val sizeBytes: Long,
+    val sha256: String,
+    val releaseNotes: String = "",
+    val publishedAt: String = "",
+)
+
 /**
  * 资源下发方式，决定 App 如何获取缩略图 / 播放流：
  *  - [DIRECT]：国内可直连源，服务端只下发上游 URL + companion headers，App 直连上游。

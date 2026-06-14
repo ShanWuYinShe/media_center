@@ -37,6 +37,12 @@ type CatalogVideo struct {
 	SourceURL    string
 }
 
+type CatalogImportItem struct {
+	CategoryID string
+	Video      CatalogVideo
+	Score      int
+}
+
 // OpenCatalog 打开(必要时创建)分类维护数据库,确保 schema 存在。
 func OpenCatalog(path string) (*Catalog, error) {
 	trimmed := strings.TrimSpace(path)
@@ -148,6 +154,7 @@ func (c *Catalog) AddPendingMember(categoryID, provider, nativeID string, score 
 	if categoryID == "" || provider == "" || nativeID == "" {
 		return false, fmt.Errorf("add member: category/provider/nativeID required")
 	}
+
 	res, err := c.db.Exec(`
 INSERT INTO category_members (category_id, provider, native_id, status, score)
 VALUES (?, ?, ?, 'pending', ?)
@@ -159,6 +166,73 @@ ON CONFLICT(category_id, provider, native_id) DO NOTHING`,
 	}
 	affected, _ := res.RowsAffected()
 	return affected > 0, nil
+}
+
+func (c *Catalog) ImportPending(items []CatalogImportItem) (videos int, imported int, skipped int, err error) {
+	if len(items) == 0 {
+		return 0, 0, 0, nil
+	}
+	tx, err := c.db.Begin()
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("begin import: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	for i, item := range items {
+		categoryID := strings.TrimSpace(item.CategoryID)
+		provider := strings.ToLower(strings.TrimSpace(item.Video.Provider))
+		nativeID := strings.TrimSpace(item.Video.NativeID)
+		title := strings.TrimSpace(item.Video.Title)
+		if categoryID == "" || provider == "" || nativeID == "" || title == "" {
+			return 0, 0, 0, fmt.Errorf("import item %d: category/provider/nativeID/title required", i)
+		}
+		creators, marshalErr := json.Marshal(item.Video.Creators)
+		if marshalErr != nil {
+			return 0, 0, 0, marshalErr
+		}
+		if _, err = tx.Exec(`
+INSERT INTO videos (provider, native_id, title, description, creators, duration_sec, year, thumbnail_url, source_url, fetched_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(provider, native_id) DO UPDATE SET
+  title=excluded.title,
+  description=excluded.description,
+  creators=excluded.creators,
+  duration_sec=excluded.duration_sec,
+  year=excluded.year,
+  thumbnail_url=excluded.thumbnail_url,
+  source_url=excluded.source_url,
+  fetched_at=excluded.fetched_at`,
+			provider, nativeID, title, item.Video.Description, string(creators),
+			item.Video.DurationSec, strings.TrimSpace(item.Video.Year), strings.TrimSpace(item.Video.ThumbnailURL),
+			strings.TrimSpace(item.Video.SourceURL), time.Now().UTC().Format(time.RFC3339),
+		); err != nil {
+			return 0, 0, 0, fmt.Errorf("import video %d: %w", i, err)
+		}
+		videos++
+		res, execErr := tx.Exec(`
+INSERT INTO category_members (category_id, provider, native_id, status, score)
+VALUES (?, ?, ?, 'pending', ?)
+ON CONFLICT(category_id, provider, native_id) DO NOTHING`,
+			categoryID, provider, nativeID, item.Score,
+		)
+		if execErr != nil {
+			err = fmt.Errorf("import member %d: %w", i, execErr)
+			return 0, 0, 0, err
+		}
+		affected, _ := res.RowsAffected()
+		if affected > 0 {
+			imported++
+		} else {
+			skipped++
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, 0, 0, fmt.Errorf("commit import: %w", err)
+	}
+	return videos, imported, skipped, nil
 }
 
 // SetMemberStatus 更新某分类成员的审校状态(approved/rejected/pending),记录审校人。
