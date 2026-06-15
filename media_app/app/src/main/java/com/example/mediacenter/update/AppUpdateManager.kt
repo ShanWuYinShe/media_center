@@ -10,6 +10,7 @@ import com.example.mediacenter.BuildConfig
 import com.example.mediacenter.data.AppUpdateInfo
 import com.example.mediacenter.data.MediaApi
 import com.example.mediacenter.log.AppLog
+import com.example.mediacenter.net.AppHttpClient
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
@@ -21,7 +22,7 @@ import okhttp3.Request
 class AppUpdateManager(
     private val context: Context,
     private val api: MediaApi,
-    private val client: OkHttpClient = OkHttpClient(),
+    private val client: OkHttpClient = AppHttpClient.shared,
 ) {
     suspend fun checkAndDownload(): AppUpdateResult {
         val update = try {

@@ -70,6 +70,7 @@ import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.player.CappedLoadErrorHandlingPolicy
 import com.example.mediacenter.player.TolerantDashManifestParser
 import com.example.mediacenter.log.AppLog
+import com.example.mediacenter.net.AppHttpClient
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.MediaViewModel
 import com.example.mediacenter.ui.MediaViewModelFactory
@@ -96,7 +97,6 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 
@@ -3472,7 +3472,7 @@ private const val ViewTypeFooter = 2
 private const val FooterStableId = Long.MIN_VALUE
 private const val CategorySelectDebounceMs = 280L
 private val ThumbnailFetchSemaphore = Semaphore(4)
-private val ThumbnailHttpClient = OkHttpClient.Builder()
+private val ThumbnailHttpClient = AppHttpClient.newBuilder()
     .connectTimeout(8, TimeUnit.SECONDS)
     .readTimeout(15, TimeUnit.SECONDS)
     .followRedirects(true)

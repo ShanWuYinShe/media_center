@@ -2,6 +2,7 @@ package com.example.mediacenter
 
 import androidx.multidex.MultiDexApplication
 import com.example.mediacenter.log.AppLog
+import com.example.mediacenter.net.AppHttpClient
 
 /**
  * 自定义 Application:尽早初始化文件日志并安装全局未捕获异常处理器,
@@ -13,6 +14,9 @@ class MediaCenterApp : MultiDexApplication() {
         super.onCreate()
         AppLog.init(this)
         AppLog.i("App", "process start")
+        // 尽早安装 OCSP soft-fail 的 TLS 默认工厂:覆盖 Media3 DefaultHttpDataSource(走
+        // HttpsURLConnection)的播放链路,避免时钟不准的设备在播放时握手失败。须在任何网络请求前。
+        AppHttpClient.installHttpsUrlConnectionDefault()
         installCrashHandler()
     }
 

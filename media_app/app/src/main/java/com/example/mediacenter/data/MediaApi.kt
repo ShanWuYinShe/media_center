@@ -2,6 +2,7 @@ package com.example.mediacenter.data
 
 import java.io.IOException
 import com.example.mediacenter.log.AppLog
+import com.example.mediacenter.net.AppHttpClient
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
@@ -21,7 +22,7 @@ class MediaApi(
     private val baseUrl: String,
     // connectTimeout 15s 与 readTimeout 对齐：Android TV 模拟器冷启动 + emulator
     // 网络栈刚就绪时,三次握手偶尔超过 5s,过紧的超时会直接抛 "Failed to connect"。
-    private val client: OkHttpClient = OkHttpClient.Builder()
+    private val client: OkHttpClient = AppHttpClient.newBuilder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .build(),
