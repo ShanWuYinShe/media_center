@@ -32,7 +32,7 @@ go test -C media_server ./...
 - **技术栈**：Go；HTTP 服务监听 `PORT`（容器内默认 8787）。
 - **内容分类**：`media_server/src/contentCategories.json`；线上由 `workwork` 的 admin 生成运行时分类配置注入。
 - **分类数据(catalog,SQLite,system-of-record)**:分类视频列表由 `media_server/catalog.go` 用纯 Go 的 `modernc.org/sqlite`(无需 cgo)落地维护库;**分类浏览和 `/api/search` 都只读该库的 `approved` 数据**(见 `catalog_serve.go` 与 `catalog.go` 的 `SearchApproved`),**服务端绝不做实时上游搜索 / 采集**;没有 `approved` 数据时返回空列表 / 空搜索结果。
-  - **候选数据 `seeds/categories/`**(提交进仓库):各分类的候选列表(外部 / AI 收集汇总),每个分类一个 JSON,顶层固定 `{"items":[...]}`,与 `POST /internal/catalog/import` 一致;不要用顶层数组。详见 `seeds/README.md`。
+  - **候选不提交仓库**:候选(外部 / AI 收集汇总)是中间状态,不再纳入版本管理;最终数据以 catalog.db(system-of-record)为准,可通过 `/internal/catalog/export` 导出。各分类的收集格式与审核标准见 `media_server/CATEGORY_CURATION_GUIDE.md`。
   - **流程:外部收集候选 → 导入 pending → 人工 + AI 审核 → 上线 approved**:候选经 `/internal/catalog/import` 导入为 `pending`(重复导入只新增,绝不覆盖已有审核决定)→ 在 **admin 页面由人工 + AI 模型审核** approve/reject、可选 `pinned`/`rank`(经 `/internal/catalog/*`,也可用 `-catalog-review` 交互命令或任意 SQLite 工具)→ 客户端的分类浏览与搜索只命中该库 `approved` 清单(顺序 `pinned` > `rank` > `score`)。
   - **审核是唯一的质量关口**:聚合视频未经审核普遍标题与内容不符、大量无法播放,因此服务端不提供任何实时 / 未审核数据;相关性、可播放性等筛选一律交给 admin 的人工 + AI 审核,代码侧不做实时搜索/采集。
   - **只存原始数据**:catalog 只存上游原始字段(缩略图为原始地址),签名 `/asset` 代理 URL 每次请求再生成,绝不写进库。
