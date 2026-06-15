@@ -294,6 +294,13 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     fun selectCategory(category: ContentCategory) {
         // 已选中的分类不再重复搜索，避免焦点自动切换时反复触发无用请求
         if (category.id == mutableState.value.selectedCategoryId) return
+        // 防御:播放或详情页期间不应切分类(applyCachedCategory/search 会清空
+        // playing/selected,把用户弹回主页)。上游调用者(chip/防抖)有条件检查,
+        // 但 ViewModel 层再加一道兜底,杜绝任何遗漏路径。
+        if (mutableState.value.isContentScreen) {
+            AppLog.w("Nav", "ignore selectCategory while content screen is visible")
+            return
+        }
         val cached = categoryListCache[category.id]
         if (cached != null && cached.items.isNotEmpty()) {
             // 命中缓存:立即展示,不清空、不 loading 转圈。
@@ -417,9 +424,9 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             ?: selected?.let { sel -> current.items.find { it.id == sel.id } }
         AppLog.i("Playback", "play requested video=${selected?.id ?: "<none>"} option=${stream.id} kind=${stream.kind}")
         if (selected == null) {
-            mutableState.update { state ->
-                state.copy(playing = stream, playingVideo = video ?: state.playingVideo)
-            }
+            // 没有 details 时不直接开播:播放失败后无 fallbackSelected,
+            // 会让用户直接跳到主页。当前 UI 调用图下不应到达此分支。
+            AppLog.w("Playback", "play() called with selected==null, ignoring to avoid unrecoverable state")
             return
         }
         detailsJob?.cancel()
@@ -522,10 +529,11 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         playbackRecoveryAttempts = 0
         mutableState.update {
             val fallbackSelected = it.selected ?: selected
-            if (it.playing == null) {
-                it.copy(selected = fallbackSelected, error = message)
-            } else {
-                it.copy(playing = null, selected = fallbackSelected, error = message)
+            when {
+                // 没有 details 信息可退时,留在播放页显示错误,不跳到主页
+                fallbackSelected == null -> it.copy(error = message)
+                it.playing == null -> it.copy(selected = fallbackSelected, error = message)
+                else -> it.copy(playing = null, selected = fallbackSelected, error = message)
             }
         }
     }
@@ -797,11 +805,20 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             // recoverPlayback 的退避 delay 中被取消)。BACK 已无在途加载需要等待,
             // 这里顺手把 loading 复位,避免返回详情/首页后卡在"正在加载/重试"提示上。
             when {
-                it.playing != null -> it.copy(playing = null, loading = false)
-                it.selected != null -> it.copy(selected = null, loading = false)
+                it.playing != null -> it.copy(playing = null, loading = false, error = null)
+                it.selected != null -> it.copy(selected = null, loading = false, error = null)
                 else -> it
             }
         }
+    }
+
+    /**
+     * 清除播放错误态,让 [MainActivity.renderPlayer] 用同一地址重建播放器重试。
+     * 仅在播放页(无 details 信息可退,fallbackSelected 为 null)的错误 overlay 中使用。
+     */
+    fun dismissPlaybackError() {
+        playbackRecoveryAttempts = 0
+        mutableState.update { it.copy(error = null) }
     }
 
     private fun loadCategoriesAndSearch() {

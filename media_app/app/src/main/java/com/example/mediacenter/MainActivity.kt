@@ -144,6 +144,7 @@ class MainActivity : ComponentActivity() {
     private val playbackLoadErrorHandlingPolicy = CappedLoadErrorHandlingPolicy(MaxPlaybackRetries)
     // 瞬时 5xx 自动恢复期间盖在播放画面上的“正在重试…”提示,避免重试窗口里只剩黑屏/卡帧。
     private var playerRetryOverlay: View? = null
+    private var playerErrorOverlay: View? = null
     private lateinit var appUpdateManager: AppUpdateManager
     private var pendingUpdateApk: File? = null
     // “播放已稳定”计时器:STATE_READY 后延迟触发;只有同一地址连续顺畅播放超过窗口
@@ -191,7 +192,12 @@ class MainActivity : ComponentActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 viewModel.state.collect { state ->
                     currentState = state
-                    render(state)
+                    try {
+                        render(state)
+                    } catch (e: Exception) {
+                        AppLog.e("Render", "render failed, resetting for recovery", e)
+                        renderedState = null
+                    }
                 }
             }
         }
@@ -247,7 +253,8 @@ class MainActivity : ComponentActivity() {
                 clearHomeVideoList()
                 resetHomeDetailsPrefetch()
                 renderPlayer(state)
-                updatePlayerRetryOverlay(state.loading)
+                updatePlayerRetryOverlay(state.loading && state.error == null)
+                updatePlayerErrorOverlay(state.error)
             }
             state.selected != null -> {
                 clearHomeVideoList()
@@ -1464,7 +1471,7 @@ class MainActivity : ComponentActivity() {
         // 恢复流程会先保持旧 stream 并显示 loading,延迟后再刷新 /playback。
         // 这段期间不要因播放器已进入 IDLE 而立刻重建同一个失败 URL。
         if (currentPlayerUrl == stream.url && root.childCount > 0) {
-            if (state.loading || player?.playbackState != Player.STATE_IDLE) return
+            if (state.loading || state.error != null || player?.playbackState != Player.STATE_IDLE) return
         }
 
         val playbackUrl = stream.url
@@ -1492,26 +1499,28 @@ class MainActivity : ComponentActivity() {
         }
 
         releasePlayer()
-        val nextPlayer = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(
-                DefaultMediaSourceFactory(dataSourceFactory)
-                    .setLoadErrorHandlingPolicy(playbackLoadErrorHandlingPolicy),
-            )
-            // 交给 ExoPlayer 管理音频焦点:被系统提示音/其他应用抢占焦点时自动暂停或压低,
-            // 焦点恢复后续播,避免长时间播放被抢焦点后“没声音”;同时在耳机/音频路由断开
-            // (becoming noisy)时暂停,符合 TV/移动端音频惯例。
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                    .build(),
-                /* handleAudioFocus = */ true,
-            )
-            .setHandleAudioBecomingNoisy(true)
-            .setSeekBackIncrementMs(10_000)
-            .setSeekForwardIncrementMs(10_000)
-            .build()
-            .apply {
+        var builtPlayer: ExoPlayer? = null
+        try {
+            builtPlayer = ExoPlayer.Builder(this)
+                .setMediaSourceFactory(
+                    DefaultMediaSourceFactory(dataSourceFactory)
+                        .setLoadErrorHandlingPolicy(playbackLoadErrorHandlingPolicy),
+                )
+                // 交给 ExoPlayer 管理音频焦点:被系统提示音/其他应用抢占焦点时自动暂停或压低,
+                // 焦点恢复后续播,避免长时间播放被抢焦点后"没声音";同时在耳机/音频路由断开
+                // (becoming noisy)时暂停,符合 TV/移动端音频惯例。
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(C.USAGE_MEDIA)
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .build(),
+                    /* handleAudioFocus = */ true,
+                )
+                .setHandleAudioBecomingNoisy(true)
+                .setSeekBackIncrementMs(10_000)
+                .setSeekForwardIncrementMs(10_000)
+                .build()
+            builtPlayer!!.apply {
                 val mediaItem = MediaItem.Builder()
                     .setUri(playbackUrl)
                     .setMimeType(playbackMimeType(stream.mimeType))
@@ -1568,8 +1577,15 @@ class MainActivity : ComponentActivity() {
                 })
                 prepare()
             }
-        player = nextPlayer
-        currentPlayerUrl = playbackUrl
+            player = builtPlayer
+            currentPlayerUrl = playbackUrl
+        } catch (e: Exception) {
+            AppLog.e("Player", "Failed to create/prepare ExoPlayer for stream ${stream.id}", e)
+            builtPlayer?.release()
+            viewModel.playbackFailed("播放器初始化失败，请重试", recoverable = false)
+            return
+        }
+        val nextPlayer = player!!
 
         val overlay = playerOverlay(stream, nextPlayer, state)
         val hideOverlay = Runnable {
@@ -2120,6 +2136,7 @@ class MainActivity : ComponentActivity() {
     private fun setContent(view: View) {
         root.removeAllViews()
         playerRetryOverlay = null
+        playerErrorOverlay = null
         root.addView(view, frameMatch())
     }
 
@@ -2143,6 +2160,56 @@ class MainActivity : ComponentActivity() {
             playerRetryOverlay?.let { root.removeView(it) }
             playerRetryOverlay = null
         }
+    }
+
+    // 播放失败且没有 details 信息可退(fallbackSelected 为 null)时,在播放画面上盖一层
+    // 错误提示 + 重试按钮;避免把用户直接踢到主页。用户按 BACK 退出或点"重试"重建播放器。
+    private fun updatePlayerErrorOverlay(error: String?) {
+        if (error == null) {
+            playerErrorOverlay?.let { root.removeView(it) }
+            playerErrorOverlay = null
+            return
+        }
+        if (playerErrorOverlay != null) return
+        val card = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(44), dp(40), dp(44), dp(36))
+            background = roundedGradient(Colors.SurfaceFocused, Colors.SurfaceElevated, 30, 1, Colors.GlassBorder)
+            minimumWidth = dp(360)
+            elevationCompat(dp(18).toFloat())
+        }
+        val iconWrap = FrameLayout(this).apply {
+            background = rounded(Colors.GlassFill, 999, 1, Colors.GlassBorder)
+        }
+        iconWrap.addView(WarningGlyphView(this), FrameLayout.LayoutParams(dp(30), dp(30), Gravity.CENTER))
+        card.addView(iconWrap, LinearLayout.LayoutParams(dp(64), dp(64)))
+        card.addView(
+            label("播放失败", 20f, Colors.TextPrimary, bold = true, maxLines = 1).apply {
+                gravity = Gravity.CENTER
+            },
+            LinearLayout.LayoutParams(wrap(), wrap()).withTopMargin(dp(16)),
+        )
+        card.addView(
+            label(error, 15f, Colors.TextSecondary, maxLines = 3).apply {
+                gravity = Gravity.CENTER
+                maxWidth = dp(320)
+                setLineSpacing(dp(3).toFloat(), 1f)
+            },
+            LinearLayout.LayoutParams(wrap(), wrap()).withTopMargin(dp(8)),
+        )
+        val retry = primaryPill("重试", heightDp = 50, horizontalPaddingDp = 40) {
+            viewModel.dismissPlaybackError()
+        }
+        card.addView(retry, LinearLayout.LayoutParams(wrap(), dp(50)).withTopMargin(dp(24)))
+        val scrim = FrameLayout(this).apply {
+            setBackgroundColor(Color.argb(200, 0, 0, 0))
+            isClickable = true
+            addView(card, FrameLayout.LayoutParams(wrap(), wrap(), Gravity.CENTER))
+        }
+        playerErrorOverlay = scrim
+        root.addView(scrim, frameMatch())
+        retry.post { retry.requestFocus() }
     }
 
     private fun releasePlayer() {
