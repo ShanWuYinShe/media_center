@@ -19,8 +19,7 @@ type ReviewOptions struct {
 	Reviewer   string // 审校留痕;空则按模式填默认
 }
 
-// defaultReviewTopN 是 auto 模式每分类默认放行条数(与 SnapshotTargetSize 默认 60 同量级,
-// 留余量给人工调 rank/pinned)。
+// defaultReviewTopN 是 auto 模式每分类默认放行条数,留余量给人工调 rank/pinned。
 const defaultReviewTopN = 20
 
 // runCatalogReview 是 -catalog-review 子命令入口:遍历(指定)分类,把 pending 候选按

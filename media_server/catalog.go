@@ -15,8 +15,8 @@ import (
 )
 
 // Catalog 是“分类维护数据库”(system of record):外部工具/人工在这里维护
-// 每条候选视频与它在各分类下的审校决定,服务端构建快照时只读取 approved 行物化成
-// 运行时快照(详见 CATEGORY_CURATION_GUIDE.md)。
+// 每条候选视频与它在各分类下的审校决定,分类浏览时直接分页读取 approved 行
+// (详见 CATEGORY_CURATION_GUIDE.md)。
 //
 // 该层用纯 Go 的 modernc.org/sqlite(无需 cgo),开 WAL 支持并发读 + 单写。
 // schema 用 CREATE TABLE IF NOT EXISTS 兜底,外部工具也可直接按文档结构写库。
@@ -266,8 +266,7 @@ func validMemberStatus(status string) bool {
 	}
 }
 
-// ApprovedForCategory 返回某分类已通过的成员,按 置顶 > 人工序 > 分数 排序,
-// 用于物化成运行时快照。limit<=0 表示不限。
+// ApprovedForCategory 返回某分类已通过的成员,按 置顶 > 人工序 > 分数 排序。limit<=0 表示不限。
 func (c *Catalog) ApprovedForCategory(categoryID string, limit int) ([]CatalogVideo, error) {
 	categoryID = strings.TrimSpace(categoryID)
 	if categoryID == "" {
@@ -307,6 +306,66 @@ ORDER BY m.pinned DESC, (m.rank IS NULL), m.rank ASC, m.score DESC, v.native_id 
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+// ApprovedPage 返回某分类 approved 列表的一页与总条数。page/pageSize 非法时自动规整到最小值 1。
+func (c *Catalog) ApprovedPage(categoryID string, page, pageSize int) ([]CatalogVideo, int, error) {
+	categoryID = strings.TrimSpace(categoryID)
+	if categoryID == "" {
+		return nil, 0, nil
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 1
+	}
+
+	var total int
+	if err := c.db.QueryRow(
+		`SELECT COUNT(*) FROM category_members WHERE category_id = ? AND status = 'approved'`,
+		categoryID,
+	).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count approved: %w", err)
+	}
+	if total == 0 {
+		return []CatalogVideo{}, 0, nil
+	}
+
+	offset := (page - 1) * pageSize
+	rows, err := c.db.Query(`
+SELECT v.provider, v.native_id, v.title, v.description, v.creators, v.duration_sec, v.year, v.thumbnail_url, v.source_url
+FROM category_members m
+JOIN videos v ON v.provider = m.provider AND v.native_id = m.native_id
+WHERE m.category_id = ? AND m.status = 'approved'
+ORDER BY m.pinned DESC, (m.rank IS NULL), m.rank ASC, m.score DESC, v.native_id ASC
+LIMIT ? OFFSET ?`, categoryID, pageSize, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query approved page: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]CatalogVideo, 0, pageSize)
+	for rows.Next() {
+		var v CatalogVideo
+		var creators sql.NullString
+		var description, year, thumb, source sql.NullString
+		var duration sql.NullInt64
+		if err := rows.Scan(&v.Provider, &v.NativeID, &v.Title, &description, &creators, &duration, &year, &thumb, &source); err != nil {
+			return nil, 0, fmt.Errorf("scan approved page: %w", err)
+		}
+		v.Description = description.String
+		v.Year = year.String
+		v.ThumbnailURL = thumb.String
+		v.SourceURL = source.String
+		v.DurationSec = duration.Int64
+		v.Creators = decodeCreators(creators.String)
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
 }
 
 // PendingReviewItem 是一条待审候选:CatalogVideo 的元数据 + 该视频在某分类下的审校元信息。
@@ -522,22 +581,20 @@ func (s *mediaServer) seedCatalogCategories(ctx context.Context, categories []Co
 	if s.catalog == nil {
 		return fmt.Errorf("seed catalog: catalog not opened")
 	}
-	// 审校池要比运行时目标更大,给人工更多可选项;预算放宽,优先抓全抓准。
-	seedTarget := s.config.SnapshotTargetSize * 2
-	if seedTarget < 120 {
-		seedTarget = 120
-	}
+	// 审校池固定抓取一批较大的候选,给人工更多可选项;预算放宽,优先抓全抓准。
+	const seedTarget = 120
 	for _, category := range categories {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		buildCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-		items, _, err := s.collectCategoryItems(buildCtx, category, seedTarget, snapshotFetchBudget(seedTarget))
+		items, _, err := s.collectCategoryItems(buildCtx, category, seedTarget, catalogSeedFetchBudget(seedTarget))
 		cancel()
 		if err != nil {
 			log.Printf("catalog seed: collect failed category=%s: %v", category.ID, err)
 			continue
 		}
+
 		added := 0
 		for _, item := range items {
 			provider, nativeID, ok := s.resolveVideoRef(item.ID)
@@ -578,6 +635,17 @@ func (s *mediaServer) seedCatalogCategories(ctx context.Context, categories []Co
 		}
 	}
 	return nil
+}
+
+func catalogSeedFetchBudget(targetSize int) int {
+	budget := targetSize/4 + 8
+	if budget < 12 {
+		budget = 12
+	}
+	if budget > 60 {
+		budget = 60
+	}
+	return budget
 }
 
 // catalogSourceURL 给人工审校生成一个可点击的原始观看地址(目前仅 bilibili)。

@@ -24,16 +24,11 @@ type AppConfig struct {
 	YouTubeAPIKey    string
 	AssetCacheDir    string
 	AssetCacheMax    int64
-	// 分类视频快照:预聚合 + 持久化 + 定期刷新 + 本地审校,详见 snapshot.go / curation.go。
-	SnapshotEnabled    bool
-	SnapshotDir        string
-	SnapshotRefresh    time.Duration
-	SnapshotTargetSize int
-	CurationPath       string
-	// 分类维护数据库(SQLite, system of record)。approved 行物化成运行时快照;
-	// 路径为空或打开失败时优雅降级为实时聚合,详见 catalog.go。
+	CurationPath     string
+	// 分类维护数据库(SQLite, system of record)。分类浏览直接分页查询 approved 行;
+	// 路径为空或打开失败时优雅降级为空分类列表,详见 catalog.go。
 	CatalogDBPath string
-	// 内部管理接口令牌:非空时启用 /internal/* 管理接口(catalog 审校/seed/快照重建),
+	// 内部管理接口令牌:非空时启用 /internal/* 管理接口(catalog 审校/seed),
 	// 请求需带匹配的 X-Internal-Token。为空则整组 /internal/* 接口关闭(404)。
 	// 仅供内网可信调用方(workwork 的 admin)使用,绝不经公网暴露。详见 internal_api.go。
 	InternalToken         string
@@ -60,13 +55,8 @@ func loadAppConfig() (AppConfig, error) {
 		YouTubeAPIKey:    strings.TrimSpace(os.Getenv("YOUTUBE_API_KEY")),
 		AssetCacheDir:    getenv("MEDIA_ASSET_CACHE_DIR", "/cache"),
 		AssetCacheMax:    positiveInt64(os.Getenv("MEDIA_ASSET_CACHE_MAX_BYTES"), 50*1024*1024*1024),
-
-		SnapshotEnabled:    boolFromEnv(os.Getenv("MEDIA_SERVER_SNAPSHOT_ENABLED"), true),
-		SnapshotDir:        getenv("MEDIA_SERVER_SNAPSHOT_DIR", "data/snapshots"),
-		SnapshotRefresh:    durationFromHours(os.Getenv("MEDIA_SERVER_SNAPSHOT_REFRESH_HOURS"), 6*time.Hour),
-		SnapshotTargetSize: positiveInt(os.Getenv("MEDIA_SERVER_SNAPSHOT_TARGET_SIZE"), 60),
-		CatalogDBPath:      getenv("MEDIA_SERVER_CATALOG_DB", "data/catalog.db"),
-		InternalToken:      strings.TrimSpace(os.Getenv("MEDIA_SERVER_INTERNAL_TOKEN")),
+		CatalogDBPath:    getenv("MEDIA_SERVER_CATALOG_DB", "data/catalog.db"),
+		InternalToken:    strings.TrimSpace(os.Getenv("MEDIA_SERVER_INTERNAL_TOKEN")),
 		AppUpdateManifestPath: getenv(
 			"MEDIA_SERVER_APP_UPDATE_MANIFEST",
 			"/config/app-update.json",

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 )
@@ -128,9 +128,89 @@ func TestCatalogRejectsInvalidStatus(t *testing.T) {
 	}
 }
 
-func TestBuildCategorySnapshotPrefersCatalog(t *testing.T) {
+func TestCatalogApprovedPage(t *testing.T) {
 	c := openTestCatalog(t)
-	mustUpsert(t, c, "bilibili", "BV1cat", "catalog movie", 3600)
+	mustUpsert(t, c, "bilibili", "BV1aaa", "A", 3600)
+	mustUpsert(t, c, "bilibili", "BV1bbb", "B", 3600)
+	mustUpsert(t, c, "bilibili", "BV1ccc", "C", 3600)
+	mustUpsert(t, c, "bilibili", "BV1ddd", "D", 3600)
+
+	add := func(nativeID string, score int) {
+		t.Helper()
+		if _, err := c.AddPendingMember("movies", "bilibili", nativeID, score); err != nil {
+			t.Fatalf("add %s: %v", nativeID, err)
+		}
+	}
+	add("BV1aaa", 20)
+	add("BV1bbb", 80)
+	add("BV1ccc", 50)
+	add("BV1ddd", 10)
+	if _, err := c.SetMemberStatus("movies", "bilibili", "BV1aaa", "approved", "t"); err != nil {
+		t.Fatalf("approve aaa: %v", err)
+	}
+	if _, err := c.SetMemberStatus("movies", "bilibili", "BV1bbb", "approved", "t"); err != nil {
+		t.Fatalf("approve bbb: %v", err)
+	}
+	if _, err := c.SetMemberStatus("movies", "bilibili", "BV1ccc", "approved", "t"); err != nil {
+		t.Fatalf("approve ccc: %v", err)
+	}
+	if _, err := c.SetMemberStatus("movies", "bilibili", "BV1ddd", "approved", "t"); err != nil {
+		t.Fatalf("approve ddd: %v", err)
+	}
+	pinned := true
+	if _, err := c.ReviewMember("movies", "bilibili", "BV1ccc", nil, &pinned, &sql.NullInt64{Int64: 0, Valid: true}, "t"); err != nil {
+		t.Fatalf("pin/rank ccc: %v", err)
+	}
+
+	page1, total, err := c.ApprovedPage("movies", 1, 2)
+	if err != nil {
+		t.Fatalf("approved page1: %v", err)
+	}
+	if total != 4 {
+		t.Fatalf("total = %d, want 4", total)
+	}
+	if len(page1) != 2 {
+		t.Fatalf("page1 len = %d, want 2", len(page1))
+	}
+	if page1[0].NativeID != "BV1ccc" || page1[1].NativeID != "BV1bbb" {
+		t.Fatalf("page1 order = %v", idsOf(page1))
+	}
+
+	page2, total, err := c.ApprovedPage("movies", 2, 2)
+	if err != nil {
+		t.Fatalf("approved page2: %v", err)
+	}
+	if total != 4 {
+		t.Fatalf("page2 total = %d, want 4", total)
+	}
+	if len(page2) != 2 {
+		t.Fatalf("page2 len = %d, want 2", len(page2))
+	}
+	if page2[0].NativeID != "BV1aaa" || page2[1].NativeID != "BV1ddd" {
+		t.Fatalf("page2 order = %v", idsOf(page2))
+	}
+
+	page3, total, err := c.ApprovedPage("movies", 3, 2)
+	if err != nil {
+		t.Fatalf("approved page3: %v", err)
+	}
+	if total != 4 || len(page3) != 0 {
+		t.Fatalf("page3 = total:%d len:%d, want total 4 len 0", total, len(page3))
+	}
+}
+
+func TestCategoryVideosPageReadsCatalogDirectly(t *testing.T) {
+	c := openTestCatalog(t)
+	if err := c.UpsertVideo(CatalogVideo{
+		Provider:     "bilibili",
+		NativeID:     "BV1cat",
+		Title:        "catalog movie",
+		Description:  "desc",
+		DurationSec:  3600,
+		ThumbnailURL: "https://i0.hdslb.com/test.jpg",
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
 	if _, err := c.AddPendingMember("movies", "bilibili", "BV1cat", 50); err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -138,69 +218,33 @@ func TestBuildCategorySnapshotPrefersCatalog(t *testing.T) {
 		t.Fatalf("approve: %v", err)
 	}
 
-	// A live provider that would return different (sentinel) items; the catalog
-	// path must win, so none of these should appear.
-	fp := &queryAwareProvider{id: "fake", itemsPerPage: 6}
 	s := &mediaServer{
-		config:         AppConfig{MaxCategoryPages: 3, SnapshotTargetSize: 10},
-		providers:      map[string]VideoProvider{"fake": fp},
-		enabledSources: []string{"fake"},
-		idCodec:        NewIDCodec("test-secret"),
-		curation:       CurationConfig{categories: map[string]CategoryCuration{}},
-		catalog:        c,
+		categoriesByID: map[string]ContentCategory{
+			"movies": {ID: "movies", Title: "Movies", Description: "d"},
+		},
+		idCodec:  NewIDCodec("test-secret"),
+		curation: CurationConfig{categories: map[string]CategoryCuration{}},
+		catalog:  c,
 	}
-	cat := ContentCategory{
-		ID: "movies", Title: "Movies", Query: "dota a",
-		Queries: []string{"dota a"}, Keywords: []string{"dota"},
-	}
-	snap, err := s.buildCategorySnapshot(context.Background(), cat)
+	resp, err := s.categoryVideosPage(nil, s.categoriesByID["movies"], 1, 10)
 	if err != nil {
-		t.Fatalf("build: %v", err)
+		t.Fatalf("categoryVideosPage: %v", err)
 	}
-	if len(snap.Items) != 1 {
-		t.Fatalf("expected 1 catalog item, got %d (%v)", len(snap.Items), idSummaries(snap.Items))
+	if resp.Total != 1 || len(resp.Items) != 1 {
+		t.Fatalf("unexpected response: total=%d items=%d", resp.Total, len(resp.Items))
 	}
-	if snap.Items[0].Title != "catalog movie" {
-		t.Fatalf("expected catalog item, got %q", snap.Items[0].Title)
+	if resp.Items[0].Title != "catalog movie" {
+		t.Fatalf("title = %q", resp.Items[0].Title)
 	}
-	// The encoded ID must decode back to the stable native ref.
-	ref, err := s.idCodec.DecodeVideoRef(snap.Items[0].ID)
+	ref, err := s.idCodec.DecodeVideoRef(resp.Items[0].ID)
 	if err != nil {
 		t.Fatalf("decode id: %v", err)
 	}
 	if ref.Provider != "bilibili" || ref.ID != "BV1cat" {
-		t.Fatalf("decoded ref = %s/%s, want bilibili/BV1cat", ref.Provider, ref.ID)
+		t.Fatalf("decoded ref = %s/%s", ref.Provider, ref.ID)
 	}
-	if snap.Items[0].ThumbnailHeaders["Referer"] == "" {
-		t.Fatalf("expected bilibili thumbnail Referer header")
-	}
-}
-
-func TestBuildCategorySnapshotFallsBackWhenCatalogEmpty(t *testing.T) {
-	c := openTestCatalog(t) // no approved rows for this category
-	fp := &queryAwareProvider{id: "fake", itemsPerPage: 6}
-	s := &mediaServer{
-		config:         AppConfig{MaxCategoryPages: 3, SnapshotTargetSize: 10},
-		providers:      map[string]VideoProvider{"fake": fp},
-		enabledSources: []string{"fake"},
-		idCodec:        NewIDCodec("test-secret"),
-		curation:       CurationConfig{categories: map[string]CategoryCuration{}},
-		catalog:        c,
-	}
-	cat := ContentCategory{
-		ID: "general", Title: "General", Query: "dota a",
-		Queries: []string{"dota a", "dota b"}, Keywords: []string{"dota"},
-	}
-	snap, err := s.buildCategorySnapshot(context.Background(), cat)
-	if err != nil {
-		t.Fatalf("build: %v", err)
-	}
-	if len(snap.Items) == 0 {
-		t.Fatalf("expected live-fallback items when catalog empty")
-	}
-	// Live items come from the fake provider (titles contain the query term).
-	if snap.Items[0].Title == "catalog movie" {
-		t.Fatalf("unexpected catalog item in fallback path")
+	if resp.Items[0].ThumbnailHeaders["Referer"] == "" {
+		t.Fatalf("expected bilibili thumbnail referer header")
 	}
 }
 
@@ -208,14 +252,6 @@ func idsOf(vs []CatalogVideo) []string {
 	out := make([]string, len(vs))
 	for i, v := range vs {
 		out[i] = v.NativeID
-	}
-	return out
-}
-
-func idSummaries(vs []VideoSummary) []string {
-	out := make([]string, len(vs))
-	for i, v := range vs {
-		out[i] = v.Title
 	}
 	return out
 }

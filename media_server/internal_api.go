@@ -15,7 +15,7 @@ import (
 )
 
 // 内部管理接口(/internal/*):仅供内网可信调用方(workwork 的 admin)管理分类维护数据库
-// (catalog 审校 approve/reject/置顶/排序)、触发候选采集(seed)和快照重建。
+// (catalog 审校 approve/reject/置顶/排序)、触发候选采集(seed)。
 //
 // 安全模型:整组接口由 MEDIA_SERVER_INTERNAL_TOKEN 门禁——令牌为空时整组路由对外表现为
 // 404(不暴露存在性);令牌非空时请求必须带匹配的 X-Internal-Token。media_server 只在
@@ -27,11 +27,10 @@ import (
 type opKind string
 
 const (
-	opSeed    opKind = "seed"
-	opRebuild opKind = "rebuild"
+	opSeed opKind = "seed"
 )
 
-// opState 是一次后台维护操作(seed / 快照重建)的状态快照,供管理界面轮询展示。
+// opState 是一次后台维护操作(seed)的状态快照,供管理界面轮询展示。
 type opState struct {
 	Running    bool   `json:"running"`
 	Kind       string `json:"kind,omitempty"`
@@ -42,8 +41,7 @@ type opState struct {
 	Error      string `json:"error,omitempty"`
 }
 
-// opTracker 串行化后台维护操作:同一时间只允许一个 seed/rebuild 在跑,避免对上游突发打流
-// 或并发写快照。状态用单把锁保护(操作频率很低)。
+// opTracker 串行化后台维护操作。状态用单把锁保护(操作频率很低)。
 type opTracker struct {
 	mu    sync.Mutex
 	state opState
@@ -119,8 +117,6 @@ func (s *mediaServer) handleInternal(w http.ResponseWriter, r *http.Request) {
 		s.handleInternalImport(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/internal/catalog/seed":
 		s.handleInternalSeed(w, r)
-	case r.Method == http.MethodPost && r.URL.Path == "/internal/snapshots/rebuild":
-		s.handleInternalRebuild(w, r)
 	default:
 		s.writeError(w, &apiError{Status: http.StatusNotFound, Code: "NOT_FOUND", Message: "请求的资源不存在。"})
 	}
@@ -212,22 +208,16 @@ func (s *mediaServer) handleInternalImport(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-type internalSnapshotInfo struct {
-	Items     int    `json:"items"`
-	UpdatedAt string `json:"updatedAt"`
-}
-
 type internalCategoryOverview struct {
-	ID       string                `json:"id"`
-	Title    string                `json:"title"`
-	Pending  int                   `json:"pending"`
-	Approved int                   `json:"approved"`
-	Rejected int                   `json:"rejected"`
-	Snapshot *internalSnapshotInfo `json:"snapshot,omitempty"`
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Pending  int    `json:"pending"`
+	Approved int    `json:"approved"`
+	Rejected int    `json:"rejected"`
 }
 
-// handleInternalOverview 返回每个分类的审校计数(pending/approved/rejected)与当前快照概况,
-// 以及后台维护操作状态。catalog 未启用时计数为 0,仍返回分类列表与快照信息。
+// handleInternalOverview 返回每个分类的审校计数(pending/approved/rejected)与后台维护操作状态。
+// catalog 未启用时计数为 0,仍返回分类列表。
 func (s *mediaServer) handleInternalOverview(w http.ResponseWriter, _ *http.Request) {
 	var counts map[string]CategoryStatusCounts
 	if s.catalog != nil {
@@ -244,22 +234,12 @@ func (s *mediaServer) handleInternalOverview(w http.ResponseWriter, _ *http.Requ
 		if c, ok := counts[category.ID]; ok {
 			ov.Pending, ov.Approved, ov.Rejected = c.Pending, c.Approved, c.Rejected
 		}
-		if s.snapshots != nil {
-			if snap, ok := s.snapshots.Get(category.ID); ok {
-				ov.Snapshot = &internalSnapshotInfo{
-					Items:     len(snap.Items),
-					UpdatedAt: snap.UpdatedAt.UTC().Format(time.RFC3339),
-				}
-			}
-		}
 		cats = append(cats, ov)
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
-		"catalogEnabled":     s.catalog != nil,
-		"snapshotEnabled":    s.config.SnapshotEnabled,
-		"snapshotTargetSize": s.config.SnapshotTargetSize,
-		"op":                 s.ops.snapshot(),
-		"categories":         cats,
+		"catalogEnabled": s.catalog != nil,
+		"op":             s.ops.snapshot(),
+		"categories":     cats,
 	})
 }
 
@@ -428,41 +408,6 @@ func (s *mediaServer) handleInternalSeed(w http.ResponseWriter, r *http.Request)
 		if err != nil {
 			log.Printf("internal seed: %v", err)
 		}
-	}(categories)
-	s.writeJSON(w, http.StatusAccepted, map[string]any{"started": true, "op": s.ops.snapshot()})
-}
-
-// handleInternalRebuild 异步重建(指定/全部)分类的运行时快照(catalog-first 物化)。
-func (s *mediaServer) handleInternalRebuild(w http.ResponseWriter, r *http.Request) {
-	categories, apiErr := s.internalCategoriesFromBody(r)
-	if apiErr != nil {
-		s.writeError(w, apiErr)
-		return
-	}
-	if !s.ops.tryStart(opRebuild, opCategoryLabel(categories)) {
-		s.writeError(w, &apiError{Status: http.StatusConflict, Code: "OP_RUNNING", Message: "已有维护操作在进行中,请稍后再试。"})
-		return
-	}
-	go func(cats []ContentCategory) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		var firstErr error
-		built := 0
-		for _, category := range cats {
-			if ctx.Err() != nil {
-				firstErr = ctx.Err()
-				break
-			}
-			if _, err := s.refreshSnapshotForCategory(ctx, category); err != nil {
-				log.Printf("internal rebuild: category=%s: %v", category.ID, err)
-				if firstErr == nil {
-					firstErr = err
-				}
-				continue
-			}
-			built++
-		}
-		s.ops.finish(fmt.Sprintf("rebuilt %d/%d categories", built, len(cats)), firstErr)
 	}(categories)
 	s.writeJSON(w, http.StatusAccepted, map[string]any{"started": true, "op": s.ops.snapshot()})
 }

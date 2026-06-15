@@ -149,7 +149,7 @@ func TestOpTracker(t *testing.T) {
 	if !tr.tryStart(opSeed, "movies") {
 		t.Fatal("first start should succeed")
 	}
-	if tr.tryStart(opRebuild, "all") {
+	if tr.tryStart(opSeed, "all") {
 		t.Fatal("second start should fail while running")
 	}
 	st := tr.snapshot()
@@ -161,7 +161,7 @@ func TestOpTracker(t *testing.T) {
 	if st.Running || st.Message != "done" || st.Error != "" {
 		t.Fatalf("unexpected finished state: %+v", st)
 	}
-	if !tr.tryStart(opRebuild, "all") {
+	if !tr.tryStart(opSeed, "all") {
 		t.Fatal("start after finish should succeed")
 	}
 }
@@ -170,16 +170,11 @@ func newInternalTestServer(t *testing.T, token string) (*mediaServer, *Catalog) 
 	t.Helper()
 	c := openTestCatalog(t)
 	cats := []ContentCategory{{ID: "movies", Title: "Movies"}, {ID: "tv", Title: "TV"}}
-	store, err := NewSnapshotStore("")
-	if err != nil {
-		t.Fatalf("snapshot store: %v", err)
-	}
 	s := &mediaServer{
-		config:         AppConfig{InternalToken: token, SnapshotTargetSize: 60, SnapshotEnabled: true},
+		config:         AppConfig{InternalToken: token},
 		categories:     cats,
 		categoriesByID: indexCategories(cats),
 		idCodec:        NewIDCodec("test-secret"),
-		snapshots:      store,
 		catalog:        c,
 		ops:            &opTracker{},
 	}

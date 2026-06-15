@@ -23,14 +23,12 @@ type mediaServer struct {
 	assetClient    *http.Client
 	assetCache     *AssetCache
 	deliveryModes  map[string]string
-	snapshots      *SnapshotStore
 	curation       CurationConfig
 	catalog        *Catalog
 	ops            *opTracker
 }
 
 func main() {
-	buildSnapshots := flag.Bool("build-snapshots", false, "构建所有分类快照后退出(便于本地先生成、人工审校再上线)")
 	catalogSeed := flag.Bool("catalog-seed", false, "把各分类实时聚合结果作为 pending 候选写入分类数据库后退出(供外部工具审校)")
 	catalogReview := flag.Bool("catalog-review", false, "审校分类维护数据库的 pending 候选(approve/reject)后退出")
 	catalogReviewCategory := flag.String("catalog-review-category", "", "限定只审校某个分类 ID(默认全部)")
@@ -52,10 +50,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("load providers: %v", err)
 	}
-	snapshots, err := NewSnapshotStore(config.SnapshotDir)
-	if err != nil {
-		log.Fatalf("init snapshot store: %v", err)
-	}
 	server := &mediaServer{
 		config:         config,
 		categories:     content.Categories,
@@ -67,16 +61,15 @@ func main() {
 		assetClient:    newAssetHTTPClient(),
 		assetCache:     NewAssetCache(config.AssetCacheDir, config.AssetCacheMax),
 		deliveryModes:  sourceDeliveryModes(content.Sources, enabledSources),
-		snapshots:      snapshots,
 		curation:       loadCuration(config.CurationPath),
 		ops:            &opTracker{},
 	}
 
-	// 分类维护数据库(SQLite system-of-record):approved 行优先物化为运行时快照。
-	// 打开失败时降级为 nil,服务退回实时聚合 + curation.json,不影响线上可用性。
+	// 分类维护数据库(SQLite system-of-record):分类浏览直接分页读取 approved 行。
+	// 打开失败时降级为 nil,服务返回空分类结果,不影响搜索/详情等实时路径。
 	if config.CatalogDBPath != "" {
 		if catalog, err := OpenCatalog(config.CatalogDBPath); err != nil {
-			log.Printf("warning: open catalog %q failed, falling back to live aggregation: %v", config.CatalogDBPath, err)
+			log.Printf("warning: open catalog %q failed, category browsing will be empty: %v", config.CatalogDBPath, err)
 		} else {
 			server.catalog = catalog
 			defer catalog.Close()
@@ -113,19 +106,6 @@ func main() {
 			log.Fatalf("catalog review: %v", err)
 		}
 		return
-	}
-
-	// 离线一次性构建:本地把各分类先搜好落盘,便于人工审校后再部署。
-	if *buildSnapshots {
-		log.Printf("building category snapshots (target=%d, dir=%s)…", config.SnapshotTargetSize, config.SnapshotDir)
-		server.refreshAllSnapshots(context.Background(), false)
-		log.Printf("snapshot build complete:\n%s", server.snapshotSummary())
-		return
-	}
-
-	// 后台定期刷新分类快照(服务端定期更新);快照命中时请求秒回且稳定。
-	if config.SnapshotEnabled {
-		go server.runSnapshotRefresher(context.Background())
 	}
 
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
@@ -227,34 +207,32 @@ func (s *mediaServer) handleCategoryVideos(w http.ResponseWriter, r *http.Reques
 	s.writeJSON(w, http.StatusOK, resp)
 }
 
-// categoryVideosPage 从预生成快照分页返回(秒回、稳定);快照缺失/为空时也从
-// catalog 数据库直接构建,绝不做实时上游搜索——分类浏览只展示已审核的种子数据。
+// categoryVideosPage 直接分页读取 catalog 数据库里的 approved 列表;
+// 绝不做实时上游搜索——分类浏览只展示已审核的种子数据。
 func (s *mediaServer) categoryVideosPage(
 	ctx context.Context,
 	category ContentCategory,
 	page int,
 	pageSize int,
 ) (SearchResponse, error) {
-	if s.snapshots != nil {
-		if snap, ok := s.snapshots.Get(category.ID); ok && len(snap.Items) > 0 {
-			return paginateSnapshot(category, snap, page, pageSize), nil
-		}
-	}
-	// catalog 有 approved 数据时即时物化(快照未就绪的窗口期)。
 	if s.catalog != nil {
-		target := s.config.SnapshotTargetSize
-		if target <= 0 {
-			target = 600
-		}
-		items, err := s.buildCategoryItemsFromCatalog(category, target)
-		if err == nil && len(items) > 0 {
-			snap := CategorySnapshot{CategoryID: category.ID, Items: items}
-			return paginateSnapshot(category, snap, page, pageSize), nil
+		items, total, err := s.catalog.ApprovedPage(category.ID, page, pageSize)
+		if err == nil && total > 0 {
+			summaries := make([]VideoSummary, 0, len(items))
+			for _, cv := range items {
+				summaries = append(summaries, s.summaryFromCatalogVideo(cv))
+			}
+			summaries = s.applyCurationBlocks(category.ID, summaries)
+			return SearchResponse{
+				Category: &PublicCategory{ID: category.ID, Title: category.Title, Description: category.Description},
+				Page:     page,
+				PageSize: pageSize,
+				Total:    total,
+				Items:    summaries,
+			}, nil
 		}
 	}
-	// 最终兜底：返回空列表，不做实时上游搜索。
 	return SearchResponse{
-		Query:    "",
 		Category: &PublicCategory{ID: category.ID, Title: category.Title, Description: category.Description},
 		Page:     page,
 		PageSize: pageSize,
@@ -381,7 +359,7 @@ func (s *mediaServer) collectCategoryPage(
 }
 
 // collectCategoryItems 聚合某分类的完整候选列表(已按相关性打分、去重、排序),返回完整
-// 列表与 total。实时分页(collectCategoryPage)与快照构建(buildCategorySnapshot)都复用它,
+// 列表与 total。实时分页(collectCategoryPage)与 catalog seed 都复用它,
 // 区别只在 targetCount 与 fetchBudget。
 func (s *mediaServer) collectCategoryItems(
 	ctx context.Context,
