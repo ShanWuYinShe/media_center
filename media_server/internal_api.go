@@ -1,16 +1,13 @@
 package main
 
 import (
-	"context"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -22,65 +19,6 @@ import (
 // internal_docker 内网监听,nginx 不反代 /internal/*,因此该接口不经公网暴露。
 // 它使 media_server 仍是 catalog.db 的唯一读写者(单写者),admin 通过本接口管理,
 // 避免跨容器共享 SQLite 写带来的文件权限/锁竞争问题。
-
-// opKind 是后台维护操作类型。
-type opKind string
-
-const (
-	opSeed opKind = "seed"
-)
-
-// opState 是一次后台维护操作(seed)的状态快照,供管理界面轮询展示。
-type opState struct {
-	Running    bool   `json:"running"`
-	Kind       string `json:"kind,omitempty"`
-	Category   string `json:"category,omitempty"`
-	StartedAt  string `json:"startedAt,omitempty"`
-	FinishedAt string `json:"finishedAt,omitempty"`
-	Message    string `json:"message,omitempty"`
-	Error      string `json:"error,omitempty"`
-}
-
-// opTracker 串行化后台维护操作。状态用单把锁保护(操作频率很低)。
-type opTracker struct {
-	mu    sync.Mutex
-	state opState
-}
-
-// tryStart 原子地把状态置为“运行中”;若已有操作在跑返回 false。
-func (t *opTracker) tryStart(kind opKind, category string) bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.state.Running {
-		return false
-	}
-	t.state = opState{
-		Running:   true,
-		Kind:      string(kind),
-		Category:  category,
-		StartedAt: time.Now().UTC().Format(time.RFC3339),
-	}
-	return true
-}
-
-func (t *opTracker) finish(message string, err error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.state.Running = false
-	t.state.FinishedAt = time.Now().UTC().Format(time.RFC3339)
-	t.state.Message = message
-	if err != nil {
-		t.state.Error = err.Error()
-	} else {
-		t.state.Error = ""
-	}
-}
-
-func (t *opTracker) snapshot() opState {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.state
-}
 
 // internalAuthorized 用常量时间比较校验 X-Internal-Token。令牌未配置时一律拒绝。
 func (s *mediaServer) internalAuthorized(r *http.Request) bool {
@@ -119,10 +57,6 @@ func (s *mediaServer) handleInternal(w http.ResponseWriter, r *http.Request) {
 		s.handleInternalDelete(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/internal/catalog/import":
 		s.handleInternalImport(w, r)
-	case r.Method == http.MethodPost && r.URL.Path == "/internal/catalog/seed":
-		s.handleInternalSeed(w, r)
-	case r.Method == http.MethodPost && r.URL.Path == "/internal/snapshots/rebuild":
-		s.handleInternalSnapshotsRebuild(w, r)
 	default:
 		s.writeError(w, &apiError{Status: http.StatusNotFound, Code: "NOT_FOUND", Message: "请求的资源不存在。"})
 	}
@@ -263,7 +197,6 @@ func (s *mediaServer) handleInternalOverview(w http.ResponseWriter, _ *http.Requ
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"catalogEnabled": s.catalog != nil,
-		"op":             s.ops.snapshot(),
 		"categories":     cats,
 	})
 }
@@ -377,82 +310,6 @@ func (s *mediaServer) handleInternalReview(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"updated": affected})
-}
-
-// internalCategoriesFromBody 解析可选的 {"category":"id"} body:空 body / 空 category 表示
-// 全部分类;未知分类返回 400。
-func (s *mediaServer) internalCategoriesFromBody(r *http.Request) ([]ContentCategory, *apiError) {
-	var req struct {
-		Category string `json:"category"`
-	}
-	if r.Body != nil {
-		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<16))
-		if err := dec.Decode(&req); err != nil && err != io.EOF {
-			return nil, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "请求体不是合法 JSON。"}
-		}
-	}
-	id := strings.TrimSpace(req.Category)
-	if id == "" {
-		return s.categories, nil
-	}
-	cat, ok := s.categoriesByID[id]
-	if !ok {
-		return nil, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "未知分类:" + id}
-	}
-	return []ContentCategory{cat}, nil
-}
-
-func opCategoryLabel(categories []ContentCategory) string {
-	if len(categories) == 1 {
-		return categories[0].ID
-	}
-	return "all"
-}
-
-// handleInternalSeed 异步把(指定/全部)分类的实时聚合结果灌成 pending 候选。返回 202,
-// 进度通过 overview 的 op 字段轮询。
-func (s *mediaServer) handleInternalSeed(w http.ResponseWriter, r *http.Request) {
-	if s.catalog == nil {
-		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "CATALOG_DISABLED", Message: "分类维护数据库未启用。"})
-		return
-	}
-	categories, apiErr := s.internalCategoriesFromBody(r)
-	if apiErr != nil {
-		s.writeError(w, apiErr)
-		return
-	}
-	if !s.ops.tryStart(opSeed, opCategoryLabel(categories)) {
-		s.writeError(w, &apiError{Status: http.StatusConflict, Code: "OP_RUNNING", Message: "已有维护操作在进行中,请稍后再试。"})
-		return
-	}
-	go func(cats []ContentCategory) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		err := s.seedCatalogCategories(ctx, cats)
-		s.ops.finish(fmt.Sprintf("seeded %d categories", len(cats)), err)
-		if err != nil {
-			log.Printf("internal seed: %v", err)
-		}
-	}(categories)
-	s.writeJSON(w, http.StatusAccepted, map[string]any{"started": true, "op": s.ops.snapshot()})
-}
-
-// handleInternalSnapshotsRebuild 处理快照重建请求。当前 media_server 为"目录直读(catalog-first)"
-// 模式:分类浏览每次请求直接分页读取 catalog 的 approved 行,审核通过的数据即时生效,没有需要
-// 预重建的快照层。为保持 admin/前端契约稳定并避免误导,这里校验可选的 {"category":"id"} body
-// 后返回成功,并说明数据已即时生效。(未来若引入快照预聚合层,可在此触发真正的重建。)
-func (s *mediaServer) handleInternalSnapshotsRebuild(w http.ResponseWriter, r *http.Request) {
-	categories, apiErr := s.internalCategoriesFromBody(r)
-	if apiErr != nil {
-		s.writeError(w, apiErr)
-		return
-	}
-	s.writeJSON(w, http.StatusOK, map[string]any{
-		"rebuilt":   true,
-		"immediate": true,
-		"scope":     opCategoryLabel(categories),
-		"note":      "目录直读模式:审核通过(approved)的分类数据已即时对客户端生效,无需重建快照。",
-	})
 }
 
 // internalDeleteRequest 是一次硬删除请求:按 (分类,视频) 定位要彻底移除的成员。

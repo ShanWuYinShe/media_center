@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -24,7 +23,6 @@ const (
 )
 
 var (
-	htmlTagPattern      = regexp.MustCompile(`<[^>]*>`)
 	qualityDescPattern  = regexp.MustCompile(`(\d+\s*[PpKk][^\s]*|4\s*[Kk])`)
 	wbiSanitizeReplacer = strings.NewReplacer("!", "", "'", "", "(", "", ")", "", "*", "")
 )
@@ -36,34 +34,12 @@ var mixinKeyEncTab = []int{
 	20, 34, 44, 52,
 }
 
-var commentaryKeywords = []string{
-	"解说", "盘点", "速看", "影评", "混剪", "分钟看", "预告", "花絮", "片段", "几分钟看",
-}
-
 type BilibiliClient struct {
 	client    *http.Client
 	keysMu    sync.Mutex
 	imgKey    string
 	subKey    string
 	keyExpiry time.Time
-}
-
-type bilibiliSearchResponse struct {
-	Code int `json:"code"`
-	Data struct {
-		NumResults int                  `json:"numResults"`
-		Result     []bilibiliSearchItem `json:"result"`
-	} `json:"data"`
-}
-
-type bilibiliSearchItem struct {
-	BVID        string `json:"bvid"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Author      string `json:"author"`
-	Pic         string `json:"pic"`
-	Duration    string `json:"duration"`
-	PubDate     int64  `json:"pubdate"`
 }
 
 type bilibiliViewResponse struct {
@@ -119,68 +95,6 @@ func NewBilibiliClient(timeout time.Duration) *BilibiliClient {
 
 func (c *BilibiliClient) ID() string {
 	return "bilibili"
-}
-
-func (c *BilibiliClient) Search(
-	ctx context.Context,
-	query string,
-	page int,
-	pageSize int,
-	codec *IDCodec,
-) (SearchResponse, error) {
-	include, excludeTerms := parseQuery(query)
-	searchQuery := include
-	if searchQuery == "" {
-		searchQuery = query
-	}
-	signedURL, err := c.signedURL(
-		ctx,
-		"/x/web-interface/wbi/search/type",
-		map[string]string{
-			"search_type": "video",
-			"keyword":     searchQuery,
-			"page":        fmt.Sprintf("%d", page),
-			"page_size":   fmt.Sprintf("%d", min(pageSize, 50)),
-			"order":       "totalrank",
-		},
-	)
-	if err != nil {
-		return SearchResponse{}, err
-	}
-	var payload bilibiliSearchResponse
-	if err := c.getJSON(ctx, signedURL, bilibiliWebHeaders(), &payload); err != nil {
-		return SearchResponse{}, err
-	}
-	if payload.Code != 0 {
-		return SearchResponse{}, &apiError{
-			Status:  http.StatusBadGateway,
-			Code:    "UPSTREAM_UNAVAILABLE",
-			Message: fmt.Sprintf("B站搜索接口返回错误 (code=%d)。", payload.Code),
-		}
-	}
-	items := make([]VideoSummary, 0, len(payload.Data.Result))
-	dotaQuery := isDotaQuery(searchQuery)
-	for _, item := range payload.Data.Result {
-		if item.BVID == "" || parseDuration(item.Duration) <= 0 {
-			continue
-		}
-		title := cleanHTMLTitle(item.Title)
-		if !dotaQuery && isCommentary(title, excludeTerms) {
-			continue
-		}
-		items = append(items, toPublicSummary(item, codec))
-	}
-	total := payload.Data.NumResults
-	if total <= 0 {
-		total = len(items)
-	}
-	return SearchResponse{
-		Query:    query,
-		Page:     page,
-		PageSize: pageSize,
-		Total:    total,
-		Items:    items,
-	}, nil
 }
 
 func (c *BilibiliClient) GetDetails(
@@ -508,50 +422,6 @@ func directPlaybackHeaders() map[string]string {
 	}
 }
 
-func parseQuery(query string) (string, []string) {
-	tokens := strings.Fields(query)
-	includes := make([]string, 0, len(tokens))
-	excludes := make([]string, 0, len(tokens))
-	negate := false
-	for _, token := range tokens {
-		switch token {
-		case "NOT", "-":
-			negate = true
-		default:
-			if negate {
-				excludes = append(excludes, token)
-				negate = false
-			} else {
-				includes = append(includes, token)
-			}
-		}
-	}
-	return strings.Join(includes, " "), excludes
-}
-
-func isCommentary(title string, extraExcludes []string) bool {
-	allPatterns := make([]string, 0, len(commentaryKeywords)+len(extraExcludes))
-	allPatterns = append(allPatterns, commentaryKeywords...)
-	allPatterns = append(allPatterns, extraExcludes...)
-	for _, pattern := range allPatterns {
-		if pattern != "" && strings.Contains(title, pattern) {
-			return true
-		}
-	}
-	return false
-}
-
-func isDotaQuery(query string) bool {
-	normalized := strings.ToLower(query)
-	return strings.Contains(normalized, "dota") ||
-		strings.Contains(normalized, "魔兽争霸") ||
-		strings.Contains(normalized, "allstars")
-}
-
-func cleanHTMLTitle(raw string) string {
-	return strings.TrimSpace(html.UnescapeString(htmlTagPattern.ReplaceAllString(raw, "")))
-}
-
 func normalizePicURL(raw string) string {
 	if strings.HasPrefix(raw, "//") {
 		return "https:" + raw
@@ -653,21 +523,6 @@ func extractWBIKey(raw string) string {
 		return file[:dot]
 	}
 	return file
-}
-
-func toPublicSummary(item bilibiliSearchItem, codec *IDCodec) VideoSummary {
-	return VideoSummary{
-		ID:               codec.EncodeVideoID(item.BVID),
-		VideoKind:        "vod",
-		Title:            defaultString(cleanHTMLTitle(item.Title), item.BVID),
-		Description:      item.Description,
-		Year:             yearString(item.PubDate),
-		Creators:         creatorList(item.Author),
-		ThumbnailURL:     normalizePicURL(item.Pic),
-		ThumbnailHeaders: directThumbnailHeaders(),
-		DurationSeconds:  parseDuration(item.Duration),
-		PlaybackKind:     "vod",
-	}
 }
 
 func creatorList(name string) []string {

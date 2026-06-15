@@ -254,3 +254,69 @@ func idsOf(vs []CatalogVideo) []string {
 	}
 	return out
 }
+
+func TestCatalogSearchApprovedOnlyReturnsApproved(t *testing.T) {
+	c := openTestCatalog(t)
+	mustUpsert(t, c, "bilibili", "BV1aaa", "流浪地球 科幻大片", 1800)
+	mustUpsert(t, c, "bilibili", "BV1bbb", "Interstellar Movie", 1800)
+	mustUpsert(t, c, "bilibili", "BV1ccc", "纪录片 地球脉动", 1800)
+	mustUpsert(t, c, "bilibili", "BV1ddd", "未审核 地球", 1800)
+
+	approve := func(cat, nid string) {
+		if _, err := c.AddPendingMember(cat, "bilibili", nid, 10); err != nil {
+			t.Fatalf("add %s/%s: %v", cat, nid, err)
+		}
+		if _, err := c.SetMemberStatus(cat, "bilibili", nid, "approved", "tester"); err != nil {
+			t.Fatalf("approve %s/%s: %v", cat, nid, err)
+		}
+	}
+	// aaa approved in two categories (must dedupe), bbb approved, ccc rejected, ddd pending.
+	approve("movies", "BV1aaa")
+	approve("tv", "BV1aaa")
+	approve("movies", "BV1bbb")
+	if _, err := c.AddPendingMember("movies", "bilibili", "BV1ccc", 10); err != nil {
+		t.Fatalf("add ccc: %v", err)
+	}
+	if _, err := c.SetMemberStatus("movies", "bilibili", "BV1ccc", "rejected", "tester"); err != nil {
+		t.Fatalf("reject ccc: %v", err)
+	}
+	if _, err := c.AddPendingMember("movies", "bilibili", "BV1ddd", 10); err != nil {
+		t.Fatalf("add ddd: %v", err)
+	}
+
+	// "地球" appears in aaa(approved), ccc(rejected), ddd(pending) → only aaa, deduped to one row.
+	items, total, err := c.SearchApproved("地球", 1, 20)
+	if err != nil {
+		t.Fatalf("search 地球: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].NativeID != "BV1aaa" {
+		t.Fatalf("search 地球: total=%d items=%v", total, idsOf(items))
+	}
+
+	// ASCII case-insensitive: lowercase query matches mixed-case title.
+	items, total, err = c.SearchApproved("movie", 1, 20)
+	if err != nil {
+		t.Fatalf("search movie: %v", err)
+	}
+	if total != 1 || items[0].NativeID != "BV1bbb" {
+		t.Fatalf("search movie: total=%d items=%v", total, idsOf(items))
+	}
+
+	// Creator field is searchable.
+	if items, _, err = c.SearchApproved("up-BV1aaa", 1, 20); err != nil || len(items) != 1 || items[0].NativeID != "BV1aaa" {
+		t.Fatalf("search creator: items=%v err=%v", idsOf(items), err)
+	}
+
+	// No match / empty query → empty result, no upstream call.
+	if items, total, _ = c.SearchApproved("不存在的关键词", 1, 20); total != 0 || len(items) != 0 {
+		t.Fatalf("search none: total=%d items=%v", total, idsOf(items))
+	}
+	if items, total, _ = c.SearchApproved("   ", 1, 20); total != 0 || len(items) != 0 {
+		t.Fatalf("blank query: total=%d items=%v", total, idsOf(items))
+	}
+
+	// LIKE wildcards are escaped to literals: "%" must not match everything.
+	if _, total, _ = c.SearchApproved("%", 1, 20); total != 0 {
+		t.Fatalf("wildcard %% should be literal, got total=%d", total)
+	}
+}

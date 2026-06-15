@@ -4,7 +4,7 @@ Go 实现的媒体聚合服务。支持 **Bilibili**、**YouTube**、**Internet 
 
 ## 当前架构
 
-- 后端的职责是：**聚合多来源元数据、生成不透明视频 ID、刷新播放地址，并按来源选择 direct/proxy delivery**。
+- 后端的职责是：**从已审核（`approved`）的 catalog 提供分类浏览与搜索、生成不透明视频 ID、按视频解析并刷新播放地址，并按来源选择 direct/proxy delivery**。
 - `direct` 来源（默认 Bilibili）返回上游 URL + companion headers，由 App 直连上游。
 - `proxy` 来源（默认 YouTube / Internet Archive）返回 `/api/asset` 签名代理地址，上游 companion headers 会被签入代理 payload，不下发给 App。
 - `/api/asset` 只接受服务端签名的 HTTP(S) 上游 URL，支持 GET/HEAD、Range 和条件请求。
@@ -39,7 +39,6 @@ Go 实现的媒体聚合服务。支持 **Bilibili**、**YouTube**、**Internet 
 
 ## 当前来源策略
 
-- 默认未声明 `sources` 时启用 **bilibili**，也可在 contentCategories.json 中启用 `youtube` / `internet-archive`。
-- 分类可用通用 `searchQuery`，也可通过 `sourceQueries` 为不同来源指定不同查询词。
-- 分类/搜索结果会做关键词、排除词、时长与标题规则过滤，尽量保留完整长视频、减少解说/混剪/短片污染。
+- 默认未声明 `sources` 时启用 **bilibili**，也可在 contentCategories.json 中启用 `youtube` / `internet-archive`；来源用于详情/播放地址解析与 direct/proxy delivery 选择。
+- 分类浏览与 `GET /api/search` 只返回 catalog 中 `approved` 的数据，**不做实时上游搜索/采集**；候选经 admin 导入 → 人工 + AI 审核 → 上线 `approved`，搜索也只命中审核过的数据。
 - 播放选项会在详情/播放接口实时刷新；direct 来源返回上游地址，proxy 来源返回签名 asset proxy URL，避免客户端长期缓存失效地址。

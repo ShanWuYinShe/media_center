@@ -144,28 +144,6 @@ func TestCatalogOverviewCounts(t *testing.T) {
 	}
 }
 
-func TestOpTracker(t *testing.T) {
-	var tr opTracker
-	if !tr.tryStart(opSeed, "movies") {
-		t.Fatal("first start should succeed")
-	}
-	if tr.tryStart(opSeed, "all") {
-		t.Fatal("second start should fail while running")
-	}
-	st := tr.snapshot()
-	if !st.Running || st.Kind != "seed" || st.Category != "movies" {
-		t.Fatalf("unexpected running state: %+v", st)
-	}
-	tr.finish("done", nil)
-	st = tr.snapshot()
-	if st.Running || st.Message != "done" || st.Error != "" {
-		t.Fatalf("unexpected finished state: %+v", st)
-	}
-	if !tr.tryStart(opSeed, "all") {
-		t.Fatal("start after finish should succeed")
-	}
-}
-
 func newInternalTestServer(t *testing.T, token string) (*mediaServer, *Catalog) {
 	t.Helper()
 	c := openTestCatalog(t)
@@ -176,7 +154,6 @@ func newInternalTestServer(t *testing.T, token string) (*mediaServer, *Catalog) 
 		categoriesByID: indexCategories(cats),
 		idCodec:        NewIDCodec("test-secret"),
 		catalog:        c,
-		ops:            &opTracker{},
 	}
 	return s, c
 }
@@ -328,21 +305,6 @@ func TestInternalCatalogImportRejectsTopLevelArray(t *testing.T) {
 	w := doInternalRaw(s, http.MethodPost, "/internal/catalog/import", "secret", `[]`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("top-level array: want 400, got %d (body=%s)", w.Code, w.Body.String())
-	}
-}
-
-func TestInternalSnapshotsRebuild(t *testing.T) {
-	s, _ := newInternalTestServer(t, "secret")
-	// catalog-first: rebuild is an immediate-effect confirmation, returns 200.
-	if w := doInternal(s, http.MethodPost, "/internal/snapshots/rebuild", "secret", nil); w.Code != http.StatusOK {
-		t.Fatalf("rebuild all: want 200, got %d (body=%s)", w.Code, w.Body.String())
-	}
-	if w := doInternal(s, http.MethodPost, "/internal/snapshots/rebuild", "secret", map[string]any{"category": "movies"}); w.Code != http.StatusOK {
-		t.Fatalf("rebuild one: want 200, got %d", w.Code)
-	}
-	// Unknown category is rejected with 400.
-	if w := doInternal(s, http.MethodPost, "/internal/snapshots/rebuild", "secret", map[string]any{"category": "nope"}); w.Code != http.StatusBadRequest {
-		t.Fatalf("rebuild unknown: want 400, got %d", w.Code)
 	}
 }
 

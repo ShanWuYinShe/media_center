@@ -23,11 +23,9 @@ type mediaServer struct {
 	assetCache     *AssetCache
 	deliveryModes  map[string]string
 	catalog        *Catalog
-	ops            *opTracker
 }
 
 func main() {
-	catalogSeed := flag.Bool("catalog-seed", false, "把各分类实时聚合结果作为 pending 候选写入分类数据库后退出(供外部工具审校)")
 	catalogReview := flag.Bool("catalog-review", false, "审校分类维护数据库的 pending 候选(approve/reject)后退出")
 	catalogReviewCategory := flag.String("catalog-review-category", "", "限定只审校某个分类 ID(默认全部)")
 	catalogReviewDryRun := flag.Bool("catalog-review-dry-run", false, "只打印审校结果,不写库")
@@ -57,7 +55,6 @@ func main() {
 		assetClient:    newAssetHTTPClient(),
 		assetCache:     NewAssetCache(config.AssetCacheDir, config.AssetCacheMax),
 		deliveryModes:  sourceDeliveryModes(content.Sources, enabledSources),
-		ops:            &opTracker{},
 	}
 
 	// 分类维护数据库(SQLite system-of-record):分类浏览直接分页读取 approved 行。
@@ -69,18 +66,6 @@ func main() {
 			server.catalog = catalog
 			defer catalog.Close()
 		}
-	}
-
-	// 离线一次性把各分类实时聚合结果写入数据库作为 pending 候选,供外部工具审校。
-	if *catalogSeed {
-		if server.catalog == nil {
-			log.Fatalf("catalog seed requires a catalog db (set MEDIA_SERVER_CATALOG_DB)")
-		}
-		log.Printf("seeding catalog candidates (db=%s)…", config.CatalogDBPath)
-		if err := server.seedCatalog(context.Background()); err != nil {
-			log.Fatalf("catalog seed: %v", err)
-		}
-		return
 	}
 
 	// 审校分类维护数据库的 pending 候选:交互式逐条 approve/reject。
@@ -164,7 +149,7 @@ func (s *mediaServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, err)
 		return
 	}
-	resp, searchErr := s.searchProviders(r.Context(), query, page, pageSize)
+	resp, searchErr := s.searchApprovedCatalog(query, page, pageSize)
 	if searchErr != nil {
 		s.writeError(w, searchErr)
 		return
@@ -201,7 +186,7 @@ func (s *mediaServer) handleCategoryVideos(w http.ResponseWriter, r *http.Reques
 }
 
 // categoryVideosPage 直接分页读取 catalog 数据库里的 approved 列表;
-// 绝不做实时上游搜索——分类浏览只展示已审核的种子数据。
+// 绝不做实时上游搜索——分类浏览只展示已审核(approved)的数据。
 func (s *mediaServer) categoryVideosPage(
 	ctx context.Context,
 	category ContentCategory,
@@ -302,147 +287,22 @@ func (s *mediaServer) handlePlayback(w http.ResponseWriter, r *http.Request, vid
 	s.writeJSON(w, http.StatusOK, PlaybackOptionsResponse{Items: options})
 }
 
-func (s *mediaServer) searchProviders(ctx context.Context, query string, page int, pageSize int) (SearchResponse, error) {
-	var items []VideoSummary
-	total := 0
-	for _, providerID := range s.enabledSources {
-		provider := s.providers[providerID]
-		if provider == nil {
-			continue
-		}
-		result, err := provider.Search(ctx, query, page, pageSize, s.idCodec)
-		if err != nil {
-			return SearchResponse{}, err
-		}
-		total += result.Total
-		items = append(items, result.Items...)
+// searchApprovedCatalog 只在已审核(approved)的分类数据里搜索,绝不查询上游——
+// 这种聚合视频不审核就实时搜索的结果基本不可用。catalog 未启用时返回空结果。
+func (s *mediaServer) searchApprovedCatalog(query string, page, pageSize int) (SearchResponse, error) {
+	empty := SearchResponse{Query: query, Page: page, PageSize: pageSize, Total: 0, Items: []VideoSummary{}}
+	if s.catalog == nil {
+		return empty, nil
 	}
-	items = dedupeVideoSummaries(items)
-	if total <= 0 {
-		total = len(items)
+	items, total, err := s.catalog.SearchApproved(query, page, pageSize)
+	if err != nil {
+		return SearchResponse{}, err
 	}
-	return SearchResponse{Query: query, Page: page, PageSize: pageSize, Total: total, Items: items}, nil
-}
-
-// collectCategoryItems 聚合某分类的粗略候选列表(去重 + 合规过滤,不做相关性筛选/排序),
-// 返回完整列表与 total。精准筛选由 admin 页面的人工审核与 AI 模型判断完成。
-// 仅 catalog seed 复用它,把粗略搜索结果作为 pending 候选写入分类数据库。
-func (s *mediaServer) collectCategoryItems(
-	ctx context.Context,
-	category ContentCategory,
-	targetCount int,
-	fetchBudget int,
-) ([]VideoSummary, int, error) {
-	collected := make([]VideoSummary, 0, targetCount)
-	seen := make(map[string]struct{}, targetCount)
-	total := 0
-	fetches := 0
-
-	// 把 (源 × 搜索词) 组成多个拉取对,按“页优先”交错抓取:先抓所有搜索词的第 1 页,
-	// 再抓第 2 页……这样首页就能聚合到各搜索词的多样结果,而不是被单个搜索词占满。
-	type fetchPair struct {
-		provider     VideoProvider
-		query        string
-		totalCounted bool
-		exhausted    bool
+	summaries := make([]VideoSummary, 0, len(items))
+	for _, cv := range items {
+		summaries = append(summaries, s.summaryFromCatalogVideo(cv))
 	}
-	pairs := make([]*fetchPair, 0)
-	for _, providerID := range s.enabledSources {
-		provider := s.providers[providerID]
-		if provider == nil {
-			continue
-		}
-		for _, providerQuery := range s.categoryQueriesForProvider(category, providerID) {
-			pairs = append(pairs, &fetchPair{provider: provider, query: providerQuery})
-		}
-	}
-	// 限制单次请求向上游发起的搜索次数,避免“多搜索词 × 多页 × 多源”放大延迟;
-	// 但至少要保证每个 (源 × 搜索词) 对都被抓取一次,否则靠后的搜索词永远拿不到,
-	// 多搜索词聚合形同虚设(典型表现:结果寥寥)。
-	if fetchBudget < len(pairs) {
-		fetchBudget = len(pairs)
-	}
-
-collect:
-	for providerPage := 1; providerPage <= s.config.MaxCategoryPages; providerPage++ {
-		anyActive := false
-		for _, pair := range pairs {
-			if pair.exhausted {
-				continue
-			}
-			if fetches >= fetchBudget {
-				break collect
-			}
-			result, err := pair.provider.Search(ctx, pair.query, providerPage, 50, s.idCodec)
-			fetches++
-			if err != nil {
-				// 单个搜索词/分页失败不应让整批 500:标记该词不再抓,继续聚合其余结果,
-				// 只有在一条结果都没有时才把错误透出。
-				if len(collected) > 0 {
-					pair.exhausted = true
-					continue
-				}
-				return nil, 0, err
-			}
-			// result.Total 是该查询的总命中数(每页相同),每个搜索词只累加一次,
-			// 避免按页数重复累加导致 Total 被放大数倍。
-			if !pair.totalCounted {
-				total += result.Total
-				pair.totalCounted = true
-			}
-			if len(result.Items) == 0 {
-				pair.exhausted = true
-				continue
-			}
-			anyActive = true
-			for _, item := range result.Items {
-				if _, ok := seen[item.ID]; ok {
-					continue
-				}
-				seen[item.ID] = struct{}{}
-				// 合规过滤(成人/色情内容)是硬性要求,与“分类相关性筛选”无关,予以保留。
-				if isDisallowedContent(item) {
-					continue
-				}
-				collected = append(collected, item)
-			}
-			if len(collected) >= targetCount {
-				break collect
-			}
-		}
-		if !anyActive {
-			break
-		}
-	}
-	total = max(total, len(collected))
-	return collected, total, nil
-}
-
-// categoryQueriesForProvider 返回某个源在聚合该分类时使用的搜索词列表。
-// 优先用 sourceQueries 里的显式单条覆盖(保持旧配置兼容);否则用分类的多搜索词。
-func (s *mediaServer) categoryQueriesForProvider(category ContentCategory, providerID string) []string {
-	if q, ok := category.SourceQueries[providerID]; ok {
-		if trimmed := strings.TrimSpace(q); trimmed != "" {
-			return []string{trimmed}
-		}
-	}
-	if len(category.Queries) > 0 {
-		return category.Queries
-	}
-	return []string{category.Query}
-}
-
-func dedupeVideoSummaries(items []VideoSummary) []VideoSummary {
-	seen := make(map[string]struct{}, len(items))
-	out := make([]VideoSummary, 0, len(items))
-	for _, item := range items {
-		if _, ok := seen[item.ID]; ok {
-			continue
-		}
-		seen[item.ID] = struct{}{}
-		out = append(out, item)
-	}
-	return out
+	return SearchResponse{Query: query, Page: page, PageSize: pageSize, Total: total, Items: summaries}, nil
 }
 
 func paginationFromRequest(r *http.Request) (int, int, *apiError) {
@@ -633,48 +493,4 @@ func (s *mediaServer) applyDeliveryToSearch(base string, resp *SearchResponse) {
 func (s *mediaServer) applyDeliveryToDetailsForProvider(base, providerID string, details *VideoDetails) {
 	details.ThumbnailURL, details.ThumbnailHeaders, details.ThumbnailDelivery = s.deliverThumbnail(providerID, base, details.ThumbnailURL, details.ThumbnailHeaders)
 	s.applyDeliveryToOptionsForProvider(base, providerID, details.PlaybackOptions)
-}
-
-// isDisallowedContent 判断候选是否命中成人/色情等不合规内容黑名单。
-// 这是合规硬性要求(只处理公开、合规内容),与“分类相关性筛选”无关,
-// 因此在粗略搜索阶段保留;其余精准筛选交由 admin 页面的人工/AI 审核。
-func isDisallowedContent(item VideoSummary) bool {
-	text := strings.ToLower(strings.Join([]string{
-		item.Title,
-		item.Description,
-		strings.Join(item.Creators, " "),
-	}, " "))
-	return containsAny(text, adultContentExcludes)
-}
-
-// adultContentExcludes 是跨分类的成人/色情内容黑名单(全部小写匹配)。
-// 只用足够明确、不会误伤主流影视标题的词,避免把正常内容过滤掉。
-var adultContentExcludes = []string{
-	"三级片", "三級片", "情色", "色情", "成人电影", "成人影片", "限制级", "限制級",
-	"18禁", "r18", "里番", "裏番", "无码", "無碼", "黄片", "黄色电影", "伦理片", "倫理片",
-	"性爱", "性愛", "激情戏", "激情戲", "床戏", "床戲", "福利姬", "擦边", "擦邊",
-}
-
-func containsAny(text string, terms []string) bool {
-	for _, term := range terms {
-		normalized := strings.ToLower(strings.TrimSpace(term))
-		if normalized != "" && strings.Contains(text, normalized) {
-			return true
-		}
-	}
-	return false
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

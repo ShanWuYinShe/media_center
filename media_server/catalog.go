@@ -1,11 +1,9 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -660,116 +658,81 @@ func decodeCreators(raw string) []string {
 	return out
 }
 
-// seedCatalog 离线把各分类的实时聚合结果写入分类维护数据库作为 pending 候选,
-// 供外部工具/人工审校。重复运行只新增候选,绝不覆盖已有的审校决定(approved/rejected)。
-func (s *mediaServer) seedCatalog(ctx context.Context) error {
-	return s.seedCatalogCategories(ctx, s.categories)
+// escapeLike 转义 LIKE 模式中的通配符,使关键词按字面量子串匹配(配合 ESCAPE '\')。
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
-// seedCatalogCategories 对给定分类集合执行 seed(供 -catalog-seed 全量及内部接口按分类触发)。
-func (s *mediaServer) seedCatalogCategories(ctx context.Context, categories []ContentCategory) error {
-	if s.catalog == nil {
-		return fmt.Errorf("seed catalog: catalog not opened")
+// SearchApproved 只在已审核(approved)的分类数据里按关键词搜索,绝不查询上游。
+// 匹配标题/简介/作者的子串(大小写不敏感),跨分类去重后按 置顶 > 分数 > native_id 排序,
+// 返回一页结果与去重后的总命中数。query 为空或没有命中的 approved 数据时返回空列表。
+func (c *Catalog) SearchApproved(query string, page, pageSize int) ([]CatalogVideo, int, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return []CatalogVideo{}, 0, nil
 	}
-	// 审校池固定抓取一批较大的候选,给人工更多可选项;预算放宽,优先抓全抓准。
-	const seedTarget = 120
-	for _, category := range categories {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		buildCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-		items, _, err := s.collectCategoryItems(buildCtx, category, seedTarget, catalogSeedFetchBudget(seedTarget))
-		cancel()
-		if err != nil {
-			log.Printf("catalog seed: collect failed category=%s: %v", category.ID, err)
-			continue
-		}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	like := "%" + escapeLike(strings.ToLower(query)) + "%"
+	const where = `m.status = 'approved' AND (
+  lower(v.title) LIKE ? ESCAPE '\' OR
+  lower(COALESCE(v.description, '')) LIKE ? ESCAPE '\' OR
+  lower(COALESCE(v.creators, '')) LIKE ? ESCAPE '\')`
 
-		added := 0
-		for _, item := range items {
-			provider, nativeID, ok := s.resolveVideoRef(item.ID)
-			if !ok {
-				continue
-			}
-			if err := s.catalog.UpsertVideo(CatalogVideo{
-				Provider:     provider,
-				NativeID:     nativeID,
-				Title:        item.Title,
-				Description:  item.Description,
-				Creators:     item.Creators,
-				DurationSec:  item.DurationSeconds,
-				Year:         item.Year,
-				ThumbnailURL: item.ThumbnailURL,
-				SourceURL:    catalogSourceURL(provider, nativeID),
-			}); err != nil {
-				log.Printf("catalog seed: upsert failed id=%s: %v", item.ID, err)
-				continue
-			}
-			// 粗略搜索结果统一以 score=0 入库;精准筛选交给 admin 页面的人工/AI 审核。
-			isNew, err := s.catalog.AddPendingMember(category.ID, provider, nativeID, 0)
-			if err != nil {
-				log.Printf("catalog seed: add member failed id=%s: %v", item.ID, err)
-				continue
-			}
-			if isNew {
-				added++
-			}
-		}
-		pending, _ := s.catalog.CountByStatus(category.ID, "pending")
-		approved, _ := s.catalog.CountByStatus(category.ID, "approved")
-		log.Printf("catalog seed: category=%s candidates=%d new=%d pending=%d approved=%d",
-			category.ID, len(items), added, pending, approved)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Second):
-		}
+	var total int
+	countSQL := `SELECT COUNT(*) FROM (
+SELECT 1
+FROM videos v
+JOIN category_members m ON m.provider = v.provider AND m.native_id = v.native_id
+WHERE ` + where + `
+GROUP BY v.provider, v.native_id)`
+	if err := c.db.QueryRow(countSQL, like, like, like).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count search: %w", err)
 	}
-	return nil
-}
+	if total == 0 {
+		return []CatalogVideo{}, 0, nil
+	}
 
-func catalogSeedFetchBudget(targetSize int) int {
-	budget := targetSize/4 + 8
-	if budget < 12 {
-		budget = 12
+	offset := (page - 1) * pageSize
+	listSQL := `
+SELECT v.provider, v.native_id, v.title, v.description, v.creators, v.duration_sec, v.year, v.thumbnail_url, v.source_url,
+       MAX(m.pinned) AS top, MAX(COALESCE(m.score, 0)) AS sc
+FROM videos v
+JOIN category_members m ON m.provider = v.provider AND m.native_id = v.native_id
+WHERE ` + where + `
+GROUP BY v.provider, v.native_id
+ORDER BY top DESC, sc DESC, v.native_id ASC
+LIMIT ? OFFSET ?`
+	rows, err := c.db.Query(listSQL, like, like, like, pageSize, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query search: %w", err)
 	}
-	if budget > 60 {
-		budget = 60
-	}
-	return budget
-}
+	defer rows.Close()
 
-// catalogSourceURL 给人工审校生成一个可点击的原始观看地址(目前仅 bilibili)。
-func catalogSourceURL(provider, nativeID string) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "bilibili":
-		return "https://www.bilibili.com/video/" + strings.TrimSpace(nativeID)
-	default:
-		return ""
-	}
-}
-
-// resolveVideoRef 把任意形式的视频 ID 解析成 (provider, 原生ID)。接受三种写法:
-// ① 公开签名 ID(/videos 等接口返回的 id);② 裸原生 ID(如 bilibili 的 BVxxx);
-// ③ provider:nativeID 显式写法(如 bilibili:BV1xxx)。
-func (s *mediaServer) resolveVideoRef(id string) (provider string, nativeID string, ok bool) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return "", "", false
-	}
-	// provider:nativeID 显式写法。公开签名 ID(v1.base64.sig)与裸 BVID 都不含冒号,
-	// 故只有显式写法会命中这里,不会误判。
-	if i := strings.Index(id, ":"); i > 0 {
-		p := strings.ToLower(strings.TrimSpace(id[:i]))
-		n := strings.TrimSpace(id[i+1:])
-		if p != "" && n != "" {
-			return p, n, true
+	out := make([]CatalogVideo, 0, pageSize)
+	for rows.Next() {
+		var v CatalogVideo
+		var creators sql.NullString
+		var description, year, thumb, source sql.NullString
+		var duration sql.NullInt64
+		var top, score sql.NullInt64
+		if err := rows.Scan(&v.Provider, &v.NativeID, &v.Title, &description, &creators, &duration, &year, &thumb, &source, &top, &score); err != nil {
+			return nil, 0, fmt.Errorf("scan search: %w", err)
 		}
+		v.Description = description.String
+		v.Year = year.String
+		v.ThumbnailURL = thumb.String
+		v.SourceURL = source.String
+		v.DurationSec = duration.Int64
+		v.Creators = decodeCreators(creators.String)
+		out = append(out, v)
 	}
-	if s.idCodec != nil {
-		if ref, err := s.idCodec.DecodeVideoRef(id); err == nil && ref.Provider != "" && ref.ID != "" {
-			return strings.ToLower(ref.Provider), ref.ID, true
-		}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
 	}
-	return "", "", false
+	return out, total, nil
 }

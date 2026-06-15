@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -18,22 +17,6 @@ const internetArchiveBase = "https://archive.org"
 
 type InternetArchiveClient struct {
 	client *http.Client
-}
-
-type iaSearchResponse struct {
-	Response struct {
-		NumFound int           `json:"numFound"`
-		Docs     []iaSearchDoc `json:"docs"`
-	} `json:"response"`
-}
-
-type iaSearchDoc struct {
-	Identifier  string `json:"identifier"`
-	Title       any    `json:"title"`
-	Description any    `json:"description"`
-	Creator     any    `json:"creator"`
-	Year        any    `json:"year"`
-	Date        any    `json:"date"`
 }
 
 type iaMetadataResponse struct {
@@ -62,55 +45,6 @@ func NewInternetArchiveClient(timeout time.Duration) *InternetArchiveClient {
 
 func (c *InternetArchiveClient) ID() string {
 	return "internet-archive"
-}
-
-func (c *InternetArchiveClient) Search(
-	ctx context.Context,
-	query string,
-	page int,
-	pageSize int,
-	codec *IDCodec,
-) (SearchResponse, error) {
-	u, _ := url.Parse(internetArchiveBase + "/advancedsearch.php")
-	q := u.Query()
-	q.Set("q", fmt.Sprintf("(%s) AND mediatype:(movies)", strings.TrimSpace(query)))
-	q.Set("output", "json")
-	q.Set("rows", strconv.Itoa(min(pageSize, 50)))
-	q.Set("page", strconv.Itoa(page))
-	q.Set("sort[]", "downloads desc")
-	for _, field := range []string{"identifier", "title", "description", "creator", "year", "date"} {
-		q.Add("fl[]", field)
-	}
-	u.RawQuery = q.Encode()
-
-	var payload iaSearchResponse
-	if err := c.getJSON(ctx, u.String(), &payload); err != nil {
-		return SearchResponse{}, err
-	}
-
-	items := make([]VideoSummary, 0, len(payload.Response.Docs))
-	for _, doc := range payload.Response.Docs {
-		id := strings.TrimSpace(doc.Identifier)
-		if id == "" {
-			continue
-		}
-		items = append(items, VideoSummary{
-			ID:              codec.EncodeProviderVideoID(c.ID(), id),
-			VideoKind:       "vod",
-			Title:           defaultString(firstIAString(doc.Title), id),
-			Description:     firstIAString(doc.Description),
-			Year:            iaYear(doc.Year, doc.Date),
-			Creators:        iaCreators(doc.Creator),
-			ThumbnailURL:    internetArchiveBase + "/services/img/" + url.PathEscape(id),
-			DurationSeconds: 0,
-			PlaybackKind:    "vod",
-		})
-	}
-	total := payload.Response.NumFound
-	if total <= 0 {
-		total = len(items)
-	}
-	return SearchResponse{Query: query, Page: page, PageSize: pageSize, Total: total, Items: items}, nil
 }
 
 func (c *InternetArchiveClient) GetDetails(ctx context.Context, id string, codec *IDCodec) (VideoDetails, error) {

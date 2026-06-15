@@ -7,7 +7,6 @@ import (
 
 type VideoProvider interface {
 	ID() string
-	Search(ctx context.Context, query string, page int, pageSize int, codec *IDCodec) (SearchResponse, error)
 	GetDetails(ctx context.Context, id string, codec *IDCodec) (VideoDetails, error)
 	GetPlaybackOptions(ctx context.Context, id string, codec *IDCodec) ([]PlaybackOption, error)
 }

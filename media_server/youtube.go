@@ -25,19 +25,6 @@ type YouTubeClient struct {
 	extractorURL string
 }
 
-type youtubeSearchResponse struct {
-	NextPageToken string `json:"nextPageToken"`
-	PageInfo      struct {
-		TotalResults int `json:"totalResults"`
-	} `json:"pageInfo"`
-	Items []struct {
-		ID struct {
-			VideoID string `json:"videoId"`
-		} `json:"id"`
-		Snippet youtubeSnippet `json:"snippet"`
-	} `json:"items"`
-}
-
 type youtubeVideosResponse struct {
 	Items []struct {
 		ID             string         `json:"id"`
@@ -108,32 +95,6 @@ func (c *YouTubeClient) ID() string {
 	return "youtube"
 }
 
-func (c *YouTubeClient) Search(
-	ctx context.Context,
-	query string,
-	page int,
-	pageSize int,
-	codec *IDCodec,
-) (SearchResponse, error) {
-	payload, err := c.searchPage(ctx, query, page, min(pageSize, 50))
-	if err != nil {
-		return SearchResponse{}, err
-	}
-	items := make([]VideoSummary, 0, len(payload.Items))
-	for _, item := range payload.Items {
-		videoID := strings.TrimSpace(item.ID.VideoID)
-		if videoID == "" {
-			continue
-		}
-		items = append(items, youtubeSummary(c.ID(), videoID, item.Snippet, 0, codec))
-	}
-	total := payload.PageInfo.TotalResults
-	if total <= 0 {
-		total = len(items)
-	}
-	return SearchResponse{Query: query, Page: page, PageSize: pageSize, Total: total, Items: items}, nil
-}
-
 func (c *YouTubeClient) GetDetails(ctx context.Context, id string, codec *IDCodec) (VideoDetails, error) {
 	item, err := c.fetchVideo(ctx, id)
 	if err != nil {
@@ -172,37 +133,6 @@ func (c *YouTubeClient) GetPlaybackOptions(ctx context.Context, id string, codec
 		}
 	}
 	return options, nil
-}
-
-func (c *YouTubeClient) searchPage(ctx context.Context, query string, page int, pageSize int) (youtubeSearchResponse, error) {
-	token := ""
-	var payload youtubeSearchResponse
-	for currentPage := 1; currentPage <= page; currentPage++ {
-		u, _ := url.Parse(youtubeAPIBase + "/search")
-		q := u.Query()
-		q.Set("key", c.apiKey)
-		q.Set("part", "snippet")
-		q.Set("type", "video")
-		q.Set("videoEmbeddable", "true")
-		q.Set("safeSearch", "moderate")
-		q.Set("maxResults", strconv.Itoa(pageSize))
-		q.Set("q", query)
-		if token != "" {
-			q.Set("pageToken", token)
-		}
-		u.RawQuery = q.Encode()
-		if err := c.getJSON(ctx, u.String(), &payload); err != nil {
-			return youtubeSearchResponse{}, err
-		}
-		if currentPage == page {
-			return payload, nil
-		}
-		token = payload.NextPageToken
-		if token == "" {
-			return youtubeSearchResponse{PageInfo: payload.PageInfo}, nil
-		}
-	}
-	return payload, nil
 }
 
 func (c *YouTubeClient) fetchVideo(ctx context.Context, id string) (struct {

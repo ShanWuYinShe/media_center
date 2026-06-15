@@ -10,7 +10,7 @@ App 应把配置值当作 **API base URL**。当前线上默认是：
 
 ## 当前契约
 
-- 后端负责：多来源分类/搜索/详情/播放选项聚合，并决定每个资源的**下发方式**（`deliveryMode`）。
+- 后端负责：从已审核（`approved`）的 catalog 提供分类/搜索，按视频 ID 解析详情/播放选项，并决定每个资源的**下发方式**（`deliveryMode`）。
 - **缩略图始终走 `proxy`**：`thumbnailUrl` 是签名 `/asset` 代理地址，字节由**后端回源**并转发；
   上游请求头由后端附加，`thumbnailHeaders` 为空。这样可避免 Android TV 直连上游时被老旧证书链、
   Referer/UA 差异或区域网络策略影响。
@@ -123,7 +123,7 @@ type PagedVideos = {
 
 ### `GET /categories/{id}/videos?page=1&pageSize=20`
 
-返回某个分类下的视频列表。会按启用来源聚合搜索；分类可通过 `sourceQueries` 为不同来源指定查询词，并做关键词/排除词/时长过滤。
+返回某个分类下**已审核（`approved`）**的视频列表（按 `pinned` > `rank` > `score` 排序，分页）。数据来自人工审核过的 catalog，服务端不做实时上游搜索/采集；没有 `approved` 数据时返回空列表。
 
 示例：
 
@@ -159,7 +159,7 @@ type PagedVideos = {
 
 ### `GET /search?q=关键词&page=1&pageSize=20`
 
-临时关键词搜索。会调用所有启用来源并过滤明显的解说/混剪/短视频。
+在**已审核（`approved`）**的 catalog 中按标题/简介/作者关键词搜索（跨分类去重、分页）。服务端**不做实时上游搜索**——聚合视频未经审核的搜索结果普遍标题与内容不符、大量无法播放。无匹配或没有 `approved` 数据时返回空列表。
 
 ### `GET /videos/{id}`
 
