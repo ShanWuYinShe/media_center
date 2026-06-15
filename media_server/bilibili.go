@@ -25,7 +25,7 @@ const (
 
 var (
 	htmlTagPattern         = regexp.MustCompile(`<[^>]*>`)
-	tvSeriesEpisodePattern = regexp.MustCompile(`第\s*\d+\s*集|\d+\s*[-~]\s*\d+\s*集|ep\s*\d+`)
+	tvSeriesEpisodePattern = regexp.MustCompile(`第\s*\d+\s*集|\d+\s*[-~]\s*\d+\s*集|全\s*\d+\s*集|\d+\s*集\s*全|ep\s*\d+`)
 	qualityDescPattern     = regexp.MustCompile(`(\d+\s*[PpKk][^\s]*|4\s*[Kk])`)
 	wbiSanitizeReplacer    = strings.NewReplacer("!", "", "'", "", "(", "", ")", "", "*", "")
 )

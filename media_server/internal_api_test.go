@@ -197,6 +197,16 @@ func doInternal(s *mediaServer, method, path, token string, body any) *httptest.
 	return w
 }
 
+func doInternalRaw(s *mediaServer, method, path, token string, body string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	if token != "" {
+		r.Header.Set("X-Internal-Token", token)
+	}
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	return w
+}
+
 func TestInternalTokenGuard(t *testing.T) {
 	s, _ := newInternalTestServer(t, "secret")
 	if w := doInternal(s, http.MethodGet, "/internal/catalog/overview", "", nil); w.Code != http.StatusUnauthorized {
@@ -310,6 +320,14 @@ func TestInternalCatalogImportRejectsBadStatus(t *testing.T) {
 	})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("bad status: want 400, got %d (body=%s)", w.Code, w.Body.String())
+	}
+}
+
+func TestInternalCatalogImportRejectsTopLevelArray(t *testing.T) {
+	s, _ := newInternalTestServer(t, "secret")
+	w := doInternalRaw(s, http.MethodPost, "/internal/catalog/import", "secret", `[]`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("top-level array: want 400, got %d (body=%s)", w.Code, w.Body.String())
 	}
 }
 

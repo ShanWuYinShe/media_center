@@ -105,7 +105,7 @@
 
 ### 4.2 电视剧 `tv-series`
 - **附加门槛**：`keywordScore > 0` **且** 命中“剧集信号”之一：
-  分集 regex `第N集 / N-M集 / EPN`，或含 `全集` / `连续剧` / `剧集`。
+  分集 regex `第N集 / N-M集 / 全N集 / N集全 / EPN`，或含 `全集` / `连续剧` / `剧集`。
 - **要点**：成套剧集（整部/分集/全集），不是单集电影、解说、短剧。
 - **排除**（节选）：解说、混剪、速看、预告、花絮、**短剧**、网盘、打包、漫剧、reaction。
 - ✅ 通过：`XXX电视剧 第01集`、`XXX 全集 1-40集`。
@@ -303,7 +303,9 @@ MEDIA_SERVER_CATALOG_DB=data/catalog.db go run . -catalog-seed
 ### 9.2b 外部 AI / 工具收集结果导入待审
 
 如果候选不是由 `media_server` 实时搜索产生，而是你让其他 AI 或脚本按本指南收集好的固定清单，
-不要直接写运行时快照。推荐交付一个 JSON，然后通过 admin 代理导入 catalog。每条候选可选带
+不要直接写运行时快照。推荐交付一个固定格式 JSON，然后通过 admin 代理导入 catalog。顶层必须是
+`{"items":[...]}`，这也是 `seeds/categories/*.json`、admin Web UI、admin API 和 media_server 内部
+导入接口唯一接受的格式。每条候选可选带
 `status` 字段：
 
 - 省略或 `"pending"`：进入 `pending` 待审队列，仍由 admin 按 9.3 做最后审查（默认，向后兼容）。
@@ -332,7 +334,7 @@ MEDIA_SERVER_CATALOG_DB=data/catalog.db go run . -catalog-seed
 }
 ```
 
-导入方式（两种等价：admin Web UI「导入视频集」面板粘贴 JSON，或 curl 走 admin 代理）：
+导入方式（两种等价：admin Web UI「导入视频集」面板粘贴完整 JSON 对象，或 curl 走 admin 代理）：
 
 ```bash
 curl -X POST https://yinghuoren.com/api/admin/media-center/catalog/import \
@@ -346,6 +348,7 @@ curl -X POST https://yinghuoren.com/api/admin/media-center/catalog/import \
 要求与语义：
 
 - `categoryId` 必须是现有分类；`provider/nativeId/title` 必填。Bilibili 用稳定 BV 号。
+- 顶层必须是 JSON 对象，且包含非空 `items` 数组；不要使用顶层数组。
 - `status` 只接受空 / `pending` / `approved`，其它值整批 400 拒绝。
 - 单次最多 1000 条；重复导入会刷新 `videos` 元数据，但**不会覆盖**既有 `approved/rejected` 审校决定
   （`category_members` 用 `ON CONFLICT DO NOTHING`，`status=approved` 只对**新成员**生效；要改既有

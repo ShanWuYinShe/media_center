@@ -187,6 +187,31 @@ func TestFamilyTheaterFilter(t *testing.T) {
 	}
 }
 
+func TestFamilyTheaterFilterAllowsCompleteEpisodeCountTitle(t *testing.T) {
+	cfg, err := loadContentConfig("src/contentCategories.json")
+	if err != nil {
+		t.Fatalf("load content config: %v", err)
+	}
+	family := mustCategory(t, cfg.Categories, "family-theater")
+
+	for _, item := range []VideoSummary{
+		{
+			Title:           "【乡村爱情6】全50集",
+			Description:     "农村家庭生活剧",
+			DurationSeconds: 120 * 60,
+		},
+		{
+			Title:           "《贫嘴张大民的幸福生活》20集全",
+			Description:     "市井家庭生活电视剧",
+			DurationSeconds: 120 * 60,
+		},
+	} {
+		if score := relevanceScore(item, family); score < 0 {
+			t.Fatalf("expected complete episode-count title to be kept: %q got %d", item.Title, score)
+		}
+	}
+}
+
 func TestRedClassicFilterCoversModernHistory(t *testing.T) {
 	cfg, err := loadContentConfig("src/contentCategories.json")
 	if err != nil {
