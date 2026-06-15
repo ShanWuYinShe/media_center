@@ -336,6 +336,122 @@ func TestInternalDisabledWhenNoToken(t *testing.T) {
 	}
 }
 
+func TestInternalCatalogExportRoundTrip(t *testing.T) {
+	s, c := newInternalTestServer(t, "secret")
+	seedTestMember(t, c, "movies", "bilibili", "BV1a", "片A", 10)
+	seedTestMember(t, c, "tv", "bilibili", "BV1b", "片B", 20)
+	approved := "approved"
+	pin := true
+	rank := int64(3)
+	if _, err := c.ReviewMember("movies", "bilibili", "BV1a", &approved, &pin, &sql.NullInt64{Int64: rank, Valid: true}, "tester"); err != nil {
+		t.Fatalf("approve BV1a: %v", err)
+	}
+
+	// Export all categories: returns both members regardless of status.
+	w := doInternal(s, http.MethodGet, "/internal/catalog/export", "secret", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("export all: %d (%s)", w.Code, w.Body.String())
+	}
+	var exp struct {
+		Items    []internalReviewItem `json:"items"`
+		Count    int                  `json:"count"`
+		Category string               `json:"category"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &exp); err != nil {
+		t.Fatalf("decode export: %v", err)
+	}
+	if exp.Count != 2 || len(exp.Items) != 2 || exp.Category != "all" {
+		t.Fatalf("unexpected export: count=%d category=%q items=%+v", exp.Count, exp.Category, exp.Items)
+	}
+
+	// Filtered export by category returns only that category.
+	w = doInternal(s, http.MethodGet, "/internal/catalog/export?category=movies", "secret", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("export movies: %d", w.Code)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &exp); err != nil {
+		t.Fatalf("decode export movies: %v", err)
+	}
+	if exp.Count != 1 || exp.Items[0].NativeID != "BV1a" || !exp.Items[0].Pinned {
+		t.Fatalf("unexpected movies export: %+v", exp.Items)
+	}
+
+	// Re-import the exported items into a fresh instance faithfully reconstructs
+	// status + pinned + rank.
+	s2, c2 := newInternalTestServer(t, "secret")
+	w = doInternal(s2, http.MethodPost, "/internal/catalog/import", "secret", map[string]any{"items": exp.Items})
+	if w.Code != http.StatusOK {
+		t.Fatalf("reimport: %d (%s)", w.Code, w.Body.String())
+	}
+	got, err := c2.ListMembers("movies", "approved", 0)
+	if err != nil {
+		t.Fatalf("list reimported: %v", err)
+	}
+	if len(got) != 1 || got[0].NativeID != "BV1a" || !got[0].Pinned || !got[0].Rank.Valid || got[0].Rank.Int64 != 3 {
+		t.Fatalf("export->import not faithful: %+v", got)
+	}
+
+	// Unknown category export is rejected.
+	if w := doInternal(s, http.MethodGet, "/internal/catalog/export?category=nope", "secret", nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("export unknown: want 400, got %d", w.Code)
+	}
+}
+
+func TestInternalCatalogDelete(t *testing.T) {
+	s, c := newInternalTestServer(t, "secret")
+	// Same video in two categories: deleting one keeps the video (still referenced).
+	seedTestMember(t, c, "movies", "bilibili", "BVshared", "共享", 5)
+	seedTestMember(t, c, "tv", "bilibili", "BVshared", "共享", 5)
+
+	w := doInternal(s, http.MethodPost, "/internal/catalog/delete", "secret", map[string]any{
+		"categoryId": "movies", "provider": "bilibili", "nativeId": "BVshared",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete shared: %d (%s)", w.Code, w.Body.String())
+	}
+	var del struct {
+		Deleted      int64 `json:"deleted"`
+		VideoDeleted bool  `json:"videoDeleted"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &del); err != nil {
+		t.Fatalf("decode delete: %v", err)
+	}
+	if del.Deleted != 1 || del.VideoDeleted {
+		t.Fatalf("shared delete: video should survive, got %+v", del)
+	}
+	if n, _ := c.CountByStatus("movies", "pending"); n != 0 {
+		t.Fatalf("movies member not removed, count=%d", n)
+	}
+
+	// Deleting the last reference also removes the orphaned video.
+	w = doInternal(s, http.MethodPost, "/internal/catalog/delete", "secret", map[string]any{
+		"categoryId": "tv", "provider": "bilibili", "nativeId": "BVshared",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete last: %d", w.Code)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &del); err != nil {
+		t.Fatalf("decode delete2: %v", err)
+	}
+	if del.Deleted != 1 || !del.VideoDeleted {
+		t.Fatalf("last delete: orphan video should be removed, got %+v", del)
+	}
+
+	// Deleting a nonexistent member returns 404.
+	if w := doInternal(s, http.MethodPost, "/internal/catalog/delete", "secret", map[string]any{
+		"categoryId": "movies", "provider": "bilibili", "nativeId": "BVmissing",
+	}); w.Code != http.StatusNotFound {
+		t.Fatalf("delete missing: want 404, got %d", w.Code)
+	}
+
+	// Missing fields are rejected with 400.
+	if w := doInternal(s, http.MethodPost, "/internal/catalog/delete", "secret", map[string]any{
+		"categoryId": "movies",
+	}); w.Code != http.StatusBadRequest {
+		t.Fatalf("delete bad: want 400, got %d", w.Code)
+	}
+}
+
 func TestInternalReviewFlow(t *testing.T) {
 	s, c := newInternalTestServer(t, "secret")
 	seedTestMember(t, c, "movies", "bilibili", "BV1a", "A", 10)

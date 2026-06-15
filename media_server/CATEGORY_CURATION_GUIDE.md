@@ -354,6 +354,47 @@ curl -X POST https://yinghuoren.com/api/admin/media-center/catalog/import \
   no-op 确认）。用默认 `pending` 导入的仍按 9.3 审查。
 - 外部 AI 应在 `score` 或自己的交付说明中保留判定理由；最终是否通过以 admin 审查为准。
 
+### 9.2c 导出 / 迁移 catalog 数据(部署到其他实例)
+
+审过的视频集是稳定资产,运行时存在 Docker named volume `media_center_data` 的 SQLite 库里(不进版本库)。
+要把它部署到其他 `media_server` 实例或留存备份,用 admin 的**导出**功能(等价两种:Web UI「分类管理」
+页右上「导出全部」/每个分类行「导出」按钮下载 JSON;或 curl 走 admin 代理):
+
+```bash
+# 导出全部成员(所有分类、所有状态)
+curl https://yinghuoren.com/api/admin/media-center/catalog/export -o catalog-all.json
+
+# 只导出某分类 / 某状态(可选 query: category=、status=pending|approved|rejected)
+curl 'https://yinghuoren.com/api/admin/media-center/catalog/export?category=movies&status=approved' -o movies-approved.json
+```
+
+返回 `{"items":[...],"count":N,"category":"all|<分类>","status":"","exportedAt":"<RFC3339>"}`。
+`items` 的字段与 9.2b 导入格式**完全兼容**(含 `status`/`pinned`/`rank`),把导出的 `items` 原样
+POST 到另一处实例的 `/catalog/import` 即可忠实重建分类数据(`approved` 项一步上线,置顶/人工序一并还原):
+
+```bash
+# 把导出文件迁移到另一处实例(导入接口接受裸数组或 {items:[...]} 两种形态)
+curl -X POST https://另一处.example.com/api/admin/media-center/catalog/import \
+  -H 'Content-Type: application/json' --data-binary @catalog-all.json
+```
+
+> 迁移语义沿用 9.2b:`ON CONFLICT DO NOTHING`,只对**新成员**生效,不会覆盖目标实例已有的审校决定。
+
+### 9.2d 彻底删除某个成员(增删改查的「删」)
+
+`reject` 是软标记(行还在,只是 `status=rejected`,可翻案)。若要把一个视频从某分类**彻底移除**,
+用 admin 的删除功能(Web UI 每条目「删除」按钮;或 curl 走 admin 代理):
+
+```bash
+curl -X POST https://yinghuoren.com/api/admin/media-center/catalog/delete \
+  -H 'Content-Type: application/json' \
+  -d '{"categoryId":"movies","provider":"bilibili","nativeId":"BV1xxxx"}'
+```
+
+返回 `{"deleted":1,"videoDeleted":true|false}`:`deleted` 删除的成员行数(0 表示不存在,返回 404);
+`videoDeleted` 表示该视频是否已不被任何分类引用而被连带清理(避免孤儿 `videos` 元数据堆积)。
+同一视频若挂在多个分类下,只删当前分类的成员行,`videos` 保留。
+
 ### 9.3 步骤二：审校(approve / reject)
 
 **首选内置 `-catalog-review` 子命令**(无需手写 SQL),两种模式:

@@ -43,6 +43,10 @@ type CatalogImportItem struct {
 	Score      int
 	// Status 是导入时的目标审校状态:空或 "pending" 记为待审,"approved" 直接收录上线。
 	Status string
+	// Pinned/Rank 为可选的展示次序控制,主要用于 export→import 的忠实回放(把另一处导出的
+	// 置顶/人工序原样带过来)。nil 表示不设置(置顶=false,序=NULL)。只对新成员生效。
+	Pinned *bool
+	Rank   *int64
 }
 
 // OpenCatalog 打开(必要时创建)分类维护数据库,确保 schema 存在。
@@ -233,11 +237,20 @@ ON CONFLICT(provider, native_id) DO UPDATE SET
 			reviewerVal = reviewer
 			reviewedAt = time.Now().UTC().Format(time.RFC3339)
 		}
+		// pinned 默认 false;rank 默认 NULL。export→import 回放时按导出值还原(只对新成员生效)。
+		pinnedVal := 0
+		if item.Pinned != nil && *item.Pinned {
+			pinnedVal = 1
+		}
+		var rankVal any
+		if item.Rank != nil {
+			rankVal = *item.Rank
+		}
 		res, execErr := tx.Exec(`
-INSERT INTO category_members (category_id, provider, native_id, status, score, reviewer, reviewed_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO category_members (category_id, provider, native_id, status, score, pinned, rank, reviewer, reviewed_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(category_id, provider, native_id) DO NOTHING`,
-			categoryID, provider, nativeID, status, item.Score, reviewerVal, reviewedAt,
+			categoryID, provider, nativeID, status, item.Score, pinnedVal, rankVal, reviewerVal, reviewedAt,
 		)
 		if execErr != nil {
 			err = fmt.Errorf("import member %d: %w", i, execErr)
@@ -279,6 +292,59 @@ WHERE category_id=? AND provider=? AND native_id=?`,
 	}
 	affected, _ := res.RowsAffected()
 	return affected, nil
+}
+
+// DeleteMember 硬删除某分类下的一个视频成员(用于"删"——彻底移除,区别于 reject 的软标记)。
+// 在事务内:先删 category_members 行;若该视频已不被任何分类引用,连带删除 videos 元数据(避免
+// 孤儿堆积)。返回删除的成员行数(0 表示不存在)与是否连带删除了 video。
+func (c *Catalog) DeleteMember(categoryID, provider, nativeID string) (deleted int64, videoDeleted bool, err error) {
+	categoryID = strings.TrimSpace(categoryID)
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	nativeID = strings.TrimSpace(nativeID)
+	if categoryID == "" || provider == "" || nativeID == "" {
+		return 0, false, fmt.Errorf("delete member: category/provider/nativeID required")
+	}
+	tx, err := c.db.Begin()
+	if err != nil {
+		return 0, false, fmt.Errorf("begin delete: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	res, execErr := tx.Exec(
+		`DELETE FROM category_members WHERE category_id=? AND provider=? AND native_id=?`,
+		categoryID, provider, nativeID,
+	)
+	if execErr != nil {
+		err = fmt.Errorf("delete member: %w", execErr)
+		return 0, false, err
+	}
+	deleted, _ = res.RowsAffected()
+	if deleted == 0 {
+		err = tx.Commit()
+		return 0, false, err
+	}
+	var remaining int
+	if err = tx.QueryRow(
+		`SELECT COUNT(*) FROM category_members WHERE provider=? AND native_id=?`,
+		provider, nativeID,
+	).Scan(&remaining); err != nil {
+		err = fmt.Errorf("count remaining members: %w", err)
+		return 0, false, err
+	}
+	if remaining == 0 {
+		if _, execErr = tx.Exec(`DELETE FROM videos WHERE provider=? AND native_id=?`, provider, nativeID); execErr != nil {
+			err = fmt.Errorf("delete orphan video: %w", execErr)
+			return 0, false, err
+		}
+		videoDeleted = true
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, false, fmt.Errorf("commit delete: %w", err)
+	}
+	return deleted, videoDeleted, nil
 }
 
 func validMemberStatus(status string) bool {

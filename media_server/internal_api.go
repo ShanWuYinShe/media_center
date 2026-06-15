@@ -111,8 +111,12 @@ func (s *mediaServer) handleInternal(w http.ResponseWriter, r *http.Request) {
 		s.handleInternalOverview(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/internal/catalog/items":
 		s.handleInternalItems(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/internal/catalog/export":
+		s.handleInternalExport(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/internal/catalog/review":
 		s.handleInternalReview(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/internal/catalog/delete":
+		s.handleInternalDelete(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/internal/catalog/import":
 		s.handleInternalImport(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/internal/catalog/seed":
@@ -146,6 +150,10 @@ type internalImportItem struct {
 	// Status 是目标审校状态:空或 "pending" 记为待审,"approved" 直接收录上线(用于"已审核
 	// 视频集一步上线")。只对新成员生效,已存在的成员状态不会被覆盖。
 	Status string `json:"status,omitempty"`
+	// Pinned/Rank 为可选展示次序控制,主要用于另一处 export 出来的数据原样回放(忠实迁移
+	// 置顶/人工序)。省略即不设置。只对新成员生效。
+	Pinned *bool  `json:"pinned,omitempty"`
+	Rank   *int64 `json:"rank,omitempty"`
 }
 
 // handleInternalImport 把外部工具/AI 已收集并初筛的视频导入 catalog 待审列表。
@@ -208,6 +216,8 @@ func (s *mediaServer) handleInternalImport(w http.ResponseWriter, r *http.Reques
 			},
 			Score:  item.Score,
 			Status: status,
+			Pinned: item.Pinned,
+			Rank:   item.Rank,
 		})
 	}
 	updatedVideos, imported, approved, skipped, err := s.catalog.ImportPending(items, strings.TrimSpace(req.Reviewer))
@@ -442,5 +452,84 @@ func (s *mediaServer) handleInternalSnapshotsRebuild(w http.ResponseWriter, r *h
 		"immediate": true,
 		"scope":     opCategoryLabel(categories),
 		"note":      "目录直读模式:审核通过(approved)的分类数据已即时对客户端生效,无需重建快照。",
+	})
+}
+
+// internalDeleteRequest 是一次硬删除请求:按 (分类,视频) 定位要彻底移除的成员。
+type internalDeleteRequest struct {
+	CategoryID string `json:"categoryId"`
+	Provider   string `json:"provider"`
+	NativeID   string `json:"nativeId"`
+}
+
+// handleInternalDelete 硬删除某分类下的一个视频成员(增删改查的"删")。区别于 review 的软
+// reject:这里把成员行真正从库中移除;若该视频不再被任何分类引用,连带清理 videos 元数据。
+func (s *mediaServer) handleInternalDelete(w http.ResponseWriter, r *http.Request) {
+	if s.catalog == nil {
+		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "CATALOG_DISABLED", Message: "分类维护数据库未启用。"})
+		return
+	}
+	var req internalDeleteRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "请求体不是合法 JSON。"})
+		return
+	}
+	if strings.TrimSpace(req.CategoryID) == "" || strings.TrimSpace(req.Provider) == "" || strings.TrimSpace(req.NativeID) == "" {
+		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "categoryId/provider/nativeId 不能为空。"})
+		return
+	}
+	deleted, videoDeleted, err := s.catalog.DeleteMember(req.CategoryID, req.Provider, req.NativeID)
+	if err != nil {
+		s.writeError(w, fmt.Errorf("delete member: %w", err))
+		return
+	}
+	if deleted == 0 {
+		s.writeError(w, &apiError{Status: http.StatusNotFound, Code: "NOT_FOUND", Message: "未找到该分类下的视频成员。"})
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted, "videoDeleted": videoDeleted})
+}
+
+// handleInternalExport 导出 catalog 的全部成员(可选按分类筛选),供"把数据部署到其他地方":
+// 返回的每条 item 与导入接口字段兼容(含 status/pinned/rank),把该 JSON 原样 POST 到另一处
+// media_server 的 /internal/catalog/import 即可忠实重建分类数据(approved 项一步上线)。
+func (s *mediaServer) handleInternalExport(w http.ResponseWriter, r *http.Request) {
+	if s.catalog == nil {
+		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "CATALOG_DISABLED", Message: "分类维护数据库未启用。"})
+		return
+	}
+	q := r.URL.Query()
+	category := strings.TrimSpace(q.Get("category"))
+	status := strings.TrimSpace(q.Get("status"))
+	if status != "" && !validMemberStatus(status) {
+		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "status 取值不合法。"})
+		return
+	}
+	if category != "" {
+		if _, ok := s.categoriesByID[category]; !ok {
+			s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "未知分类:" + category})
+			return
+		}
+	}
+	// limit=0 表示不限:一次性导出全部成员。
+	members, err := s.catalog.ListMembers(category, status, 0)
+	if err != nil {
+		s.writeError(w, fmt.Errorf("export members: %w", err))
+		return
+	}
+	items := make([]internalReviewItem, 0, len(members))
+	for _, it := range members {
+		items = append(items, toInternalReviewItem(it))
+	}
+	scope := category
+	if scope == "" {
+		scope = "all"
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"items":      items,
+		"count":      len(items),
+		"category":   scope,
+		"status":     status,
+		"exportedAt": time.Now().UTC().Format(time.RFC3339),
 	})
 }
