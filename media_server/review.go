@@ -13,31 +13,19 @@ import (
 // ReviewOptions 控制 -catalog-review 子命令的行为。
 type ReviewOptions struct {
 	CategoryID string // 限定分类;空=全部分类
-	Auto       bool   // 非交互:按 score 自动 approve 前 TopN 条
-	TopN       int    // auto 模式每分类放行条数;<=0 时用默认
 	DryRun     bool   // 只打印不写库
-	Reviewer   string // 审校留痕;空则按模式填默认
+	Reviewer   string // 审校留痕;空则填默认
 }
 
-// defaultReviewTopN 是 auto 模式每分类默认放行条数,留余量给人工调 rank/pinned。
-const defaultReviewTopN = 20
-
-// runCatalogReview 是 -catalog-review 子命令入口:遍历(指定)分类,把 pending 候选按
-// 模式审校成 approved/rejected。每条决定立即落库,中断不丢已审。
+// runCatalogReview 是 -catalog-review 子命令入口:遍历(指定)分类,交互式逐条把 pending
+// 候选审校成 approved/rejected。每条决定立即落库,中断不丢已审。
 func (s *mediaServer) runCatalogReview(ctx context.Context, opts ReviewOptions) error {
 	if s.catalog == nil {
 		return fmt.Errorf("catalog review: catalog not opened")
 	}
-	if opts.TopN <= 0 {
-		opts.TopN = defaultReviewTopN
-	}
 	reviewer := strings.TrimSpace(opts.Reviewer)
 	if reviewer == "" {
-		if opts.Auto {
-			reviewer = "catalog-review-auto"
-		} else {
-			reviewer = "catalog-review-manual"
-		}
+		reviewer = "catalog-review-manual"
 	}
 
 	categories := s.categories
@@ -61,13 +49,6 @@ func (s *mediaServer) runCatalogReview(ctx context.Context, opts ReviewOptions) 
 			log.Printf("catalog review: category=%s no pending", category.ID)
 			continue
 		}
-		if opts.Auto {
-			approved := s.reviewAuto(ctx, category.ID, items, opts, reviewer)
-			pending, _ := s.catalog.CountByStatus(category.ID, "pending")
-			log.Printf("catalog review: category=%s approved=%d rejected=0 skipped=0 dry-run=%t pending=%d",
-				category.ID, approved, opts.DryRun, pending)
-			continue
-		}
 		fmt.Printf("\n=== 审校分类 %s: %d 条待审 ===\n", category.ID, len(items))
 		approved, rejected, skipped := reviewInteractive(os.Stdin, os.Stdout, items, opts, reviewer, s.catalog)
 		pending, _ := s.catalog.CountByStatus(category.ID, "pending")
@@ -75,34 +56,6 @@ func (s *mediaServer) runCatalogReview(ctx context.Context, opts ReviewOptions) 
 			category.ID, approved, rejected, skipped, opts.DryRun, pending)
 	}
 	return nil
-}
-
-// reviewAuto 非交互:items 已按 score DESC 排好,取前 TopN approve,其余留 pending。
-// 进 catalog 的 pending 都已过规则,故只 approve、不自动 reject(reject 留人工)。
-// 返回成功 approve 的条数。
-func (s *mediaServer) reviewAuto(ctx context.Context, categoryID string, items []PendingReviewItem, opts ReviewOptions, reviewer string) int {
-	top := opts.TopN
-	if top > len(items) {
-		top = len(items)
-	}
-	approved := 0
-	for i := 0; i < top; i++ {
-		if ctx.Err() != nil {
-			break
-		}
-		it := items[i]
-		if opts.DryRun {
-			log.Printf("catalog review[dry-run]: would approve %s | %s | %s (score=%d)", categoryID, it.NativeID, it.Title, it.Score)
-			approved++
-			continue
-		}
-		if _, err := s.catalog.SetMemberStatus(categoryID, it.Provider, it.NativeID, "approved", reviewer); err != nil {
-			log.Printf("catalog review: approve failed %s/%s: %v", categoryID, it.NativeID, err)
-			continue
-		}
-		approved++
-	}
-	return approved
 }
 
 // reviewInteractive 逐条展示候选并读取 stdin 命令,落库到 catalog。生产入口固定用 os.Stdin/Stdout。
@@ -173,7 +126,7 @@ func normalizeReviewCmd(raw string) string {
 
 // writeReviewCard 打印一条待审候选的可读卡片,含原始观看链接便于人工核对。
 func writeReviewCard(w io.Writer, idx, total int, it PendingReviewItem) {
-	fmt.Fprintf(w, "\n[%d/%d] (%s · score=%d) %s\n", idx, total, it.CategoryID, it.Score, strings.TrimSpace(it.Title))
+	fmt.Fprintf(w, "\n[%d/%d] (%s) %s\n", idx, total, it.CategoryID, strings.TrimSpace(it.Title))
 	if len(it.Creators) > 0 {
 		fmt.Fprintf(w, "  UP:    %s\n", strings.Join(it.Creators, ", "))
 	}

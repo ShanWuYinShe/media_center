@@ -705,7 +705,8 @@ func (s *mediaServer) seedCatalogCategories(ctx context.Context, categories []Co
 				log.Printf("catalog seed: upsert failed id=%s: %v", item.ID, err)
 				continue
 			}
-			isNew, err := s.catalog.AddPendingMember(category.ID, provider, nativeID, relevanceScore(item, category))
+			// 粗略搜索结果统一以 score=0 入库;精准筛选交给 admin 页面的人工/AI 审核。
+			isNew, err := s.catalog.AddPendingMember(category.ID, provider, nativeID, 0)
 			if err != nil {
 				log.Printf("catalog seed: add member failed id=%s: %v", item.ID, err)
 				continue
@@ -746,4 +747,29 @@ func catalogSourceURL(provider, nativeID string) string {
 	default:
 		return ""
 	}
+}
+
+// resolveVideoRef 把任意形式的视频 ID 解析成 (provider, 原生ID)。接受三种写法:
+// ① 公开签名 ID(/videos 等接口返回的 id);② 裸原生 ID(如 bilibili 的 BVxxx);
+// ③ provider:nativeID 显式写法(如 bilibili:BV1xxx)。
+func (s *mediaServer) resolveVideoRef(id string) (provider string, nativeID string, ok bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", "", false
+	}
+	// provider:nativeID 显式写法。公开签名 ID(v1.base64.sig)与裸 BVID 都不含冒号,
+	// 故只有显式写法会命中这里,不会误判。
+	if i := strings.Index(id, ":"); i > 0 {
+		p := strings.ToLower(strings.TrimSpace(id[:i]))
+		n := strings.TrimSpace(id[i+1:])
+		if p != "" && n != "" {
+			return p, n, true
+		}
+	}
+	if s.idCodec != nil {
+		if ref, err := s.idCodec.DecodeVideoRef(id); err == nil && ref.Provider != "" && ref.ID != "" {
+			return strings.ToLower(ref.Provider), ref.ID, true
+		}
+	}
+	return "", "", false
 }

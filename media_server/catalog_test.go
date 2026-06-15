@@ -222,9 +222,8 @@ func TestCategoryVideosPageReadsCatalogDirectly(t *testing.T) {
 		categoriesByID: map[string]ContentCategory{
 			"movies": {ID: "movies", Title: "Movies", Description: "d"},
 		},
-		idCodec:  NewIDCodec("test-secret"),
-		curation: CurationConfig{categories: map[string]CategoryCuration{}},
-		catalog:  c,
+		idCodec: NewIDCodec("test-secret"),
+		catalog: c,
 	}
 	resp, err := s.categoryVideosPage(nil, s.categoriesByID["movies"], 1, 10)
 	if err != nil {

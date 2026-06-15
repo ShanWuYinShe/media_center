@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"strings"
 	"testing"
 )
@@ -89,63 +88,6 @@ func TestPendingReviewsExcludesReviewed(t *testing.T) {
 	}
 }
 
-func TestReviewAutoApprovesTopN(t *testing.T) {
-	c := openTestCatalog(t)
-	mustUpsert(t, c, "bilibili", "BV1a", "A", 1800)
-	mustUpsert(t, c, "bilibili", "BV1b", "B", 1800)
-	mustUpsert(t, c, "bilibili", "BV1c", "C", 1800)
-	addPending(t, c, "movies", "BV1a", 5)
-	addPending(t, c, "movies", "BV1b", 30)
-	addPending(t, c, "movies", "BV1c", 20)
-
-	items, err := c.PendingReviews(PendingReviewsOptions{CategoryID: "movies"})
-	if err != nil {
-		t.Fatalf("pending: %v", err)
-	}
-	s := &mediaServer{catalog: c}
-	approved := s.reviewAuto(context.Background(), "movies", items, ReviewOptions{TopN: 2}, "tester")
-	if approved != 2 {
-		t.Fatalf("approved=%d want 2", approved)
-	}
-	// top2 = BV1b(30), BV1c(20) 被 approve;BV1a(5) 仍 pending。
-	approvedN, _ := c.CountByStatus("movies", "approved")
-	pendingN, _ := c.CountByStatus("movies", "pending")
-	if approvedN != 2 || pendingN != 1 {
-		t.Fatalf("approved=%d pending=%d, want 2/1", approvedN, pendingN)
-	}
-	got, _ := c.ApprovedForCategory("movies", 0)
-	if len(got) != 2 || got[0].NativeID != "BV1b" || got[1].NativeID != "BV1c" {
-		t.Fatalf("approved order = %v, want [BV1b BV1c]", idsOf(got))
-	}
-
-	// TopN > 剩余 pending 数:不 panic,只 approve 实际剩下的。
-	remaining, _ := c.PendingReviews(PendingReviewsOptions{CategoryID: "movies"})
-	approved2 := s.reviewAuto(context.Background(), "movies", remaining, ReviewOptions{TopN: 100}, "tester")
-	if approved2 != 1 {
-		t.Fatalf("approved2=%d want 1 (only BV1a left)", approved2)
-	}
-}
-
-func TestReviewAutoDryRunDoesNotWrite(t *testing.T) {
-	c := openTestCatalog(t)
-	mustUpsert(t, c, "bilibili", "BV1a", "A", 1800)
-	mustUpsert(t, c, "bilibili", "BV1b", "B", 1800)
-	addPending(t, c, "movies", "BV1a", 30)
-	addPending(t, c, "movies", "BV1b", 20)
-	items, _ := c.PendingReviews(PendingReviewsOptions{CategoryID: "movies"})
-
-	s := &mediaServer{catalog: c}
-	approved := s.reviewAuto(context.Background(), "movies", items, ReviewOptions{TopN: 2, DryRun: true}, "tester")
-	if approved != 2 {
-		t.Fatalf("dry-run approved=%d want 2 (计数仍应累加)", approved)
-	}
-	approvedN, _ := c.CountByStatus("movies", "approved")
-	pendingN, _ := c.CountByStatus("movies", "pending")
-	if approvedN != 0 || pendingN != 2 {
-		t.Fatalf("dry-run wrote to db: approved=%d pending=%d, want 0/2", approvedN, pendingN)
-	}
-}
-
 func TestReviewInteractiveReadsCommands(t *testing.T) {
 	c := openTestCatalog(t)
 	mustUpsert(t, c, "bilibili", "BV1a", "A", 1800)
@@ -178,8 +120,8 @@ func TestReviewInteractiveReadsCommands(t *testing.T) {
 	if len(got) != 1 || got[0].NativeID != "BV1a" {
 		t.Fatalf("approved item=%v, want BV1a", idsOf(got))
 	}
-	// 卡片应打印标题与原始链接信息(便于人工核对)。
-	if !strings.Contains(out.String(), "BV1a") || !strings.Contains(out.String(), "score=") {
-		t.Fatalf("review card missing id/score in output:\n%s", out.String())
+	// 卡片应打印候选标识与审校操作提示(便于人工核对与决策)。
+	if !strings.Contains(out.String(), "BV1a") || !strings.Contains(out.String(), "[a]pprove") {
+		t.Fatalf("review card missing id/prompt in output:\n%s", out.String())
 	}
 }

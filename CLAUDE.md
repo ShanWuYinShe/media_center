@@ -31,15 +31,13 @@ go test -C media_server ./...
 
 - **技术栈**：Go；HTTP 服务监听 `PORT`（容器内默认 8787）。
 - **内容分类**：`media_server/src/contentCategories.json`；线上由 `workwork` 的 admin 生成运行时分类配置注入。
-- **分类快照（预聚合 + 定期刷新 + 本地审校）**：分类视频列表由 `media_server` 预先聚合成“快照”落盘，请求直接从快照分页返回（秒回、稳定），后台按间隔定期重建；快照缺失/为空时回退实时聚合，保证不出现空页。详见 `media_server/snapshot.go`、`curation.go`。
-  - **离线生成 + 人工审校**：`go run -C media_server . -build-snapshots` 在本地把各分类先搜好落盘后退出，便于人工检查再上线。
-  - **本地审校 `media_server/src/curation.json`**（提交进仓库）：按分类配置 `blockIds`（按视频 ID 永久剔除）、`blockTitleContains`（按标题关键词剔除）、`pinIds`（精品强制置顶/收录），构建快照时套用，保证结果更精确。审校/置顶**推荐用稳定原生 ID**（`provider:nativeID`，如 `bilibili:BV1xxx`，或裸 BV 号），不随签名密钥变化；也兼容接口返回的公开签名 id。
-  - **分类判定与维护指南**：`media_server/CATEGORY_CURATION_GUIDE.md` 详述“一个视频能否加入某分类”的判定标准（与 `relevanceScore` 一致）、视频 ID 约定、推荐的 SQLite 维护库结构，以及下方“目录(catalog)”命令的完整使用流程，供外部工具/人工维护分类数据。
-  - **种子数据 `seeds/categories/`**（提交进仓库，唯一真相源）：经 B站抓取 + AI 审查 + 播放预检验证的分类视频列表。每个分类一个 JSON 文件，顶层固定为 `{"items":[...]}`，与 `POST /internal/catalog/import` API 完全一致；不要使用顶层数组。部署时通过内部 API 分批导入服务器 catalog，再 auto-approve + 重建快照即上线。详见 `seeds/README.md`。
-  - **分类维护数据库 catalog（SQLite，system-of-record）**：`media_server/catalog.go` 用纯 Go 的 `modernc.org/sqlite`（无需 cgo）落地维护库。流程：把 `seeds/categories/` 的种子数据通过 `/internal/catalog/import` 导入为 `pending` 候选（重复导入只新增、不覆盖已有审校决定）→ 用 `-catalog-review` 子命令（交互或 `-catalog-review-auto` 按分数批量）把候选改 `approved`/`rejected`、可选设 `pinned`/`rank`（也可用任意 SQLite 工具直接改库）→ 构建快照时**目录优先(catalog-first)**：某分类有 `approved` 行就直接发库里的固定清单（顺序 `pinned`>`rank`>`score`，仅再套 curation.json 的 block 剔噪、不重排），没有则回退实时聚合 + curation.json。打开失败时优雅降级为实时聚合，不影响可用性。
-  - **快照只存原始数据**：快照落盘的是上游原始字段（缩略图为原始地址），签名 `/asset` 代理 URL 在每次请求时再生成，绝不把 sig/token 写进快照文件。维护库 catalog 同样只存原始字段。
-  - **快照/数据库文件不提交**：运行时快照写到 `MEDIA_SERVER_SNAPSHOT_DIR`（默认 `data/snapshots`，已 gitignore）；catalog 库写到 `MEDIA_SERVER_CATALOG_DB`（默认 `data/catalog.db`，含 `-wal`/`-shm` 旁文件，已 gitignore）；线上由 `workwork` 挂卷 + 后台刷新生成。
-  - **相关环境变量**：`MEDIA_SERVER_SNAPSHOT_ENABLED`（默认 true，控制后台刷新）、`MEDIA_SERVER_SNAPSHOT_DIR`、`MEDIA_SERVER_SNAPSHOT_REFRESH_HOURS`（默认 6）、`MEDIA_SERVER_SNAPSHOT_TARGET_SIZE`（默认 60）、`MEDIA_SERVER_CURATION_FILE`（默认分类配置同目录下 `curation.json`）、`MEDIA_SERVER_CATALOG_DB`（默认 `data/catalog.db`，置空则关闭 catalog）。
+- **分类数据(catalog,SQLite,system-of-record)**:分类视频列表由 `media_server/catalog.go` 用纯 Go 的 `modernc.org/sqlite`(无需 cgo)落地维护库;分类浏览直接分页读取该库的 `approved` 行(见 `catalog_serve.go`),**绝不做实时上游搜索**;没有 `approved` 数据时返回空列表。
+  - **种子数据 `seeds/categories/`**(提交进仓库):各分类的**粗略候选列表**(粗略搜索 / AI 收集汇总),每个分类一个 JSON,顶层固定 `{"items":[...]}`,与 `POST /internal/catalog/import` 一致;不要用顶层数组。详见 `seeds/README.md`。
+  - **流程:粗略搜索 → 导入 pending → 人工 + AI 审核 → 上线 approved**:候选经 `/internal/catalog/import` 导入为 `pending`(重复导入只新增,绝不覆盖已有审核决定)→ 在 **admin 页面由人工 + AI 模型审核** approve/reject、可选 `pinned`/`rank`(经 `/internal/catalog/*`,也可用 `-catalog-review` 交互命令或任意 SQLite 工具)→ 分类浏览即发该库 `approved` 清单(顺序 `pinned` > `rank` > `score`)。
+  - **粗略搜索(seed)**:`go run -C media_server . -catalog-seed`(或 admin 的 seed 端点)按分类抓一批**粗略搜索结果**灌为 `pending`。**代码侧只做粗略搜索 + 合规过滤(成人/色情内容),不做分类相关性等精准筛选**——精准筛选一律交给 admin 的人工 + AI 审核。
+  - **只存原始数据**:catalog 只存上游原始字段(缩略图为原始地址),签名 `/asset` 代理 URL 每次请求再生成,绝不写进库。
+  - **数据库文件不提交**:catalog 库写到 `MEDIA_SERVER_CATALOG_DB`(默认 `data/catalog.db`,含 `-wal`/`-shm` 旁文件,已 gitignore);线上由 `workwork` 挂卷生成。
+  - **相关环境变量**:`MEDIA_SERVER_CATALOG_DB`(默认 `data/catalog.db`,置空则关闭 catalog,分类浏览返回空)。
 - **点播解析**：通过本仓库内的内部 `vod_extractor` 服务解析公开视频点播地址，本服务不内置 yt-dlp。
 - **部署**：`workwork` 以 git submodule 引用本仓库，docker-compose 从 `services/media_center/media_server` 构建。
 

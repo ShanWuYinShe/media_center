@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sort"
 	"strings"
 )
 
@@ -23,7 +22,6 @@ type mediaServer struct {
 	assetClient    *http.Client
 	assetCache     *AssetCache
 	deliveryModes  map[string]string
-	curation       CurationConfig
 	catalog        *Catalog
 	ops            *opTracker
 }
@@ -32,8 +30,6 @@ func main() {
 	catalogSeed := flag.Bool("catalog-seed", false, "把各分类实时聚合结果作为 pending 候选写入分类数据库后退出(供外部工具审校)")
 	catalogReview := flag.Bool("catalog-review", false, "审校分类维护数据库的 pending 候选(approve/reject)后退出")
 	catalogReviewCategory := flag.String("catalog-review-category", "", "限定只审校某个分类 ID(默认全部)")
-	catalogReviewAuto := flag.Bool("catalog-review-auto", false, "非交互:按分数自动 approve 前 N 条(reject 留人工)")
-	catalogReviewTop := flag.Int("catalog-review-top", defaultReviewTopN, "auto 模式每分类放行条数(默认 20)")
 	catalogReviewDryRun := flag.Bool("catalog-review-dry-run", false, "只打印审校结果,不写库")
 	catalogReviewReviewer := flag.String("catalog-review-reviewer", "", "审校人留痕(默认按模式自动填)")
 	flag.Parse()
@@ -61,7 +57,6 @@ func main() {
 		assetClient:    newAssetHTTPClient(),
 		assetCache:     NewAssetCache(config.AssetCacheDir, config.AssetCacheMax),
 		deliveryModes:  sourceDeliveryModes(content.Sources, enabledSources),
-		curation:       loadCuration(config.CurationPath),
 		ops:            &opTracker{},
 	}
 
@@ -88,20 +83,18 @@ func main() {
 		return
 	}
 
-	// 审校分类维护数据库的 pending 候选:交互逐条,或 -catalog-review-auto 按分数批量 approve。
+	// 审校分类维护数据库的 pending 候选:交互式逐条 approve/reject。
 	if *catalogReview {
 		if server.catalog == nil {
 			log.Fatalf("catalog review requires a catalog db (set MEDIA_SERVER_CATALOG_DB)")
 		}
 		opts := ReviewOptions{
 			CategoryID: *catalogReviewCategory,
-			Auto:       *catalogReviewAuto,
-			TopN:       *catalogReviewTop,
 			DryRun:     *catalogReviewDryRun,
 			Reviewer:   *catalogReviewReviewer,
 		}
-		log.Printf("reviewing catalog pending (db=%s, auto=%t, top=%d, category=%q, dry-run=%t)…",
-			config.CatalogDBPath, opts.Auto, opts.TopN, opts.CategoryID, opts.DryRun)
+		log.Printf("reviewing catalog pending (db=%s, category=%q, dry-run=%t)…",
+			config.CatalogDBPath, opts.CategoryID, opts.DryRun)
 		if err := server.runCatalogReview(context.Background(), opts); err != nil {
 			log.Fatalf("catalog review: %v", err)
 		}
@@ -222,7 +215,6 @@ func (s *mediaServer) categoryVideosPage(
 			for _, cv := range items {
 				summaries = append(summaries, s.summaryFromCatalogVideo(cv))
 			}
-			summaries = s.applyCurationBlocks(category.ID, summaries)
 			return SearchResponse{
 				Category: &PublicCategory{ID: category.ID, Title: category.Title, Description: category.Description},
 				Page:     page,
@@ -332,47 +324,16 @@ func (s *mediaServer) searchProviders(ctx context.Context, query string, page in
 	return SearchResponse{Query: query, Page: page, PageSize: pageSize, Total: total, Items: items}, nil
 }
 
-func (s *mediaServer) collectCategoryPage(
-	ctx context.Context,
-	category ContentCategory,
-	page int,
-	pageSize int,
-) (SearchResponse, error) {
-	targetCount := page * pageSize
-	items, total, err := s.collectCategoryItems(ctx, category, targetCount, categoryFetchBudget(targetCount))
-	if err != nil {
-		return SearchResponse{}, err
-	}
-	start := (page - 1) * pageSize
-	if start > len(items) {
-		start = len(items)
-	}
-	end := min(start+pageSize, len(items))
-	return SearchResponse{
-		Query:    "",
-		Category: &PublicCategory{ID: category.ID, Title: category.Title, Description: category.Description},
-		Page:     page,
-		PageSize: pageSize,
-		Total:    total,
-		Items:    items[start:end],
-	}, nil
-}
-
-// collectCategoryItems 聚合某分类的完整候选列表(已按相关性打分、去重、排序),返回完整
-// 列表与 total。实时分页(collectCategoryPage)与 catalog seed 都复用它,
-// 区别只在 targetCount 与 fetchBudget。
+// collectCategoryItems 聚合某分类的粗略候选列表(去重 + 合规过滤,不做相关性筛选/排序),
+// 返回完整列表与 total。精准筛选由 admin 页面的人工审核与 AI 模型判断完成。
+// 仅 catalog seed 复用它,把粗略搜索结果作为 pending 候选写入分类数据库。
 func (s *mediaServer) collectCategoryItems(
 	ctx context.Context,
 	category ContentCategory,
 	targetCount int,
 	fetchBudget int,
 ) ([]VideoSummary, int, error) {
-	type scoredItem struct {
-		item  VideoSummary
-		score int
-		order int
-	}
-	collected := make([]scoredItem, 0, targetCount)
+	collected := make([]VideoSummary, 0, targetCount)
 	seen := make(map[string]struct{}, targetCount)
 	total := 0
 	fetches := 0
@@ -397,7 +358,7 @@ func (s *mediaServer) collectCategoryItems(
 	}
 	// 限制单次请求向上游发起的搜索次数,避免“多搜索词 × 多页 × 多源”放大延迟;
 	// 但至少要保证每个 (源 × 搜索词) 对都被抓取一次,否则靠后的搜索词永远拿不到,
-	// 多搜索词聚合形同虚设(典型表现:过滤较严的分类首页结果寥寥)。
+	// 多搜索词聚合形同虚设(典型表现:结果寥寥)。
 	if fetchBudget < len(pairs) {
 		fetchBudget = len(pairs)
 	}
@@ -415,7 +376,7 @@ collect:
 			result, err := pair.provider.Search(ctx, pair.query, providerPage, 50, s.idCodec)
 			fetches++
 			if err != nil {
-				// 单个搜索词/分页失败不应让整页 500:标记该词不再抓,继续聚合其余结果,
+				// 单个搜索词/分页失败不应让整批 500:标记该词不再抓,继续聚合其余结果,
 				// 只有在一条结果都没有时才把错误透出。
 				if len(collected) > 0 {
 					pair.exhausted = true
@@ -439,15 +400,11 @@ collect:
 					continue
 				}
 				seen[item.ID] = struct{}{}
-				score := relevanceScore(item, category)
-				if score < 0 {
+				// 合规过滤(成人/色情内容)是硬性要求,与“分类相关性筛选”无关,予以保留。
+				if isDisallowedContent(item) {
 					continue
 				}
-				collected = append(collected, scoredItem{
-					item:  item,
-					score: score,
-					order: len(collected),
-				})
+				collected = append(collected, item)
 			}
 			if len(collected) >= targetCount {
 				break collect
@@ -457,18 +414,8 @@ collect:
 			break
 		}
 	}
-	sort.SliceStable(collected, func(i, j int) bool {
-		if collected[i].score == collected[j].score {
-			return collected[i].order < collected[j].order
-		}
-		return collected[i].score > collected[j].score
-	})
-	items := make([]VideoSummary, 0, len(collected))
-	for _, item := range collected {
-		items = append(items, item.item)
-	}
-	total = max(total, len(items))
-	return items, total, nil
+	total = max(total, len(collected))
+	return collected, total, nil
 }
 
 // categoryQueriesForProvider 返回某个源在聚合该分类时使用的搜索词列表。
@@ -483,19 +430,6 @@ func (s *mediaServer) categoryQueriesForProvider(category ContentCategory, provi
 		return category.Queries
 	}
 	return []string{category.Query}
-}
-
-// categoryFetchBudget 估算单次分类分页请求允许的上游搜索次数:按目标条数推算需要的页数,
-// 再留出冗余(很多结果会被相关性过滤掉),并设上下限保证既能填满首页又不过度放大延迟。
-func categoryFetchBudget(targetCount int) int {
-	budget := targetCount/8 + 4
-	if budget < 6 {
-		budget = 6
-	}
-	if budget > 24 {
-		budget = 24
-	}
-	return budget
 }
 
 func dedupeVideoSummaries(items []VideoSummary) []VideoSummary {
@@ -701,88 +635,16 @@ func (s *mediaServer) applyDeliveryToDetailsForProvider(base, providerID string,
 	s.applyDeliveryToOptionsForProvider(base, providerID, details.PlaybackOptions)
 }
 
-func relevanceScore(item VideoSummary, category ContentCategory) int {
+// isDisallowedContent 判断候选是否命中成人/色情等不合规内容黑名单。
+// 这是合规硬性要求(只处理公开、合规内容),与“分类相关性筛选”无关,
+// 因此在粗略搜索阶段保留;其余精准筛选交由 admin 页面的人工/AI 审核。
+func isDisallowedContent(item VideoSummary) bool {
 	text := strings.ToLower(strings.Join([]string{
 		item.Title,
 		item.Description,
 		strings.Join(item.Creators, " "),
 	}, " "))
-	if containsAny(text, category.Excludes) {
-		return -1
-	}
-	// 成人 / 三级 / 色情内容一律过滤:合规要求,也满足“电影适合全家观看、不要色情三级片”。
-	if containsAny(text, adultContentExcludes) {
-		return -1
-	}
-	if minDuration := categoryMinDuration(category); minDuration > 0 &&
-		item.DurationSeconds > 0 && item.DurationSeconds < int64(minDuration) {
-		return -1
-	}
-	keywordScore := 0
-	for index, keyword := range category.Keywords {
-		normalized := strings.ToLower(strings.TrimSpace(keyword))
-		if normalized == "" || !strings.Contains(text, normalized) {
-			continue
-		}
-		keywordScore += max(1, len(category.Keywords)-index)
-	}
-	switch category.ID {
-	case "dota-zone":
-		// dota1 对局/录像/路人局/解说/精彩集锦优先;dota2 等其余 dota 内容次之;
-		// 与 dota 无关的内容(即便命中了通用关键词)直接淘汰。
-		switch {
-		case strings.Contains(text, "dota1"), strings.Contains(text, "dota 1"), strings.Contains(text, "魔兽争霸"), strings.Contains(text, "allstars"):
-			return keywordScore + 30
-		case strings.Contains(text, "dota"), strings.Contains(text, "dota2"), strings.Contains(text, "ti"):
-			return keywordScore + 5
-		default:
-			return -1
-		}
-	case "movies":
-		if keywordScore <= 0 || !(strings.Contains(text, "完整版") || strings.Contains(text, "全片") || strings.Contains(text, "正片")) {
-			return -1
-		}
-	case "tv-series":
-		if keywordScore <= 0 || !tvSeriesEpisodePattern.MatchString(text) && !strings.Contains(text, "全集") && !strings.Contains(text, "连续剧") && !strings.Contains(text, "剧集") {
-			return -1
-		}
-	case "family-theater":
-		// 家庭剧场:必须是剧集(整部/连续剧/分集),且命中都市/农村/家庭生活主题,
-		// 排除把电影/解说/短剧混进来的噪声。
-		if keywordScore <= 0 {
-			return -1
-		}
-		isSeries := tvSeriesEpisodePattern.MatchString(text) ||
-			strings.Contains(text, "全集") || strings.Contains(text, "连续剧") ||
-			strings.Contains(text, "剧集") || strings.Contains(text, "电视剧")
-		if !isSeries || !containsAny(text, familyThemeTerms) {
-			return -1
-		}
-	case "red-classic":
-		// 红色经典:辛亥革命至今与中国相关的历史/革命/战争题材,偏纪录片/历史性质。
-		if keywordScore <= 0 || !containsAny(text, redClassicThemeTerms) {
-			return -1
-		}
-	default:
-		if keywordScore <= 0 {
-			return -1
-		}
-	}
-	return keywordScore
-}
-
-// categoryMinDuration 返回分类的最短时长门槛(秒)。优先用配置显式值;
-// 否则按分类内置默认:dota 允许较短的集锦/解说,其余长视频分类用 20 分钟门槛。
-func categoryMinDuration(category ContentCategory) int {
-	if category.MinDurationSeconds > 0 {
-		return category.MinDurationSeconds
-	}
-	switch category.ID {
-	case "dota-zone":
-		return 3 * 60
-	default:
-		return 20 * 60
-	}
+	return containsAny(text, adultContentExcludes)
 }
 
 // adultContentExcludes 是跨分类的成人/色情内容黑名单(全部小写匹配)。
@@ -791,30 +653,6 @@ var adultContentExcludes = []string{
 	"三级片", "三級片", "情色", "色情", "成人电影", "成人影片", "限制级", "限制級",
 	"18禁", "r18", "里番", "裏番", "无码", "無碼", "黄片", "黄色电影", "伦理片", "倫理片",
 	"性爱", "性愛", "激情戏", "激情戲", "床戏", "床戲", "福利姬", "擦边", "擦邊",
-}
-
-// familyThemeTerms 标记“家庭剧场”要保留的都市/农村/家庭生活主题。
-// 既有通用的家庭生活信号,也收录几个公认的家庭剧名,提升真实长剧的召回率;
-// 短剧/穿越/总裁等噪声靠分类 excludes 过滤,二者配合保证“多且对味”。
-var familyThemeTerms = []string{
-	"家庭", "都市", "生活", "农村", "乡村", "家长里短", "婆媳", "情感", "年代",
-	"婚姻", "亲情", "母女", "父子", "邻里", "市井", "家长", "夫妻", "婆婆", "媳妇",
-	"父母", "一家人", "一家", "全家", "老伴", "老两口", "儿女", "闺女", "妯娌",
-	"街坊", "邻居", "胡同", "四合院", "大杂院", "大院", "过日子", "柴米油盐",
-	"烟火", "离婚", "相亲", "家务", "赡养", "抚养", "鸡毛蒜皮",
-	"父母爱情", "金婚", "情满四合院",
-}
-
-// redClassicThemeTerms 标记“红色经典”要保留的、与中国相关的革命/战争/历史题材
-// (辛亥革命至今)。刻意只放中国相关的具体词,不放“历史/纪录片/战争”这类泛词,
-// 避免把外国历史(如二战德国)等无关内容放进来。
-var redClassicThemeTerms = []string{
-	"红色", "革命", "辛亥革命", "辛亥", "北伐", "长征", "抗战", "抗日", "解放战争", "解放军",
-	"红军", "八路军", "新四军", "游击", "抗美援朝", "志愿军", "对越", "自卫反击", "珍宝岛",
-	"中苏", "对印", "建党", "建国", "开国大典", "渡江", "淮海", "辽沈", "平津", "南昌起义",
-	"井冈山", "延安", "西路军", "上甘岭", "英雄儿女", "地道战", "地雷战", "闪闪的红星",
-	"铁道游击队", "董存瑞", "狼牙山", "小兵张嘎", "南征北战", "红色娘子军", "智取威虎山",
-	"林海雪原", "平原游击队", "渡江侦察记", "永不消逝的电波",
 }
 
 func containsAny(text string, terms []string) bool {

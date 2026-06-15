@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -24,7 +23,6 @@ type AppConfig struct {
 	YouTubeAPIKey    string
 	AssetCacheDir    string
 	AssetCacheMax    int64
-	CurationPath     string
 	// 分类维护数据库(SQLite, system of record)。分类浏览直接分页查询 approved 行;
 	// 路径为空或打开失败时优雅降级为空分类列表,详见 catalog.go。
 	CatalogDBPath string
@@ -66,11 +64,6 @@ func loadAppConfig() (AppConfig, error) {
 			"/config/media-center-app.apk",
 		),
 	}
-	cfg.CurationPath = firstNonEmpty(
-		os.Getenv("MEDIA_SERVER_CURATION_FILE"),
-		os.Getenv("CURATION_FILE"),
-		defaultCurationPath(cfg.CategoriesPath),
-	)
 	if cfg.SigningKey == "" {
 		random := make([]byte, 32)
 		if _, err := rand.Read(random); err != nil {
@@ -126,15 +119,13 @@ func loadContentConfig(path string) (contentConfig, error) {
 			return contentConfig{}, fmt.Errorf("category %s must define searchQuery/searchQueries or keywords", item.ID)
 		}
 		categories = append(categories, ContentCategory{
-			ID:                 item.ID,
-			Title:              item.Title,
-			Description:        item.Description,
-			Query:              queries[0],
-			Queries:            queries,
-			SourceQueries:      cloneStringMap(item.SourceQueries),
-			Keywords:           trimStrings(item.Keywords),
-			Excludes:           trimStrings(item.Excludes),
-			MinDurationSeconds: item.MinDurationSeconds,
+			ID:            item.ID,
+			Title:         item.Title,
+			Description:   item.Description,
+			Query:         queries[0],
+			Queries:       queries,
+			SourceQueries: cloneStringMap(item.SourceQueries),
+			Keywords:      trimStrings(item.Keywords),
 		})
 	}
 	return contentConfig{Sources: normalizeSourceConfig(raw.Sources), Categories: categories}, nil
@@ -254,15 +245,6 @@ func boolFromEnv(raw string, fallback bool) bool {
 	default:
 		return fallback
 	}
-}
-
-// defaultCurationPath 默认把审校文件放在分类配置同目录下的 curation.json。
-func defaultCurationPath(categoriesPath string) string {
-	dir := filepath.Dir(strings.TrimSpace(categoriesPath))
-	if dir == "" || dir == "." {
-		return "src/curation.json"
-	}
-	return filepath.Join(dir, "curation.json")
 }
 
 // normalizeBaseURL 去掉末尾斜杠，便于后续拼接 /asset。空值原样返回。
