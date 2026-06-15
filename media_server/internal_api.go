@@ -117,6 +117,8 @@ func (s *mediaServer) handleInternal(w http.ResponseWriter, r *http.Request) {
 		s.handleInternalImport(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/internal/catalog/seed":
 		s.handleInternalSeed(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/internal/snapshots/rebuild":
+		s.handleInternalSnapshotsRebuild(w, r)
 	default:
 		s.writeError(w, &apiError{Status: http.StatusNotFound, Code: "NOT_FOUND", Message: "请求的资源不存在。"})
 	}
@@ -124,6 +126,9 @@ func (s *mediaServer) handleInternal(w http.ResponseWriter, r *http.Request) {
 
 type internalImportRequest struct {
 	Items []internalImportItem `json:"items"`
+	// Reviewer 记录执行导入的操作者(由可信内部调用方 admin 注入登录用户名),
+	// 仅在 item.status=approved 直接收录时作为审校留痕写入。
+	Reviewer string `json:"reviewer,omitempty"`
 }
 
 type internalImportItem struct {
@@ -138,6 +143,9 @@ type internalImportItem struct {
 	ThumbnailURL    string   `json:"thumbnailUrl,omitempty"`
 	SourceURL       string   `json:"sourceUrl,omitempty"`
 	Score           int      `json:"score,omitempty"`
+	// Status 是目标审校状态:空或 "pending" 记为待审,"approved" 直接收录上线(用于"已审核
+	// 视频集一步上线")。只对新成员生效,已存在的成员状态不会被覆盖。
+	Status string `json:"status,omitempty"`
 }
 
 // handleInternalImport 把外部工具/AI 已收集并初筛的视频导入 catalog 待审列表。
@@ -180,6 +188,11 @@ func (s *mediaServer) handleInternalImport(w http.ResponseWriter, r *http.Reques
 			s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: fmt.Sprintf("items[%d] provider/nativeId/title 不能为空。", i)})
 			return
 		}
+		status := strings.TrimSpace(item.Status)
+		if status != "" && status != "pending" && status != "approved" {
+			s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: fmt.Sprintf("items[%d].status 只能为 pending 或 approved。", i)})
+			return
+		}
 		items = append(items, CatalogImportItem{
 			CategoryID: categoryID,
 			Video: CatalogVideo{
@@ -193,10 +206,11 @@ func (s *mediaServer) handleInternalImport(w http.ResponseWriter, r *http.Reques
 				ThumbnailURL: item.ThumbnailURL,
 				SourceURL:    item.SourceURL,
 			},
-			Score: item.Score,
+			Score:  item.Score,
+			Status: status,
 		})
 	}
-	updatedVideos, imported, skipped, err := s.catalog.ImportPending(items)
+	updatedVideos, imported, approved, skipped, err := s.catalog.ImportPending(items, strings.TrimSpace(req.Reviewer))
 	if err != nil {
 		s.writeError(w, fmt.Errorf("import catalog: %w", err))
 		return
@@ -204,6 +218,7 @@ func (s *mediaServer) handleInternalImport(w http.ResponseWriter, r *http.Reques
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"videos":   updatedVideos,
 		"imported": imported,
+		"approved": approved,
 		"skipped":  skipped,
 	})
 }
@@ -410,4 +425,22 @@ func (s *mediaServer) handleInternalSeed(w http.ResponseWriter, r *http.Request)
 		}
 	}(categories)
 	s.writeJSON(w, http.StatusAccepted, map[string]any{"started": true, "op": s.ops.snapshot()})
+}
+
+// handleInternalSnapshotsRebuild 处理快照重建请求。当前 media_server 为"目录直读(catalog-first)"
+// 模式:分类浏览每次请求直接分页读取 catalog 的 approved 行,审核通过的数据即时生效,没有需要
+// 预重建的快照层。为保持 admin/前端契约稳定并避免误导,这里校验可选的 {"category":"id"} body
+// 后返回成功,并说明数据已即时生效。(未来若引入快照预聚合层,可在此触发真正的重建。)
+func (s *mediaServer) handleInternalSnapshotsRebuild(w http.ResponseWriter, r *http.Request) {
+	categories, apiErr := s.internalCategoriesFromBody(r)
+	if apiErr != nil {
+		s.writeError(w, apiErr)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"rebuilt":   true,
+		"immediate": true,
+		"scope":     opCategoryLabel(categories),
+		"note":      "目录直读模式:审核通过(approved)的分类数据已即时对客户端生效,无需重建快照。",
+	})
 }

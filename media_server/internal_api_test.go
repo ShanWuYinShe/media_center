@@ -256,6 +256,78 @@ func TestInternalCatalogImportCreatesPendingOnly(t *testing.T) {
 	}
 }
 
+func TestInternalCatalogImportApprovedGoesLive(t *testing.T) {
+	s, c := newInternalTestServer(t, "secret")
+	w := doInternal(s, http.MethodPost, "/internal/catalog/import", "secret", map[string]any{
+		"reviewer": "alice",
+		"items": []map[string]any{
+			{
+				"categoryId": "movies",
+				"provider":   "bilibili",
+				"nativeId":   "BVlive",
+				"title":      "已审核正片",
+				"status":     "approved",
+				"score":      9,
+			},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("import status = %d, body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Videos, Imported, Approved, Skipped int
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode import resp: %v", err)
+	}
+	if resp.Imported != 1 || resp.Approved != 1 || resp.Skipped != 0 {
+		t.Fatalf("unexpected import counts: %+v", resp)
+	}
+	// Approved import is immediately visible to clients via the approved page.
+	items, total, err := c.ApprovedPage("movies", 1, 10)
+	if err != nil {
+		t.Fatalf("approved page: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].NativeID != "BVlive" {
+		t.Fatalf("approved import not live: total=%d items=%+v", total, items)
+	}
+	// Reviewer is recorded on the approved member.
+	members, err := c.ListMembers("movies", "approved", 0)
+	if err != nil {
+		t.Fatalf("list approved: %v", err)
+	}
+	if len(members) != 1 || members[0].Reviewer != "alice" {
+		t.Fatalf("reviewer not recorded: %+v", members)
+	}
+}
+
+func TestInternalCatalogImportRejectsBadStatus(t *testing.T) {
+	s, _ := newInternalTestServer(t, "secret")
+	w := doInternal(s, http.MethodPost, "/internal/catalog/import", "secret", map[string]any{
+		"items": []map[string]any{
+			{"categoryId": "movies", "provider": "bilibili", "nativeId": "BVx", "title": "T", "status": "bogus"},
+		},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("bad status: want 400, got %d (body=%s)", w.Code, w.Body.String())
+	}
+}
+
+func TestInternalSnapshotsRebuild(t *testing.T) {
+	s, _ := newInternalTestServer(t, "secret")
+	// catalog-first: rebuild is an immediate-effect confirmation, returns 200.
+	if w := doInternal(s, http.MethodPost, "/internal/snapshots/rebuild", "secret", nil); w.Code != http.StatusOK {
+		t.Fatalf("rebuild all: want 200, got %d (body=%s)", w.Code, w.Body.String())
+	}
+	if w := doInternal(s, http.MethodPost, "/internal/snapshots/rebuild", "secret", map[string]any{"category": "movies"}); w.Code != http.StatusOK {
+		t.Fatalf("rebuild one: want 200, got %d", w.Code)
+	}
+	// Unknown category is rejected with 400.
+	if w := doInternal(s, http.MethodPost, "/internal/snapshots/rebuild", "secret", map[string]any{"category": "nope"}); w.Code != http.StatusBadRequest {
+		t.Fatalf("rebuild unknown: want 400, got %d", w.Code)
+	}
+}
+
 func TestInternalDisabledWhenNoToken(t *testing.T) {
 	s, _ := newInternalTestServer(t, "")
 	// Even with a header, an unset token disables the whole /internal tree (404).

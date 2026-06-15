@@ -41,6 +41,8 @@ type CatalogImportItem struct {
 	CategoryID string
 	Video      CatalogVideo
 	Score      int
+	// Status 是导入时的目标审校状态:空或 "pending" 记为待审,"approved" 直接收录上线。
+	Status string
 }
 
 // OpenCatalog 打开(必要时创建)分类维护数据库,确保 schema 存在。
@@ -168,13 +170,19 @@ ON CONFLICT(category_id, provider, native_id) DO NOTHING`,
 	return affected > 0, nil
 }
 
-func (c *Catalog) ImportPending(items []CatalogImportItem) (videos int, imported int, skipped int, err error) {
+// ImportPending 把候选导入 catalog。每条按其 Status 落库:空或 "pending" 记为待审,"approved"
+// 直接收录上线并记录 reviewer + reviewed_at(供"已审核视频集一步上线")。videos 元数据始终
+// upsert 刷新;category_members 用 ON CONFLICT DO NOTHING,绝不覆盖已有审校决定——即只对新成员
+// 生效,重复导入只刷新元数据并计入 skipped(要改既有成员状态请走 review)。
+// 返回:videos(元数据写入数)、imported(新增成员数)、approved(其中直接收录数)、skipped(已存在跳过数)。
+func (c *Catalog) ImportPending(items []CatalogImportItem, reviewer string) (videos int, imported int, approved int, skipped int, err error) {
 	if len(items) == 0 {
-		return 0, 0, 0, nil
+		return 0, 0, 0, 0, nil
 	}
+	reviewer = strings.TrimSpace(reviewer)
 	tx, err := c.db.Begin()
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("begin import: %w", err)
+		return 0, 0, 0, 0, fmt.Errorf("begin import: %w", err)
 	}
 	defer func() {
 		if err != nil {
@@ -187,11 +195,18 @@ func (c *Catalog) ImportPending(items []CatalogImportItem) (videos int, imported
 		nativeID := strings.TrimSpace(item.Video.NativeID)
 		title := strings.TrimSpace(item.Video.Title)
 		if categoryID == "" || provider == "" || nativeID == "" || title == "" {
-			return 0, 0, 0, fmt.Errorf("import item %d: category/provider/nativeID/title required", i)
+			return 0, 0, 0, 0, fmt.Errorf("import item %d: category/provider/nativeID/title required", i)
+		}
+		status := strings.TrimSpace(item.Status)
+		if status == "" {
+			status = "pending"
+		}
+		if status != "pending" && status != "approved" {
+			return 0, 0, 0, 0, fmt.Errorf("import item %d: invalid status %q (want pending/approved)", i, status)
 		}
 		creators, marshalErr := json.Marshal(item.Video.Creators)
 		if marshalErr != nil {
-			return 0, 0, 0, marshalErr
+			return 0, 0, 0, 0, marshalErr
 		}
 		if _, err = tx.Exec(`
 INSERT INTO videos (provider, native_id, title, description, creators, duration_sec, year, thumbnail_url, source_url, fetched_at)
@@ -209,30 +224,39 @@ ON CONFLICT(provider, native_id) DO UPDATE SET
 			item.Video.DurationSec, strings.TrimSpace(item.Video.Year), strings.TrimSpace(item.Video.ThumbnailURL),
 			strings.TrimSpace(item.Video.SourceURL), time.Now().UTC().Format(time.RFC3339),
 		); err != nil {
-			return 0, 0, 0, fmt.Errorf("import video %d: %w", i, err)
+			return 0, 0, 0, 0, fmt.Errorf("import video %d: %w", i, err)
 		}
 		videos++
+		// pending 成员 reviewer/reviewed_at 留 NULL;approved 直接收录时记录审校留痕。
+		var reviewerVal, reviewedAt any
+		if status == "approved" {
+			reviewerVal = reviewer
+			reviewedAt = time.Now().UTC().Format(time.RFC3339)
+		}
 		res, execErr := tx.Exec(`
-INSERT INTO category_members (category_id, provider, native_id, status, score)
-VALUES (?, ?, ?, 'pending', ?)
+INSERT INTO category_members (category_id, provider, native_id, status, score, reviewer, reviewed_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(category_id, provider, native_id) DO NOTHING`,
-			categoryID, provider, nativeID, item.Score,
+			categoryID, provider, nativeID, status, item.Score, reviewerVal, reviewedAt,
 		)
 		if execErr != nil {
 			err = fmt.Errorf("import member %d: %w", i, execErr)
-			return 0, 0, 0, err
+			return 0, 0, 0, 0, err
 		}
 		affected, _ := res.RowsAffected()
 		if affected > 0 {
 			imported++
+			if status == "approved" {
+				approved++
+			}
 		} else {
 			skipped++
 		}
 	}
 	if err = tx.Commit(); err != nil {
-		return 0, 0, 0, fmt.Errorf("commit import: %w", err)
+		return 0, 0, 0, 0, fmt.Errorf("commit import: %w", err)
 	}
-	return videos, imported, skipped, nil
+	return videos, imported, approved, skipped, nil
 }
 
 // SetMemberStatus 更新某分类成员的审校状态(approved/rejected/pending),记录审校人。

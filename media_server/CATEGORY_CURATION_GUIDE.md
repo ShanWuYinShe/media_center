@@ -303,8 +303,13 @@ MEDIA_SERVER_CATALOG_DB=data/catalog.db go run . -catalog-seed
 ### 9.2b 外部 AI / 工具收集结果导入待审
 
 如果候选不是由 `media_server` 实时搜索产生，而是你让其他 AI 或脚本按本指南收集好的固定清单，
-不要直接写运行时快照，也不要直接标成 approved。推荐交付一个 JSON，然后通过 admin 代理导入
-catalog 的 `pending` 队列，仍由 admin 做最后审查：
+不要直接写运行时快照。推荐交付一个 JSON，然后通过 admin 代理导入 catalog。每条候选可选带
+`status` 字段：
+
+- 省略或 `"pending"`：进入 `pending` 待审队列，仍由 admin 按 9.3 做最后审查（默认，向后兼容）。
+- `"approved"`：**你已自行审核过的视频集**，导入即收录上线（catalog-first 直读，approved 行立即
+  对客户端可见，无需再 rebuild）。admin 会自动注入登录用户名为 `reviewer` 留痕，你 body 里传的
+  `reviewer` 会被覆盖。
 
 ```json
 {
@@ -320,13 +325,14 @@ catalog 的 `pending` 队列，仍由 admin 做最后审查：
       "year": "1984",
       "thumbnailUrl": "https://i0.hdslb.com/...",
       "sourceUrl": "https://www.bilibili.com/video/BV1xxxx",
-      "score": 42
+      "score": 42,
+      "status": "approved"
     }
   ]
 }
 ```
 
-导入方式：
+导入方式（两种等价：admin Web UI「导入视频集」面板粘贴 JSON，或 curl 走 admin 代理）：
 
 ```bash
 curl -X POST https://yinghuoren.com/api/admin/media-center/catalog/import \
@@ -334,11 +340,18 @@ curl -X POST https://yinghuoren.com/api/admin/media-center/catalog/import \
   --data-binary @collected-videos.json
 ```
 
+返回 `{"videos":N,"imported":N,"approved":N,"skipped":N}`：`imported` 新增成员数，`approved`
+其中直接上线数，`skipped` 已存在跳过数。
+
 要求与语义：
 
 - `categoryId` 必须是现有分类；`provider/nativeId/title` 必填。Bilibili 用稳定 BV 号。
-- 单次最多 1000 条；重复导入会刷新 `videos` 元数据，但**不会覆盖**既有 `approved/rejected` 审校决定。
-- 导入结果只进入 `pending`，不会自动上线。之后仍按 9.3 审查，按 9.4 rebuild 快照。
+- `status` 只接受空 / `pending` / `approved`，其它值整批 400 拒绝。
+- 单次最多 1000 条；重复导入会刷新 `videos` 元数据，但**不会覆盖**既有 `approved/rejected` 审校决定
+  （`category_members` 用 `ON CONFLICT DO NOTHING`，`status=approved` 只对**新成员**生效；要改既有
+  成员状态请走 9.3 review）。
+- 用 `status:"approved"` 导入的视频集会即时上线，无需 9.4 rebuild（catalog-first 架构下 rebuild 是
+  no-op 确认）。用默认 `pending` 导入的仍按 9.3 审查。
 - 外部 AI 应在 `score` 或自己的交付说明中保留判定理由；最终是否通过以 admin 审查为准。
 
 ### 9.3 步骤二：审校(approve / reject)
