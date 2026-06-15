@@ -227,8 +227,8 @@ func (s *mediaServer) handleCategoryVideos(w http.ResponseWriter, r *http.Reques
 	s.writeJSON(w, http.StatusOK, resp)
 }
 
-// categoryVideosPage 优先用预生成快照分页(秒回、稳定);快照缺失/为空时回退到
-// 实时聚合,保证冷启动或新分类也不会出现空页。
+// categoryVideosPage 从预生成快照分页返回(秒回、稳定);快照缺失/为空时也从
+// catalog 数据库直接构建,绝不做实时上游搜索——分类浏览只展示已审核的种子数据。
 func (s *mediaServer) categoryVideosPage(
 	ctx context.Context,
 	category ContentCategory,
@@ -240,7 +240,27 @@ func (s *mediaServer) categoryVideosPage(
 			return paginateSnapshot(category, snap, page, pageSize), nil
 		}
 	}
-	return s.collectCategoryPage(ctx, category, page, pageSize)
+	// catalog 有 approved 数据时即时物化(快照未就绪的窗口期)。
+	if s.catalog != nil {
+		target := s.config.SnapshotTargetSize
+		if target <= 0 {
+			target = 600
+		}
+		items, err := s.buildCategoryItemsFromCatalog(category, target)
+		if err == nil && len(items) > 0 {
+			snap := CategorySnapshot{CategoryID: category.ID, Items: items}
+			return paginateSnapshot(category, snap, page, pageSize), nil
+		}
+	}
+	// 最终兜底：返回空列表，不做实时上游搜索。
+	return SearchResponse{
+		Query:    "",
+		Category: &PublicCategory{ID: category.ID, Title: category.Title, Description: category.Description},
+		Page:     page,
+		PageSize: pageSize,
+		Total:    0,
+		Items:    []VideoSummary{},
+	}, nil
 }
 
 func (s *mediaServer) handleVideos(w http.ResponseWriter, r *http.Request) {

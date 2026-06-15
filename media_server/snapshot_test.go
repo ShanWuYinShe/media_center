@@ -104,7 +104,7 @@ func TestBuildCategorySnapshotAppliesTarget(t *testing.T) {
 	}
 }
 
-func TestCategoryVideosPagePrefersSnapshotThenFallsBack(t *testing.T) {
+func TestCategoryVideosPagePrefersSnapshotThenReturnsEmpty(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewSnapshotStore(dir)
 	if err != nil {
@@ -112,7 +112,7 @@ func TestCategoryVideosPagePrefersSnapshotThenFallsBack(t *testing.T) {
 	}
 	fp := &queryAwareProvider{id: "fake", itemsPerPage: 4}
 	s := &mediaServer{
-		config:         AppConfig{MaxCategoryPages: 2},
+		config:         AppConfig{MaxCategoryPages: 2, SnapshotTargetSize: 60},
 		providers:      map[string]VideoProvider{"fake": fp},
 		enabledSources: []string{"fake"},
 		idCodec:        NewIDCodec("test-secret"),
@@ -123,13 +123,16 @@ func TestCategoryVideosPagePrefersSnapshotThenFallsBack(t *testing.T) {
 		Query: "dota a", Queries: []string{"dota a"}, Keywords: []string{"dota"},
 	}
 
-	// No snapshot yet → live fallback still returns items (no empty page).
-	live, err := s.categoryVideosPage(context.Background(), cat, 1, 5)
+	// No snapshot and no catalog → returns empty (never does live search).
+	resp, err := s.categoryVideosPage(context.Background(), cat, 1, 5)
 	if err != nil {
-		t.Fatalf("live fallback: %v", err)
+		t.Fatalf("empty fallback: %v", err)
 	}
-	if len(live.Items) == 0 {
-		t.Fatalf("expected live fallback items when snapshot absent")
+	if len(resp.Items) != 0 {
+		t.Fatalf("expected empty items when no snapshot/catalog, got %d", len(resp.Items))
+	}
+	if resp.Total != 0 {
+		t.Fatalf("expected total=0, got %d", resp.Total)
 	}
 
 	// Once a snapshot exists, it is served verbatim (sentinel proves source).
