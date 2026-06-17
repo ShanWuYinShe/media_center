@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl
@@ -185,11 +186,14 @@ private data class BiliNavResponse(
 ) {
     @Serializable
     data class NavData(
+        @SerialName("wbi_img")
         val wbiImg: WbiImg? = null,
     ) {
         @Serializable
         data class WbiImg(
+            @SerialName("img_url")
             val imgUrl: String = "",
+            @SerialName("sub_url")
             val subUrl: String = "",
         )
     }
