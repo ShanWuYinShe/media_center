@@ -18,6 +18,7 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
 import android.os.Build
 import android.os.Bundle
+import android.os.Parcelable
 import android.text.TextUtils
 import android.util.Log
 import android.util.LruCache
@@ -131,6 +132,7 @@ class MainActivity : ComponentActivity() {
     private var prefetchedVisibleVideoIds: List<String> = emptyList()
     private var homeVideoRecycler: RecyclerView? = null
     private var homeVideoAdapter: VideoGridAdapter? = null
+    private var savedGridState: Parcelable? = null
     private var selectedPlaybackOptionId: String? = null
     private var selectedPlaybackVideoId: String? = null
     private var detailFocusTarget: DetailFocusTarget = DetailFocusTarget.Play
@@ -227,6 +229,10 @@ class MainActivity : ComponentActivity() {
 
     private fun invalidateUi() {
         renderedState = null
+        // 保存 RecyclerView 滚动位置,重建后恢复(见 videoGrid)
+        if (savedGridState == null) {
+            savedGridState = homeVideoRecycler?.layoutManager?.onSaveInstanceState()
+        }
         render(currentState)
     }
 
@@ -855,6 +861,11 @@ class MainActivity : ComponentActivity() {
         }
         homeVideoRecycler = recycler
         homeVideoAdapter = adapter
+        // 恢复之前保存的滚动位置(如从分类栏焦点返回、invalidateUi 后重建等)
+        savedGridState?.let { state ->
+            layoutManager.onRestoreInstanceState(state)
+            savedGridState = null
+        }
         adapter.setData(
             newItems = items,
             newCanLoadMore = canLoadMore,
@@ -1153,6 +1164,8 @@ class MainActivity : ComponentActivity() {
                             if (pos >= columns) return@setOnKeyListener false
                             homeDefaultCategoryTarget(currentState)?.let { target ->
                                 homeFocusArea = HomeFocusArea.Category
+                                // 保存滚动位置防止 RecyclerView 因焦点离开而重置到第一列
+                                savedGridState = homeVideoRecycler?.layoutManager?.onSaveInstanceState()
                                 requestHomeFocus(target)
                             } ?: false
                         }
@@ -2092,8 +2105,24 @@ class MainActivity : ComponentActivity() {
                         layoutParams = LinearLayout.LayoutParams(0, wrap(), 1f).withStartMargin(dp(8))
                     }
                     addView(titleLabel)
+                    // 焦点态:AppleBlue 背景 + 白色文字 + 微放大,与 pill 风格一致
+                    setOnFocusChangeListener { _, focused ->
+                        background = rounded(
+                            when {
+                                focused -> Colors.AppleBlue
+                                isCurrent -> ColorUtils.setAlphaComponent(Colors.AppleBlue, 38)
+                                else -> Color.TRANSPARENT
+                            }, 12,
+                            if (focused) 2 else 0,
+                            if (focused) Colors.GlassBorderFocused else Color.TRANSPARENT,
+                        )
+                        elevationCompat(if (focused) dp(6).toFloat() else 0f)
+                        idxLabel.setTextColor(if (focused) Colors.TextPrimary else Colors.TextTertiary)
+                        titleLabel.setTextColor(if (focused) Colors.TextPrimary else if (isCurrent) Colors.AppleBlue else Colors.TextPrimary)
+                        animate().cancel()
+                        animate().scaleX(if (focused) 1.04f else 1f).scaleY(if (focused) 1.04f else 1f).setDuration(140).start()
+                    }
                 }
-                applyCardFocus(row)
                 list.addView(row, linearMatch())
             }
             scroll.addView(list, frameMatch())
