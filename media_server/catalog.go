@@ -401,7 +401,7 @@ func (c *Catalog) DistinctProviders() ([]string, error) {
 	if c == nil {
 		return nil, nil
 	}
-	rows, err := c.db.Query(`SELECT DISTINCT provider FROM category_members WHERE status = 'approved' ORDER BY provider ASC`)
+	rows, err := c.db.Query(`SELECT DISTINCT provider FROM category_members WHERE status = 'approved' AND native_id NOT LIKE '%\_p%' ESCAPE '\' ORDER BY provider ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query distinct providers: %w", err)
 	}
@@ -423,7 +423,7 @@ func (c *Catalog) CategoriesForProvider(provider string) ([]string, error) {
 	if provider == "" || c == nil {
 		return nil, nil
 	}
-	rows, err := c.db.Query(`SELECT DISTINCT category_id FROM category_members WHERE provider = ? AND status = 'approved' ORDER BY category_id ASC`, provider)
+	rows, err := c.db.Query(`SELECT DISTINCT category_id FROM category_members WHERE provider = ? AND status = 'approved' AND native_id NOT LIKE '%\_p%' ESCAPE '\' ORDER BY category_id ASC`, provider)
 	if err != nil {
 		return nil, fmt.Errorf("query categories for provider: %w", err)
 	}
@@ -454,7 +454,7 @@ func (c *Catalog) ApprovedPageForProvider(provider, categoryID string, page, pag
 	}
 	var total int
 	if err := c.db.QueryRow(
-		`SELECT COUNT(*) FROM category_members WHERE provider = ? AND category_id = ? AND status = 'approved'`,
+		`SELECT COUNT(*) FROM category_members WHERE provider = ? AND category_id = ? AND status = 'approved' AND native_id NOT LIKE '%\_p%' ESCAPE '\'`,
 		provider, categoryID,
 	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count approved for provider: %w", err)
@@ -467,7 +467,7 @@ func (c *Catalog) ApprovedPageForProvider(provider, categoryID string, page, pag
 SELECT v.provider, v.native_id, v.title, v.description, v.creators, v.duration_sec, v.year, v.thumbnail_url, v.source_url
 FROM category_members m
 JOIN videos v ON v.provider = m.provider AND v.native_id = m.native_id
-WHERE m.provider = ? AND m.category_id = ? AND m.status = 'approved'
+WHERE m.provider = ? AND m.category_id = ? AND m.status = 'approved' AND v.native_id NOT LIKE '%\_p%' ESCAPE '\'
 ORDER BY m.pinned DESC, (m.rank IS NULL), m.rank ASC, m.score DESC, v.native_id ASC
 LIMIT ? OFFSET ?`, provider, categoryID, pageSize, offset)
 	if err != nil {
@@ -747,7 +747,7 @@ type CategoryStatusCounts struct {
 
 // OverviewCounts 一次性统计每个分类各状态的成员数。空库返回空 map(非 nil 错误)。
 func (c *Catalog) OverviewCounts() (map[string]CategoryStatusCounts, error) {
-	rows, err := c.db.Query(`SELECT category_id, status, COUNT(*) FROM category_members GROUP BY category_id, status`)
+	rows, err := c.db.Query(`SELECT category_id, status, COUNT(*) FROM category_members WHERE native_id NOT LIKE '%\_p%' ESCAPE '\' GROUP BY category_id, status`)
 	if err != nil {
 		return nil, fmt.Errorf("overview counts: %w", err)
 	}
@@ -777,7 +777,7 @@ func (c *Catalog) OverviewCounts() (map[string]CategoryStatusCounts, error) {
 func (c *Catalog) CountByStatus(categoryID, status string) (int, error) {
 	var n int
 	err := c.db.QueryRow(
-		`SELECT COUNT(*) FROM category_members WHERE category_id=? AND status=?`,
+		`SELECT COUNT(*) FROM category_members WHERE category_id=? AND status=? AND native_id NOT LIKE '%\_p%' ESCAPE '\'`,
 		strings.TrimSpace(categoryID), strings.TrimSpace(status),
 	).Scan(&n)
 	if err != nil {
@@ -818,7 +818,7 @@ func (c *Catalog) SearchApproved(query string, page, pageSize int) ([]CatalogVid
 		pageSize = 1
 	}
 	like := "%" + escapeLike(strings.ToLower(query)) + "%"
-	const where = `m.status = 'approved' AND (
+	const where = `m.status = 'approved' AND v.native_id NOT LIKE '%\_p%' ESCAPE '\' AND (
   lower(v.title) LIKE ? ESCAPE '\' OR
   lower(COALESCE(v.description, '')) LIKE ? ESCAPE '\' OR
   lower(COALESCE(v.creators, '')) LIKE ? ESCAPE '\')`
