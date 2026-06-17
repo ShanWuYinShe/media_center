@@ -15,8 +15,13 @@ App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部�
 ```bash
 cd media_app
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:assembleDebug
+# 产物: app/build/outputs/apk/debug/app-debug.apk
 ```
 
+- **部署 APK**：部署时如 `media_app/` 有变更，编译 APK 并上传到服务器的 `.wework/generated/media_center/media-center-app.apk`，同时生成 manifest JSON。
+  - 版本号（versionCode）递增，可从 git tag 或上次 manifest 获取
+  - SHA256 校验和自动计算
+  - 命令：`ssh workwork-server "cd service && cat > .wework/generated/media_center/app-update.json << 'EOF' { ... } EOF"`
 - **技术栈**：Compose + TV Material + Media3 ExoPlayer；网络：OkHttp；序列化：kotlinx-serialization；图片：Coil。
 - **服务端地址**：默认 `https://yinghuoren.com/api/media`；如需覆盖，设置 `MEDIA_SERVER_URL`，可以是服务根地址，也可以直接带 API 路径。
 - **Gradle/JDK**：本机已安装 Android Studio，Gradle 构建优先使用 Android Studio 自带 JBR：`/Applications/Android Studio.app/Contents/jbr/Contents/Home`。如果系统 `java` 提示缺少 Java Runtime，不要下载或安装 JDK，直接按上面的 `JAVA_HOME=... ./gradlew ...` 方式执行。
