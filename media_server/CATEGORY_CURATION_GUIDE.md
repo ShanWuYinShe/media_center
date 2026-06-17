@@ -2,7 +2,7 @@
 
 本文件是 **media_server 分类视频数据的唯一审核依据**，供 **admin 页面的人工审核** 与 **AI 模型辅助审核** 共同遵循。`catalog.go` 维护的 SQLite 库（`category_members.status`）是 system-of-record：分类浏览与搜索**只读 `approved` 行**，因此「能否上线」完全取决于本标准下的审核结论。
 
-> 相关代码：数据模型与读写见 `catalog.go`；内部管理接口见 `internal_api.go`；分类浏览/搜索的实时读取见 `main.go`（`categoryVideosPage` / `searchApprovedCatalog`）。
+> 相关代码：数据模型与读写见 `catalog.go`；内部管理接口见 `internal_api.go`；分类浏览的实时读取见 `main.go`（`handleProviderCategoryVideos`）。
 
 ---
 
@@ -18,7 +18,7 @@
   status = approved（上线）/ rejected（软拒绝，留痕）
         │
         ▼
-  客户端实时读取：/api/categories/{id}/videos、/api/search 只命中 approved
+   客户端实时读取：/api/providers/{provider}/categories/{categoryId}/videos 只命中 approved
 ```
 
 **立即生效**：media_server 每次请求都直接 SQL 查询 catalog.db（`ApprovedPage` / `SearchApproved`），**无内存缓存、无快照中间层**。approve / import(approved) 后下一次客户端请求即可见，**无需重启 media_server**。这是上一轮移除 seed / snapshot 中间层后的设计结论。

@@ -3,8 +3,8 @@
 这个仓库同时包含媒体中心的客户端与服务端：
 
 - `media_app`：Android TV + Kotlin + Jetpack Compose + Media3 客户端，针对遥控器焦点、电视安全边距和 2 米观看距离优化。
-- `media_server`：Go 实现的合规公开视频聚合后端，提供分类、搜索、详情、播放地址与 asset 代理接口。
-- `vod_extractor`：Python + yt-dlp 内部点播解析服务，只在部署方 Docker 内网中供 `media_server` 调用。
+- `media_server`：Go 实现的纯目录服务，提供 provider 列表、分类列表、视频元数据。不做上游 API 调用、不做 asset 代理。播放由 App 端按 provider 自行处理。
+- `vod_extractor`：Python + yt-dlp 内部点播解析服务（当前未使用，保留可能用于不可直连源）。
 
 App 只需要一个服务端地址，默认是 `https://yinghuoren.com/api/media`，也可以通过 `MEDIA_SERVER_URL` 覆盖。代理 / 部署基础设施（nginx、xray、admin 面板等）在 `workwork` 仓库，并通过 git submodule 引用本仓库来构建 `media_server`。
 
@@ -17,7 +17,7 @@ App 只需要一个服务端地址，默认是 `https://yinghuoren.com/api/media
 
 服务端默认一级专区为电影、电视剧、纪录片、红色经典和 Dota 专区。Dota 分类以 Dota1 / 魔兽争霸 3 / DotA Allstars 对局录像为主，兼顾 Dota2 和 TI 赛事。
 
-公开 API 不暴露具体视频来源；后端从**已审核（`approved`）**的 catalog 提供分类与搜索结果（搜索只命中审核过的数据），并解析点播播放地址。所有视频先经 admin 的人工 + AI 审核才会对客户端可见，服务端不做实时上游搜索/采集。播放地址由服务端返回，播放器可以边下边播和 seek，不需要等整个文件下载完成。
+公开 API 不暴露具体视频来源；后端只从**已审核（`approved`）**的 catalog 提供分类与视频列表。所有视频先经 admin 的人工 + AI 审核才会对客户端可见，服务端不做实时上游搜索/采集。播放地址由 App 端按 provider 自行处理（bilibili 用 WBI 签名本地解析），server 端不参与播放解析。
 
 ## 编译 Android TV 客户端
 
@@ -44,7 +44,7 @@ Go 服务，详见 `media_server/README.md`。本地编译检查：
 go build -C media_server -o /dev/null .
 ```
 
-`workwork` 仓库通过 git submodule 引用本仓库到 `services/media_center`，docker-compose 从 `services/media_center/media_server` 和 `services/media_center/vod_extractor` 构建并部署相关服务。
+`workwork` 仓库通过 git submodule 引用本仓库到 `services/media_center`，docker-compose 从 `services/media_center/media_server` 构建并部署相关服务。
 
 ## 工具链约定
 
@@ -56,4 +56,4 @@ API 由本仓库的 `media_server` 维护。实现或调整 App 前先看：
 
 - `media_server/API.md`
 
-App 只原样使用 API 返回的图片/播放 URL，不自行构造代理地址或处理代理签名。扩展其他 Provider 时应使用官方 API 或已授权数据源，不接入盗版站点、DRM 绕过或盗链资源。
+App 端使用 `VideoSummary.id`（nativeId，如 BV1xxx）直接调用本地解析器播放。拓展其他 Provider 时应遵守：国内可直连源由 App 端实现本地解析器，国外源由 server 端 + vod_extractor 代理解析。

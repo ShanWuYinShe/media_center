@@ -1,44 +1,33 @@
 # Media Server
 
-Go 实现的媒体聚合服务。支持 **Bilibili**、**YouTube**、**Internet Archive** 来源，面向 Android TV App 暴露分类、搜索、详情、播放选项和签名资源代理 API。
+Go 实现的纯目录服务。不调任何上游 API、不做播放地址解析、不做 asset 代理。播放完全由 App 端按 provider 自行处理。
 
 ## 当前架构
 
-- 后端的职责是：**从已审核（`approved`）的 catalog 提供分类浏览与搜索、生成不透明视频 ID、按视频解析并刷新播放地址，并按来源选择 direct/proxy delivery**。
-- `direct` 来源（默认 Bilibili）返回上游 URL + companion headers，由 App 直连上游。
-- `proxy` 来源（默认 YouTube / Internet Archive）返回 `/api/asset` 签名代理地址，上游 companion headers 会被签入代理 payload，不下发给 App。
-- `/api/asset` 只接受服务端签名的 HTTP(S) 上游 URL，支持 GET/HEAD、Range 和条件请求。
+- 目录服务从已审核（`approved`）的 catalog（SQLite）提供 provider 列表、分类列表、视频元数据。
+- `GET /api/providers`：有哪些视频源。
+- `GET /api/providers/{provider}/categories`：某视频源有哪些分类。
+- `GET /api/providers/{provider}/categories/{categoryId}/videos`：某分类下已审核的视频列表。
 
 ## API
 
 完整 App 对接说明见 [`API.md`](./API.md)。
 
-- `GET /health`
 - `GET /api/health`
-- `GET /api/categories`
-- `GET /api/categories/:id/videos?page=1&pageSize=20`
-- `GET /api/search?q=关键词&page=1&pageSize=20`
-- `GET /api/videos/:id`
-- `GET /api/videos/:id/playback`
-- `GET /api/asset?...`
-
-在 workwork 的 nginx 反代后，公开路径仍然是 `/api/media/*`；例如 App 请求 `/api/media/categories`，nginx 会转发到本服务内部的 `/api/categories`。
+- `GET /api/providers`
+- `GET /api/providers/{provider}/categories`
+- `GET /api/providers/{provider}/categories/{categoryId}/videos`
+- `GET /api/app/update?versionCode=N`
+- `GET /api/app/download`
 
 ## 配置与部署
 
-- `CONTENT_CATEGORIES_FILE`：运行时来源/分类配置。workwork admin 会生成并挂载到 `/config/contentCategories.json`。
-- `PROVIDER_FETCH_TIMEOUT_MS`：上游元数据和播放地址请求超时，默认 15 秒。
-- `MEDIA_SERVER_SIGNING_KEY`：用于签发不透明视频 ID / 播放选项 ID。未配置时启动时随机生成；也兼容旧变量 `MEDIA_ASSET_SIGNING_KEY` 作为 fallback。
-- `VOD_EXTRACTOR_URL`：内部点播解析服务地址；启用 `youtube` 来源时必需。
-- `YOUTUBE_API_KEY`：YouTube Data API key；启用 `youtube` 来源时必需。
-- `MEDIA_SERVER_PUBLIC_URL`：可选，对外可见 API 基址（如 `https://yinghuoren.com/api/media`），用于签发 proxy asset 绝对 URL。
-- `MEDIA_SERVER_ASSET_URL_TTL_SECONDS`：可选，proxy asset URL 有效期，默认 21600 秒。
-- `MEDIA_ASSET_CACHE_DIR`：proxy asset 磁盘缓存目录，默认 `/cache`；设为空可关闭缓存。
-- `MEDIA_ASSET_CACHE_MAX_BYTES`：proxy asset 磁盘缓存上限，默认 50GB。
+- `CONTENT_CATEGORIES_FILE`：运行时分类配置。workwork admin 会生成并挂载到 `/config/contentCategories.json`。
+- `MEDIA_SERVER_CATALOG_DB`：SQLite 数据库路径，默认 `data/catalog.db`。设为空则关闭 catalog。
+- `MEDIA_SERVER_PUBLIC_URL`：可选，对外可见 API 基址（如 `https://yinghuoren.com/api/media`），用于拼接 app download URL。
 - `HOST` / `PORT`：监听地址，默认 `0.0.0.0:8787`。
+- `MEDIA_SERVER_INTERNAL_TOKEN`：内部管理接口令牌，用于 `/internal/catalog/*` 管理接口认证。
 
-## 当前来源策略
+## 数据模型
 
-- 默认未声明 `sources` 时启用 **bilibili**，也可在 contentCategories.json 中启用 `youtube` / `internet-archive`；来源用于详情/播放地址解析与 direct/proxy delivery 选择。
-- 分类浏览与 `GET /api/search` 只返回 catalog 中 `approved` 的数据，**不做实时上游搜索/采集**；候选经 admin 导入 → 人工 + AI 审核 → 上线 `approved`，搜索也只命中审核过的数据。
-- 播放选项会在详情/播放接口实时刷新；direct 来源返回上游地址，proxy 来源返回签名 asset proxy URL，避免客户端长期缓存失效地址。
+分类浏览与搜索只返回 `approved` 数据，**不做实时上游搜索/采集**。候选经 admin `/internal/catalog/import` 导入 → 人工 + AI 审核 → 上线 `approved`。`VideoSummary` 只有五个字段：`id`（nativeId）、`title`、`description`、`thumbnailUrl`、`durationSeconds`。
