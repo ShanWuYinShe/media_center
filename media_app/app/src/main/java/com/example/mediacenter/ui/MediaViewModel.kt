@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.mediacenter.data.ContentCategory
 import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.PlaybackOption
+import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.VideoDetails
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.log.AppLog
@@ -80,7 +81,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     private var recoveryJob: Job? = null
     private var playbackPrefetchJob: Job? = null
     // 播放地址预取缓存:列表可见视频在后台提前解析,用户点详情时直接可用。
-    private val playbackCache = mutableMapOf<String, List<PlaybackOption>>()
+    private val playbackCache = mutableMapOf<String, PlaybackResult>()
     private val prefetchedPlaybackIds = mutableSetOf<String>()
     // 在列表末尾按"下一个"时,记录续播来源 id:loadMore 拉到新一页后,
     // 在其 onSuccess 里自动续播该来源的下一条,避免自动续播在分页边界"断档"。
@@ -137,8 +138,8 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     durationSeconds = video.durationSeconds,
                 )
                 runCatchingCancellable { repository.playbackOptions(details) }
-                    .onSuccess { options ->
-                        playbackCache[video.id] = options
+                    .onSuccess { result ->
+                        playbackCache[video.id] = result
                         prefetchedPlaybackIds.add(video.id)
                     }
             }
@@ -398,17 +399,17 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             val cached = playbackCache[video.id]
             if (cached != null) {
                 mutableState.update {
-                    it.copy(selected = details.copy(playbackOptions = cached), loading = false)
+                    it.copy(selected = details.copy(playbackOptions = cached.options), loading = false)
                 }
                 return@launch
             }
             mutableState.update { it.copy(selected = details, loading = false) }
             // 缓存未命中:后台调 BilibiliApi 解析,完成后更新 selected.playbackOptions。
             runCatchingCancellable { repository.playbackOptions(details) }
-                .onSuccess { options ->
+                .onSuccess { result ->
                     mutableState.update { state ->
                         if (state.selected?.id != details.id) return@update state
-                        state.copy(selected = state.selected.copy(playbackOptions = options))
+                        state.copy(selected = state.selected.copy(playbackOptions = result.options))
                     }
                 }
                 .onFailure { error ->
@@ -448,7 +449,8 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         detailsJob = viewModelScope.launch {
             mutableState.update { it.copy(loading = true, error = null) }
             runCatchingCancellable { repository.playbackOptions(selected) }
-                .onSuccess { options ->
+                .onSuccess { result ->
+                    val options = result.options
                     val freshStream = options.firstOrNull { it.id == stream.id }
                         ?: options.firstOrNull { it.label == stream.label }
                         ?: options.firstOrNull()
@@ -576,7 +578,8 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             val currentSelected = afterDelay.selected
                 ?: return@launch
             runCatchingCancellable { repository.playbackOptions(currentSelected) }
-                .onSuccess { options ->
+                .onSuccess { result ->
+                    val options = result.options
                     val sameIdx = options.indexOfFirst { it.id == failedOption.id }
                     val candidate = when {
                         options.isEmpty() -> null
@@ -640,7 +643,8 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         detailsJob = viewModelScope.launch {
             mutableState.update { it.copy(loading = true, error = null) }
             runCatchingCancellable { repository.playbackOptions(selected) }
-                .onSuccess { options ->
+                .onSuccess { result ->
+                    val options = result.options
                     mutableState.update { state ->
                         if (state.selected?.id != selected.id) {
                             state.copy(loading = false)
@@ -669,21 +673,55 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     }
 
     /**
-     * 播放“下一个”:在当前分类列表里找到正在播放视频的下一条,
-     * 拉取其详情并以默认(最高)清晰度直接开播。已是最后一条且还有下一页时,
-     * 先加载更多,新页到手后自动续播,保证分页边界不会断档。
+     * 播放“下一个”:当前多P视频有下一页时切页,否则跳转列表下一个视频。
+     * 已是列表末尾时触发 loadMore 自动续播。
      */
     fun playNext() {
         val current = mutableState.value
-        val items = current.items
         val curId = current.playingVideo?.id ?: current.selected?.id ?: return
+        val items = current.items
+        // 多P切页:检查当前视频是否还有下一页。
+        val cached = playbackCache[curId]
+        if (cached != null && cached.pages.totalPages > 1) {
+            val nextPage = cached.pages.currentPage + 1
+            if (nextPage < cached.pages.totalPages) {
+                val bvid = curId
+                AppLog.i("Nav", "playNext -> page $nextPage/${cached.pages.totalPages} for $bvid")
+                // 更新缓存中的当前页索引,便于后续继续翻页。
+                val updatedPages = cached.pages.copy(currentPage = nextPage)
+                playbackCache[bvid] = cached.copy(pages = updatedPages)
+                playbackSession++
+                detailsJob?.cancel()
+                recoveryJob?.cancel()
+                detailsJob = viewModelScope.launch {
+                    mutableState.update { it.copy(loading = true, error = null) }
+                    runCatchingCancellable { repository.resolvePagePlayback(bvid, nextPage) }
+                        .onSuccess { options ->
+                            val option = options.firstOrNull()
+                            mutableState.update { state ->
+                                if (state.selected?.id != bvid) return@update state
+                                state.copy(
+                                    loading = false,
+                                    selected = state.selected.copy(playbackOptions = options),
+                                    playing = option,
+                                )
+                            }
+                        }
+                        .onFailure { error ->
+                            mutableState.update { state ->
+                                if (state.selected?.id != bvid) return@update state
+                                state.copy(loading = false, error = error.message ?: "切换分页失败")
+                            }
+                        }
+                }
+                return
+            }
+        }
+        // 多P已播完或单P视频:跳到列表下一个视频。
         val idx = items.indexOfFirst { it.id == curId }
         if (idx < 0) return
         val nextIndex = idx + 1
         if (nextIndex >= items.size) {
-            // 已到当前已加载列表末尾:若还有下一页,记下续播来源 id;新页到手后
-            // 在 loadMore.onSuccess 里自动续播(补上分页边界断档)。若此刻已有
-            // loadMore(预取)在跑,就复用它,不重复发起。
             if (current.canLoadMore) {
                 pendingAutoAdvanceFromId = curId
                 if (!current.loadingMore) loadMore()
@@ -732,8 +770,8 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             mutableState.update { it.copy(loading = true, error = null) }
             runCatchingCancellable {
                 val details = repository.details(nextVideo)
-                val playbackOptions = repository.playbackOptions(details)
-                details.copy(playbackOptions = playbackOptions)
+                val result = repository.playbackOptions(details)
+                details.copy(playbackOptions = result.options)
             }
                 .onSuccess { details ->
                     if (session != playbackSession) return@onSuccess

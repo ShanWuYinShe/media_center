@@ -54,9 +54,13 @@ class MediaRepository(
         )
     }
 
-    // 解析播放地址:当前所有视频来自 bilibili catalog,直接调 BilibiliApi。
-    // 后续加新 provider 时在此按 video.id 格式或 provider 字段分流。
-    suspend fun playbackOptions(video: VideoDetails): List<PlaybackOption> {
+    // 解析播放地址:返回播放选项+多P信息。当前所有视频来自 bilibili catalog。
+    suspend fun playbackOptions(video: VideoDetails): PlaybackResult {
         return bilibiliApi.resolvePlayback(video.id)
+    }
+
+    // 解析多P视频指定分页的播放地址。
+    suspend fun resolvePagePlayback(bvid: String, pageIndex: Int): List<PlaybackOption> {
+        return bilibiliApi.resolvePagePlayback(bvid, pageIndex)
     }
 }

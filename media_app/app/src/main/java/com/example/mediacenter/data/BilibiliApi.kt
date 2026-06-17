@@ -44,36 +44,65 @@ class BilibiliApi(
     @Volatile private var keyExpiryMillis: Long = 0L
 
     /**
-     * 解析某 bvid 的可播放直链。返回带真实 URL 的 PlaybackOption 列表。
-     * 失败时抛出 [BilibiliApiException](含 B 站错误信息)。
-     *
-     * 当前实现简化:只取默认清晰度(qn=80 即 1080P)的 durl[0](普通视频就是完整流)。
+     * 解析某 bvid 的可播放直链。返回(播放选项, 多P信息)。
+     * 多P信息包含总页数和各页 cid,供 playNext/playPrevious 切换分页用。
      */
-    suspend fun resolvePlayback(bvid: String): List<PlaybackOption> = withContext(Dispatchers.IO) {
-        val cid = fetchCid(bvid)
-        AppLog.i("Bili", "resolved cid=$cid for bvid=$bvid")
-        val payload = fetchPlayUrl(bvid, cid, quality = DEFAULT_QUALITY)
-        if (payload.code != 0) {
-            throw BilibiliApiException("playurl 接口返回 code=${payload.code}")
+    suspend fun resolvePlayback(bvid: String): PlaybackResult = withContext(Dispatchers.IO) {
+        val viewPayload = fetchView(bvid)
+        val pages = viewPayload.data?.pages ?: emptyList()
+        val firstCid = pages.firstOrNull()?.cid ?: viewPayload.data?.cid ?: throw BilibiliApiException("无 cid")
+        val totalPages = maxOf(pages.size, 1)
+        val pageCids = if (pages.isNotEmpty()) pages.map { it.cid } else listOf(firstCid)
+        val pageTitles = pages.map { it.part }
+        if (totalPages > 1) {
+            AppLog.i("Bili", "multi-page video: $bvid has $totalPages pages")
         }
+        val payload = fetchPlayUrl(bvid, firstCid, quality = DEFAULT_QUALITY)
+        if (payload.code != 0) throw BilibiliApiException("playurl 接口返回 code=${payload.code}")
         val durlList = payload.data.durl
-        if (durlList.isEmpty()) {
-            throw BilibiliApiException("B 站未返回播放流(可能触发风控)")
-        }
+        if (durlList.isEmpty()) throw BilibiliApiException("B 站未返回播放流(可能触发风控)")
         val first = durlList.first()
-        listOf(
-            PlaybackOption(
+        PlaybackResult(
+            listOf(PlaybackOption(
                 id = "bili-$bvid-q${payload.data.quality}",
                 kind = "vod",
                 label = qualityLabel(payload.data.quality),
                 url = first.url,
                 mimeType = "video/mp4",
                 headers = DIRECT_HEADERS,
-            ),
+            )),
+            PlaybackPages(currentPage = 0, totalPages = totalPages, pageCids = pageCids, pageTitles = pageTitles),
         )
     }
 
-    private suspend fun fetchCid(bvid: String): Long {
+    /**
+     * 解析某 bvid 指定分页的播放地址。用于 playNext 切换多P时按需拉取。
+     */
+    suspend fun resolvePagePlayback(bvid: String, pageIndex: Int): List<PlaybackOption> = withContext(Dispatchers.IO) {
+        val viewPayload = fetchView(bvid)
+        val pages = viewPayload.data?.pages ?: emptyList()
+        val cids = if (pages.isNotEmpty()) pages.map { it.cid }
+            else listOf(viewPayload.data?.cid ?: throw BilibiliApiException("无 cid"))
+        if (pageIndex < 0 || pageIndex >= cids.size) {
+            throw BilibiliApiException("pageIndex $pageIndex out of bounds (${cids.size} pages)")
+        }
+        val payload = fetchPlayUrl(bvid, cids[pageIndex], quality = DEFAULT_QUALITY)
+        if (payload.code != 0) throw BilibiliApiException("playurl 接口返回 code=${payload.code}")
+        val durlList = payload.data.durl
+        if (durlList.isEmpty()) throw BilibiliApiException("B 站未返回播放流(可能触发风控)")
+        val first = durlList.first()
+        listOf(PlaybackOption(
+            id = "bili-$bvid-p$pageIndex-q${payload.data.quality}",
+            kind = "vod",
+            label = qualityLabel(payload.data.quality),
+            url = first.url,
+            mimeType = "video/mp4",
+            headers = DIRECT_HEADERS,
+        ))
+    }
+
+    // 调 B 站 view API 拿 bvid/cid/pages。
+    private suspend fun fetchView(bvid: String): BiliViewResponse {
         val keys = ensureWbiKeys()
         val signed = signWbiParams(mapOf("bvid" to bvid), keys.first, keys.second)
         val url = buildUrl("https://api.bilibili.com/x/web-interface/wbi/view", signed)
@@ -84,10 +113,7 @@ class BilibiliApi(
         if (payload.data.cid == 0L) {
             throw BilibiliApiException("view 接口未返回 cid(可能视频被删/审核)")
         }
-        if (payload.data.pages.size > 1) {
-            AppLog.i("Bili", "multi-page video: $bvid has ${payload.data.pages.size} parts, using first cid=${payload.data.cid}")
-        }
-        return payload.data.cid
+        return payload
     }
 
     private suspend fun fetchPlayUrl(bvid: String, cid: Long, quality: Int): BiliPlayUrlResponse {

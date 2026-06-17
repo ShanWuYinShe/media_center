@@ -76,6 +76,20 @@ data class PlaybackOption(
     val headers: Map<String, String> = emptyMap(),
 )
 
+// PlaybackPages 记录视频的多P信息:当前播放第几页、总共几页、所有分页的 cid。
+data class PlaybackPages(
+    val currentPage: Int = 0,
+    val totalPages: Int = 0,
+    val pageCids: List<Long> = emptyList(),
+    val pageTitles: List<String> = emptyList(),
+)
+
+// PlaybackResult 是解析播放地址的完整结果:播放选项列表 + 多P信息。
+data class PlaybackResult(
+    val options: List<PlaybackOption>,
+    val pages: PlaybackPages = PlaybackPages(),
+)
+
 @Serializable
 data class AppUpdateInfo(
     val versionCode: Int,
