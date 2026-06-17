@@ -8,6 +8,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import androidx.core.graphics.ColorUtils
 import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
@@ -63,6 +64,7 @@ import com.example.mediacenter.data.isTransientHttpStatusCode
 import com.example.mediacenter.data.MediaApi
 import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.PlaybackOption
+import com.example.mediacenter.data.PlaybackPages
 import com.example.mediacenter.data.VideoDetails
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.player.CappedLoadErrorHandlingPolicy
@@ -1409,43 +1411,39 @@ class MainActivity : ComponentActivity() {
             registerDetailFocus(DetailFocusTarget.Play, playButton)
             info.addView(playButton, LinearLayout.LayoutParams(wrap(), dp(playH)).withTopMargin(dp(gapPlay)))
 
-            // 多P选集:在清晰度上方显示分P按钮
+            // 多P选集:分P数量多时用导航+弹窗替代水平一排按钮
             state.currentPages?.let { pages ->
                 if (pages.totalPages > 1) {
-                    info.addView(label("选集", metaSize, Colors.TextTertiary, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapQuality)))
+                    info.addView(label("选集 · 第${pages.currentPage + 1}/${pages.totalPages}集", metaSize, Colors.TextTertiary, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapQuality)))
                     val pageRow = LinearLayout(this).apply {
                         orientation = LinearLayout.HORIZONTAL
                         clipChildren = false
                         clipToPadding = false
                         setPadding(0, dp(gapDisclosure), 0, dp(4))
                     }
-                    val maxButtons = 12
-                    val showPages = if (pages.totalPages <= maxButtons) pages.totalPages else maxButtons - 1
-                    val startPage = if (pages.currentPage < showPages) 0
-                        else minOf(pages.currentPage - showPages / 2, pages.totalPages - showPages)
-                    for (i in startPage until startPage + showPages) {
-                        val label = "第${i + 1}集"
-                        val chip = pill(
-                            text = label,
-                            selected = i == pages.currentPage,
-                            heightDp = chipH,
-                            horizontalPaddingDp = chipHPad,
-                            onFocusChange = { focused ->
-                                if (focused) detailFocusTarget = DetailFocusTarget.Page(i)
-                            },
-                            onClick = {
-                                selectedPlaybackOptionId = null
-                                viewModel.selectPage(i)
-                            },
-                        )
-                        registerDetailFocus(DetailFocusTarget.Page(i), chip)
+                    val canPrev = pages.currentPage > 0
+                    val canNext = pages.currentPage < pages.totalPages - 1
+                    if (canPrev) {
+                        val chip = pill("上一集", selected = false, heightDp = chipH, horizontalPaddingDp = chipHPad) {
+                            selectedPlaybackOptionId = null
+                            viewModel.selectPage(pages.currentPage - 1)
+                        }
                         pageRow.addView(chip, LinearLayout.LayoutParams(wrap(), dp(chipH)).withEndMargin(dp(12)))
                     }
-                    if (pages.totalPages > maxButtons) {
-                        val moreChip = pill("...", selected = false, heightDp = chipH, horizontalPaddingDp = chipHPad, onClick = {})
-                        pageRow.addView(moreChip, LinearLayout.LayoutParams(wrap(), dp(chipH)))
+                    if (canNext) {
+                        val chip = pill("下一集", selected = false, heightDp = chipH, horizontalPaddingDp = chipHPad) {
+                            selectedPlaybackOptionId = null
+                            viewModel.selectPage(pages.currentPage + 1)
+                        }
+                        pageRow.addView(chip, LinearLayout.LayoutParams(wrap(), dp(chipH)).withEndMargin(dp(12)))
                     }
-                    info.addView(pageRow, linearMatch())
+                    val allChip = pill("查看全部", selected = false, heightDp = chipH, horizontalPaddingDp = chipHPad) {
+                        showAllPagesDialog(pages, details.id)
+                    }
+                    pageRow.addView(allChip, LinearLayout.LayoutParams(wrap(), dp(chipH)))
+                    if (pageRow.childCount > 0) {
+                        info.addView(pageRow, linearMatch())
+                    }
                 }
             }
 
@@ -2047,6 +2045,60 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+            card.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(16)))
+            setContentView(card)
+            window?.setBackgroundDrawableResource(android.R.color.transparent)
+            window?.setLayout((resources.displayMetrics.widthPixels * 0.62f).toInt(), (resources.displayMetrics.heightPixels * 0.72f).toInt())
+            close.post { close.requestFocus() }
+        }.show()
+    }
+
+    private fun showAllPagesDialog(pages: PlaybackPages, bvid: String) {
+        Dialog(this).apply {
+            requestWindowFeature(Window.FEATURE_NO_TITLE)
+            val card = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(28), dp(24), dp(28), dp(24))
+                background = rounded(Colors.SurfaceElevated, 24, 1, Colors.GlassBorder)
+            }
+            card.addView(
+                label("选集 · 共${pages.totalPages}集", 22f, Colors.TextPrimary, bold = true, maxLines = 1),
+                linearMatch(),
+            )
+            val scroll = ScrollView(this@MainActivity)
+            val list = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            for (i in 0 until pages.totalPages) {
+                val title = pages.pageTitles.getOrElse(i) { "第${i + 1}集" }
+                val isCurrent = i == pages.currentPage
+                val row = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(4), dp(8), dp(4), dp(8))
+                    isFocusable = true
+                    isClickable = true
+                    setOnClickListener {
+                        dismiss()
+                        viewModel.selectPage(i)
+                    }
+                    background = rounded(if (isCurrent) ColorUtils.setAlphaComponent(Colors.AppleBlue, 38) else Color.TRANSPARENT, 12, 0, Color.TRANSPARENT)
+                    val idxLabel = label("${i + 1}", 13f, Colors.TextTertiary, bold = true, maxLines = 1).apply {
+                        gravity = Gravity.CENTER
+                        minWidth = dp(36)
+                    }
+                    addView(idxLabel, LinearLayout.LayoutParams(dp(36), wrap()))
+                    val titleLabel = label(title, 15f, if (isCurrent) Colors.AppleBlue else Colors.TextPrimary, bold = isCurrent, maxLines = 1).apply {
+                        layoutParams = LinearLayout.LayoutParams(0, wrap(), 1f).withStartMargin(dp(8))
+                    }
+                    addView(titleLabel)
+                }
+                applyCardFocus(row)
+                list.addView(row, linearMatch())
+            }
+            scroll.addView(list, frameMatch())
+            card.addView(scroll, LinearLayout.LayoutParams(match(), 0, 1f).withTopMargin(dp(12)))
+            val close = pill("关闭", selected = true, heightDp = 48, horizontalPaddingDp = 28) { dismiss() }
             card.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(16)))
             setContentView(card)
             window?.setBackgroundDrawableResource(android.R.color.transparent)
