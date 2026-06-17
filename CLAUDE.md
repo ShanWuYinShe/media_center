@@ -5,7 +5,7 @@
 ## 仓库结构
 
 - `media_app/` — Android TV + Kotlin + Jetpack Compose + Media3 客户端
-- `media_server/` — Go 实现的合规公开视频聚合后端（分类、搜索、详情、播放地址、asset 代理）
+- `media_server/` — Go 实现的纯目录服务（provider 列表、分类列表、视频元数据）。不做播放地址解析、不做 asset 代理。
 - `vod_extractor/` — Python + yt-dlp 内部点播解析服务，只供 `media_server` 在 Docker 内网调用
 
 App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部署方式。默认服务端 URL 是 `https://yinghuoren.com/api/media`。代理 / 部署基础设施在 `workwork` 仓库，通过 git submodule 引用本仓库来构建 `media_server` 和 `vod_extractor`。
@@ -35,10 +35,10 @@ go test -C media_server ./...
   - **候选不提交仓库**:候选(外部 / AI 收集汇总)是中间状态,不再纳入版本管理;最终数据以 catalog.db(system-of-record)为准,可通过 `/internal/catalog/export` 导出。各分类的收集格式与审核标准见 `media_server/CATEGORY_CURATION_GUIDE.md`。
   - **流程:外部收集候选 → 导入 pending → 人工 + AI 审核 → 上线 approved**:候选经 `/internal/catalog/import` 导入为 `pending`(重复导入只新增,绝不覆盖已有审核决定)→ 在 **admin 页面由人工 + AI 模型审核** approve/reject、可选 `pinned`/`rank`(经 `/internal/catalog/*`,也可用 `-catalog-review` 交互命令或任意 SQLite 工具)→ 客户端的分类浏览与搜索只命中该库 `approved` 清单(顺序 `pinned` > `rank` > `score`)。
   - **审核是唯一的质量关口**:聚合视频未经审核普遍标题与内容不符、大量无法播放,因此服务端不提供任何实时 / 未审核数据;相关性、可播放性等筛选一律交给 admin 的人工 + AI 审核,代码侧不做实时搜索/采集。
-  - **只存原始数据**:catalog 只存上游原始字段(缩略图为原始地址),签名 `/asset` 代理 URL 每次请求再生成,绝不写进库。
-  - **数据库文件不提交**:catalog 库写到 `MEDIA_SERVER_CATALOG_DB`(默认 `data/catalog.db`,含 `-wal`/`-shm` 旁文件,已 gitignore);线上由 `workwork` 挂卷生成。
+- **只存原始数据**：catalog 只存上游原始字段(缩略图为原始地址)。
+- **数据库文件不提交**:catalog 库写到 `MEDIA_SERVER_CATALOG_DB`(默认 `data/catalog.db`,含 `-wal`/`-shm` 旁文件,已 gitignore);线上由 `workwork` 挂卷生成。
   - **相关环境变量**:`MEDIA_SERVER_CATALOG_DB`(默认 `data/catalog.db`,置空则关闭 catalog,分类浏览与搜索返回空)。
-- **点播解析**：通过本仓库内的内部 `vod_extractor` 服务解析公开视频点播地址，本服务不内置 yt-dlp。
+- **播放解析**：App 端按 provider 自行处理——bilibili 用 `BilibiliApi`（WBI 签名 + view + playurl）本地解析；server 端只做目录服务。
 - **部署**：`workwork` 以 git submodule 引用本仓库，docker-compose 从 `services/media_center/media_server` 构建。
 
 ## UI/UX 设计约定
@@ -51,21 +51,14 @@ go test -C media_server ./...
 - **Back 行为稳定**：详情页、播放页、搜索面板等屏幕级返回使用 `BackHandler`，不要依赖子组件焦点或 `onPreviewKeyEvent` 捕获 Back。
 - **Apple TV 视觉基线**：OLED 深色背景、玻璃灰卡片、Apple Blue 作为唯一强调色；文字层级保持 Primary/Secondary/Tertiary 灰阶，不新增不一致的强调色。
 
-## 客户端缓存约定
-
-- **详情缓存上限**：App 可在本地 `cacheDir/video-details` 缓存视频详情元数据，单条缓存 24 小时内有效，最大空间 50MB，按最近访问时间淘汰。
-- **签名 URL 不落盘**：服务端文档明确 `thumbnailUrl` 和 `playbackOptions[].url` 是签名 `/asset?url=...&sig=...` 代理地址。客户端缓存不得持久化这些 URL、sig、token 或原始资源地址。
-- **可缓存字段**：只缓存稳定字段：`id`、`videoKind`、`title`、`description`、`year`、`creators`、`durationSeconds`、`playbackKind`，以及播放选项的 `id`、`kind`、`label`、`mimeType`。缓存还原出的 `PlaybackOption.url` 只能作为空占位。
-- **播放前刷新**：任何真正进入播放器的路径都必须调用 `/videos/{id}/playback` 获取新鲜播放 URL；不能直接使用详情缓存中的占位 URL。
-- **缩略图来源**：详情缓存不保存 `thumbnailUrl`。详情页可复用当前列表项内存里的缩略图 URL；若缺失则展示占位图。
-
 ## API 约定
 
-以本仓库 `media_server/API.md` 为准。App 侧只消费服务端 URL 下的分类、搜索、详情、播放地址和 asset 代理接口；公开 API 不暴露具体视频来源，客户端无需感知内容来自哪个 Provider。
+以本仓库 `media_server/API.md` 为准。App 侧只消费 `/api/providers`、`/api/providers/{provider}/categories`、`/api/providers/{provider}/categories/{catID}/videos` 三个目录接口；
+播放由 App 端收到 `VideoSummary.id`（nativeId）后按 provider 自行处理。详情页由 App 端本地从 `VideoSummary` 构造，不调 server。
+`VideoSummary` 只有 `id/title/description/thumbnailUrl/durationSeconds` 五个字段。
 
 ## 约束
 
 - **视频类型**：`vod`（点播）是当前唯一支持类型；`live`（直播）不处理。
-- **播放代理**：播放地址由服务端返回，支持边下边播和 seek。
 - **合规**：只处理公开视频和授权内容，不接入盗版站点、DRM 绕过或未授权下载。
-- **服务端变更**：`media_server`（Provider、分类、缓存、搜索、播放地址解析）在本仓库 `media_server/` 维护；yt-dlp 点播解析服务在本仓库 `vod_extractor/` 维护。
+- **服务端变更**：`media_server/` 维护 catalog 数据模型和查询逻辑；App 端播放解析在 `media_app/` 维护。

@@ -1,228 +1,84 @@
 # Media Server API
 
-本文档描述 Android TV App 对接的公开 API。
-
-## Base URL
-
-App 应把配置值当作 **API base URL**。当前线上默认是：
-
-`https://yinghuoren.com/api/media`
+本文档描述 Android TV App 对接的公开 API。server 端是纯目录服务——只返回视频元数据（id、标题、简介、封面），不提供播放地址解析。播放由 App 端按 provider 自行处理（bilibili → BilibiliApi 本地解析）。
 
 ## 当前契约
 
-- 后端负责：从已审核（`approved`）的 catalog 提供分类/搜索，按视频 ID 解析详情/播放选项，并决定每个资源的**下发方式**（`deliveryMode`）。
-- **缩略图始终走 `proxy`**：`thumbnailUrl` 是签名 `/asset` 代理地址，字节由**后端回源**并转发；
-  上游请求头由后端附加，`thumbnailHeaders` 为空。这样可避免 Android TV 直连上游时被老旧证书链、
-  Referer/UA 差异或区域网络策略影响。
-- **播放流 `direct`（国内可直连源，如 Bilibili 的某些路径）**：后端直接返回上游 `playbackOptions[].url` + companion headers，App 直连上游。当前 bilibili **不再走此路径**(见下条)。
-- **`provider` 标记的本地解析路径（当前 bilibili 走此路径）**：能否本地解析是 **provider 的固有属性**，
-  不需要在 PlaybackOption 里塞任何标记。后端在 `VideoSummary/VideoDetails` 透传 `provider + nativeId`，
-  App 端识别 `provider=bilibili` 后**跳过** `/videos/{id}/playback`，自己用 `nativeId`（=BVID）调 B 站
-  API（view + playurl + WBI 签名）拿真实播放直链。后端的 `/videos/{id}/playback` 对 bilibili 返回空数组
-  （App 不调，dead path）；`/videos/{id}` 返回 catalog 元数据 + 空 `playbackOptions`。
-  这样省掉 server 端上游调用 + 让 App 直连上游 CDN（国内带宽 + 风控按用户 IP 计）。
-- **播放流 `proxy`（国内不可直连的国外源）**：后端返回的是签名 `/asset` 代理地址，字节由**后端回源**并转发；
-  上游请求头由后端附加，**不会**下发给 App（对应 `headers` 为空）。
-- App 必须把 URL 当成**可执行地址**，不要根据 host 推断来源；通过 `deliveryMode` + `provider` 区分资源走哪条路径。
-- `playbackOptions[].headers` 在 `direct` 模式下必须原样带到对应请求里；`proxy` 模式下为空。
-- `proxy` 模式下的 `thumbnailUrl` / `playbackOptions[].url` 是带签名和有效期的代理地址，**不要持久化**。
-- 视频类型当前只支持 `vod`。
-- 视频 `id` 和播放选项 `id` 都是不透明值；App 必须原样保存，并在放入 path 时 URL encode。
+- server 端只从已审核（`approved`）的 catalog 返回数据。
+- `GET /api/providers`：有哪些视频源网站。
+- `GET /api/providers/{provider}/categories`：某视频源有哪些分类。
+- `GET /api/providers/{provider}/categories/{categoryId}/videos`：某分类下已审核的视频列表。
 
 ## 错误响应
 
 ```json
-{
-  "error": {
-    "code": "BAD_REQUEST",
-    "message": "请求参数不合法。"
-  }
-}
+{ "error": { "code": "BAD_REQUEST", "message": "请求参数不合法。" } }
 ```
 
 | HTTP 状态 | code | 含义 |
 |-----------|------|------|
 | 400 | `BAD_REQUEST` | 参数格式不合法 |
-| 404 | `NOT_FOUND` | 分类或视频不存在 |
-| 422 | `NO_PLAYABLE_STREAM` | 视频暂无可直接播放的点播流 |
+| 404 | `NOT_FOUND` | 分类不存在 |
 | 500 | `INTERNAL_ERROR` | 服务端内部错误 |
-| 502 | `UPSTREAM_UNAVAILABLE` | 上游 API 或点播地址不可用 |
-| 410 | `BAD_REQUEST` | `/asset` 代理地址已过期 |
-| 403 | `BAD_REQUEST` | `/asset` 代理地址签名无效 |
 
 ## 数据模型
 
-### Category
-
 ```ts
+type ProviderInfo = {
+  id: string;       // "bilibili"
+  name: string;     // "B站"
+};
 type Category = {
   id: string;
   title: string;
   description: string;
 };
-```
-
-### VideoSummary
-
-```ts
-type DeliveryMode = "direct" | "proxy";
-
 type VideoSummary = {
-  id: string;
-  videoKind: "vod";
+  id: string;            // nativeId（如 BV1xxx），App 直接用它调本地解析器
   title: string;
   description: string;
-  year?: string;
-  creators: string[];
   thumbnailUrl?: string;
-  thumbnailHeaders?: Record<string, string>;
-  // 缩略图下发方式；当前始终为 proxy，经 /asset 后端代理。
-  thumbnailDelivery?: DeliveryMode;
   durationSeconds?: number;
-  playbackKind: "vod";
-  // 透传 catalog 原始来源(如 "bilibili" + "BV...");App 端据此判断是否需要
-  // 自己解析播放地址(App 按 provider 分流,server 端 PlaybackOption 不带任何标记)。
-  provider?: string;
-  nativeId?: string;
-};
-```
-
-### VideoDetails
-
-```ts
-type VideoDetails = VideoSummary & {
-  playbackOptions: PlaybackOption[];
-};
-```
-
-### PlaybackOption
-
-```ts
-type PlaybackOption = {
-  id: string;
-  kind: "vod";
-  label: string;
-  url: string;
-  mimeType: "video/mp4" | "video/webm" | "application/dash+xml";
-  headers?: Record<string, string>;
-  // 播放流下发方式：direct=App 直连上游(带 headers)；proxy=经 /asset 后端代理(headers 为空)。
-  delivery?: DeliveryMode;
-};
-```
-
-> **注意**：`PlaybackOption` 不带任何"是否本地解析"标记。能否本地解析是 **provider 的固有属性**，
-> App 端通过 `VideoSummary.provider` 自行判断（见"App 侧必须遵守"第 5 条）。
-
-### PagedVideos
-
-```ts
-type PagedVideos = {
-  query: string;
-  category?: Category;
-  page: number;
-  pageSize: number;
-  total: number;
-  items: VideoSummary[];
 };
 ```
 
 ## Endpoints
 
-### `GET /categories`
+### `GET /providers`
 
-返回一级分类。
+返回 catalog 中有 approved 视频的所有视频源。
 
-### `GET /categories/{id}/videos?page=1&pageSize=20`
+```json
+{ "items": [{ "id": "bilibili", "name": "B站" }] }
+```
 
-返回某个分类下**已审核（`approved`）**的视频列表（按 `pinned` > `rank` > `score` 排序，分页）。数据来自人工审核过的 catalog，服务端不做实时上游搜索/采集；没有 `approved` 数据时返回空列表。
+### `GET /providers/{provider}/categories`
 
-示例：
+返回某视频源下有 approved 视频的分类列表。
+
+```json
+{ "items": [{ "id": "movies", "title": "电影", "description": "院线电影" }] }
+```
+
+### `GET /providers/{provider}/categories/{categoryId}/videos?page=1&pageSize=20`
+
+返回某分类下已审核的视频列表（分页，按 pinned > rank > score 排序）。
 
 ```json
 {
-  "query": "",
-  "category": {
-    "id": "movies",
-    "title": "电影",
-    "description": "院线电影、国产经典、海外大片和完整长片。"
-  },
+  "category": { "id": "movies", "title": "电影", "description": "院线电影" },
   "page": 1,
   "pageSize": 20,
   "total": 120,
   "items": [
-    {
-      "id": "v1.xxx",
-      "videoKind": "vod",
-      "title": "示例视频",
-      "description": "简介",
-      "creators": ["示例频道"],
-      "thumbnailUrl": "https://i0.hdslb.com/...",
-      "thumbnailHeaders": {
-        "Referer": "https://www.bilibili.com"
-      },
-      "thumbnailDelivery": "direct",
-      "durationSeconds": 3600,
-      "playbackKind": "vod"
-    }
-  ]
-}
-```
-
-### `GET /search?q=关键词&page=1&pageSize=20`
-
-在**已审核（`approved`）**的 catalog 中按标题/简介/作者关键词搜索（跨分类去重、分页）。服务端**不做实时上游搜索**——聚合视频未经审核的搜索结果普遍标题与内容不符、大量无法播放。无匹配或没有 `approved` 数据时返回空列表。
-
-### `GET /videos/{id}`
-
-返回详情和最新播放选项。App 进入详情页时应调用此接口。
-
-### `GET /videos/{id}/playback`
-
-仅返回最新播放选项。App 真正进入播放器前应再次调用此接口，以刷新直连播放地址。
-
-可选参数：`delivery=proxy` 可强制本次播放选项走 `/asset` 签名代理下发，用于客户端直连国内源 CDN 失败后的兜底重试；不传时仍按来源默认下发方式返回。
-
-示例（`direct` 国内可直连源）：
-
-```json
-{
-  "items": [
-    {
-      "id": "v1.xxx",
-      "kind": "vod",
-      "label": "720P",
-      "url": "https://upos-sz-...bilivideo.com/....mp4",
-      "mimeType": "video/mp4",
-      "headers": {
-        "Referer": "https://www.bilibili.com",
-        "Origin": "https://www.bilibili.com"
-      },
-      "delivery": "direct"
-    }
-  ]
-}
-```
-
-示例（`proxy` 国外源经后端代理）：
-
-```json
-{
-  "items": [
-    {
-      "id": "v1.xxx",
-      "kind": "vod",
-      "label": "720P",
-      "url": "https://yinghuoren.com/api/media/asset?p=...&sig=...",
-      "mimeType": "video/mp4",
-      "delivery": "proxy"
-    }
+    { "id": "BV1xxx", "title": "示例视频", "description": "简介", "thumbnailUrl": "https://...", "durationSeconds": 3600 }
   ]
 }
 ```
 
 ### `GET /app/update?versionCode=1`
 
-返回 Android TV App 的最新发布版本。若当前版本已是最新，返回 `204 No Content`。
+返回 Android TV App 的最新发布版本。已是最新返回 `204 No Content`。
 
 ```json
 {
@@ -238,31 +94,15 @@ type PagedVideos = {
 
 ### `GET /app/download`
 
-下载 admin 发布并审查过的 Android TV App APK。服务端只负责下发已发布文件和元数据；APK 搜集/发布由 admin 管理页完成。
-
-### `GET /asset?p=...&sig=...`
-
-`proxy` 模式资源（缩略图 / 播放流）的后端回源端点。它存在的原因是 **App（国内）无法直连国外源**，
-而不是后端无法访问——后端可直连所有网络，回源时一律**直连上游**，不经任何出站代理：
-
-- 仅由后端在 `deliveryMode: "proxy"` 时签发，代理 payload 为认证加密 token，地址带签名(`sig`)和有效期；非后端签发的地址会被拒绝（403/410），不是开放代理，也不会向 App 暴露上游 URL/请求头。
-- 支持 `GET` / `HEAD`，并转发 `Range`、`If-Range`、`If-None-Match`、`If-Modified-Since`，支持边下边播和 seek（透传 `206`、`Content-Range`、`Accept-Ranges`）。
-- 上游所需请求头（如 `Referer` / `Origin`）由后端回源时附加，不下发给 App。
+下载 admin 发布并审查过的 Android TV App APK。
 
 ## 部署相关
 
-- `MEDIA_SERVER_PUBLIC_URL`（可选）：对外可见的 API 基址（如 `https://yinghuoren.com/api/media`），用于拼接 `proxy` 资源的 `/asset` 绝对地址。**位于会改写路径前缀的反向代理后面时必须设置**；未设置时按请求的 `Host` / `X-Forwarded-*` 头推导。
-- `MEDIA_SERVER_ASSET_URL_TTL_SECONDS`（可选，默认 21600=6 小时）：`/asset` 代理地址的有效期。
-- `contentCategories.json` 的 `sources[]` 可加 `"direct": true|false` 覆盖某个源的下发方式；省略时国内源(bilibili)默认 `direct`，国外源默认 `proxy`。`direct` 仅表示 **App 是否能直连该源**，与后端能否访问无关——后端可访问所有源。
+- `MEDIA_SERVER_PUBLIC_URL`（可选）：对外可见的 API 基址（如 `https://yinghuoren.com/api/media`）。位于反代后面时必须设置。
+- `contentCategories.json` 定义分类 ID 到标题/描述的映射。sources 字段保留解析（向后兼容旧配置）但不再使用。
 
 ## App 侧必须遵守
 
-1. 不要根据 `thumbnailUrl` 或 `url` 的 host 推断来源逻辑;用 `provider` + `deliveryMode` 区分资源走哪条路径。
-2. `direct` 请求必须带上 companion headers:
-   - 图片:`thumbnailHeaders`
-   - 播放:`playbackOptions[].headers`
-3. `proxy` 请求直接访问后端 `/asset` 地址即可,`headers` 为空,无需也不应附加上游请求头。
-4. 播放地址(尤其 `proxy` 的签名代理地址)不要持久化;进入播放器前刷新 `/videos/{id}/playback`。
-5. **能否本地解析是 provider 的固有属性**,App 端按 `VideoSummary.provider` 自行分流,不需要 server 在 PlaybackOption 里塞任何标记:
-   - `provider=bilibili` 等国内可直连源:**跳过** `/videos/{id}/playback`,App 自己用 `nativeId`(=BVID)调上游 API(view + playurl + WBI 签名)拿真实播放直链。当前 App 端只实现了 bilibili 解析器。
-   - `provider=youtube` 等国外源:走 `/videos/{id}/playback` 让 server + vod_extractor 解析。
+1. `VideoSummary.id` 是 catalog 的 nativeId（如 BV1xxx），不是 server 加密 ID。App 直接用它调用本地解析器。
+2. 当前仅 `provider=bilibili` 被支持。App 端实现 `BilibiliApi`（WBI 签名 + view + playurl）拿真实播放直链。
+3. 缩略图 URL 是上游原始地址（如 B 站 CDN 链接），App 直连时需带 `Referer: https://www.bilibili.com` 请求头。

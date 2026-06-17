@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,7 +60,14 @@ func OpenCatalog(path string) (*Catalog, error) {
 			return nil, fmt.Errorf("create catalog dir: %w", err)
 		}
 	}
-	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)", trimmed)
+	q := url.Values{
+		"_pragma": []string{
+			"busy_timeout(5000)",
+			"journal_mode(WAL)",
+			"foreign_keys(ON)",
+		},
+	}
+	dsn := fmt.Sprintf("file:%s?%s", trimmed, q.Encode())
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open catalog: %w", err)

@@ -1558,7 +1558,6 @@ class MainActivity : ComponentActivity() {
                         viewModel.playbackFailed(
                             playbackErrorMessage(error),
                             recoverable = recoverable,
-                            preferProxyPlayback = shouldUseProxyPlaybackFallback(error, stream),
                         )
                     }
                 })

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-`media_center` 的合规公开视频聚合后端：Go HTTP 服务，对外提供分类、搜索、详情、播放地址与 asset 代理接口（当前 Provider：Bilibili）。
+`media_center` 的合规公开视频聚合后端：Go HTTP 服务，对外只提供目录服务——视频来源列表、分类列表、视频元数据。
 
 ## 构建 & 测试
 
@@ -11,18 +11,35 @@ gofmt -l .            # 格式检查（列出不合规文件）
 go test ./...         # 单元测试
 ```
 
-> HTTP 服务监听 `PORT`（容器内默认 8787）。对外路由统一在 `/api/` 下：`/api/categories`、`/api/categories/{id}/videos`、`/api/search`、`/api/videos/{id}`、`/api/videos/{id}/playback`、`/api/asset`。
+> HTTP 服务监听 `PORT`（容器内默认 8787）。对外路由统一在 `/api/` 下：`/api/providers`、`/api/providers/{provider}/categories`、`/api/providers/{provider}/categories/{catId}/videos`、`/api/app/update`、`/api/app/download`。
 
 ## 约束
 
-- **API 契约**：以本目录 `API.md` 为准。`VideoSummary/VideoDetails` **会**透传 `provider + nativeId`(catalog 原始来源),让 App 端按 provider 自行决定走本地解析(国内可直连源)还是 server 解析(国外源);`PlaybackOption` 本身不带任何"是否本地解析"标记。
-- **视频类型**：`vod`（点播）是当前唯一支持类型；`live`（直播）不处理。
-- **asset 代理**：`/api/asset` 为签名代理（由 `MEDIA_SERVER_SIGNING_KEY` 签名），支持 Range 边下边播和 seek；签名地址不可被客户端持久化。
+- **API 契约**：以本目录 `API.md` 为准。server 端只做目录服务，不做任何上游 API 调用、不做播放地址解析、不做 asset 代理。播放完全由 App 端按 provider 自行处理。
 - **内容分类**：默认读取 `src/contentCategories.json`，可用 `CONTENT_CATEGORIES_FILE` 覆盖；线上由 `workwork` 的 admin 注入运行时分类配置。
-- **分类与搜索数据**：`/api/categories/{id}/videos` 和 `/api/search` 都只返回 catalog 中 `approved` 的数据，服务端**不做实时上游搜索/采集**；候选经 admin `/internal/catalog/import` 导入 → 人工 + AI 审核 → 上线 `approved`（详见本仓库根 `CLAUDE.md` 与 `CATEGORY_CURATION_GUIDE.md`）。聚合视频未经审核普遍标题与内容不符、大量无法播放，故不提供任何实时/未审核数据。
-- **Provider 解析路径分流**（关键）：
-  - **国内可直连源(当前 bilibili)**：server 端**不再**调上游 API。`handleVideos` 对这类 provider 走 catalog 路径(`detailsFromCatalog`)返回元数据 + 空 `playbackOptions`;`handlePlayback` 直接返回空数组。App 端拿到 `VideoSummary.provider=bilibili` 后自己调 B 站 API(view + playurl + WBI 签名)拿真实直链。`isClientResolvedProvider(providerID)` 判断哪些 provider 走此路径。bilibili.go 的 `GetDetails/GetPlaybackOptions` 只是 catalog 未命中时的兜底,不会真正调上游。
-  - **国外源(youtube 等)**：server 端调上游 API/解析服务。youtube 通过 `vod_extractor`(yt-dlp)解析,直链走 `/asset` 签名代理(proxy delivery)。
-- **合规**：只处理公开视频和授权内容，不接入盗版站点、DRM 绕过或未授权下载。
-- **新增 Provider**：国内可直连的新源在 `isClientResolvedProvider` + App 端 `MediaRepository.playbackOptions` 的 provider 分流里加分支即可(server 端零代码,App 端实现本地解析器);国外源沿用 youtube 的 server 解析 + vod_extractor 模式。
-- **点播解析**：本服务不内置 yt-dlp；国外源(youtube)由同仓库 `vod_extractor/` 服务负责解析(Docker 内网调用)。国内可直连源(bilibili)由 App 端自己解析,不走 vod_extractor。
+- **分类数据**：`/api/providers/{provider}/categories/{catId}/videos` 只返回 catalog 中 `approved` 的数据。候选经 admin `/internal/catalog/import` 导入 → 人工 + AI 审核 → 上线 `approved`。服务端绝不做实时上游搜索/采集。
+- **视频 id**：`VideoSummary.id` 是 catalog 的 nativeId（如 BV1xxx），App 直接用它调用本地解析器。id 不加密不签名。
+- **合规**：只处理公开视频和授权内容。
+
+## 架构
+
+- `main.go`：路由、handler、分页
+- `catalog.go`：SQLite 分类维护数据库（system of record），纯 modernc.org/sqlite 无 cgo
+- `catalog_serve.go`：CatalogVideo → VideoSummary 转换
+- `config.go`：环境变量配置加载
+- `internal_api.go`：`/internal/*` 管理接口（catalog import/export/review/delete），仅限内网
+- `review.go`：交互式审校命令（`-catalog-review`）
+- `app_update.go`：Android TV App 更新发布检查与 APK 下载
+- `types.go`：类型定义（VideoSummary、ProviderInfo、PublicCategory 等）
+
+## 路由
+
+| 方法 | 路径 | 功能 |
+|------|------|------|
+| GET | `/api/health` | 健康检查 |
+| GET | `/api/providers` | 有哪些视频源 |
+| GET | `/api/providers/{provider}/categories` | 某源的分类 |
+| GET | `/api/providers/{provider}/categories/{catId}/videos` | 某分类视频列表(分页) |
+| GET | `/api/app/update?versionCode=N` | App 更新检查 |
+| GET | `/api/app/download` | App APK 下载 |
+| POST | `/internal/catalog/*` | 管理接口(需 X-Internal-Token) |

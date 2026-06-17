@@ -216,9 +216,19 @@ func paginationFromRequest(r *http.Request) (int, int, *apiError) {
 }
 
 func (s *mediaServer) writeJSON(w http.ResponseWriter, status int, payload any) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("writeJSON marshal: %v", err)
+		s.writeError(w, &apiError{
+			Status:  http.StatusInternalServerError,
+			Code:    "INTERNAL_ERROR",
+			Message: "服务端内部错误。",
+		})
+		return
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
+	_, _ = w.Write(body)
 }
 
 func (s *mediaServer) writeError(w http.ResponseWriter, err error) {

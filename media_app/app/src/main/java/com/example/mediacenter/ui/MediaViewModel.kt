@@ -455,7 +455,6 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     fun playbackFailed(
         message: String,
         recoverable: Boolean = false,
-        preferProxyPlayback: Boolean = false,
     ) {
         val current = mutableState.value
         val failedOption = current.playing
@@ -480,7 +479,6 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                 videoId = selected.id,
                 failedOption = failedOption,
                 fallbackMessage = message,
-                preferProxyPlayback = preferProxyPlayback,
             )
             return
         }
@@ -498,9 +496,9 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
 
     /**
      * 可恢复播放失败后的自动恢复。先按 [playbackRecoveryAttempts] 做指数退避,给
-     * asset 代理回源(懒解析上游)或上游短期 URL 刷新留出时间,再重新拉取 [videoId]
-     * 的播放选项拿到新鲜地址。选档策略:前几次刷新**同一清晰度**(多为回源 warmup / 签名过期,同源
-     * 重试最可能恢复);最后一次额度才切到下一档绕开可能彻底坏掉的源。仍取不到可播放
+     * 上游短期 URL 刷新留出时间,再重新拉取 [videoId] 的播放选项拿到新鲜地址。
+     * 选档策略:前几次刷新**同一清晰度**(多为签名过期,同源重试最可能恢复);
+     * 最后一次额度才切到下一档绕开可能彻底坏掉的源。仍取不到可播放
      * 选项时落错误态。退避期间用户离开播放页或切换了清晰度则放弃,不写回过期状态。
      */
     private fun recoverPlayback(
@@ -508,7 +506,6 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         videoId: String,
         failedOption: PlaybackOption,
         fallbackMessage: String,
-        preferProxyPlayback: Boolean,
     ) {
         val attempt = playbackRecoveryAttempts
         recoveryJob?.cancel()
@@ -542,7 +539,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     AppLog.i(
                         "Playback",
                         "recover attempt $attempt fetched ${options.size} options, " +
-                            "candidate=${candidate?.id ?: "<none>"} proxy=$preferProxyPlayback",
+                            "candidate=${candidate?.id ?: "<none>"}",
                     )
                     mutableState.update { state ->
                         if (session != playbackSession ||
