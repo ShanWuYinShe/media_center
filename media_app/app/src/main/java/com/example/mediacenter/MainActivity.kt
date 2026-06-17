@@ -1433,7 +1433,10 @@ class MainActivity : ComponentActivity() {
                             onFocusChange = { focused ->
                                 if (focused) detailFocusTarget = DetailFocusTarget.Page(i)
                             },
-                            onClick = { viewModel.selectPage(i) },
+                            onClick = {
+                                selectedPlaybackOptionId = null
+                                viewModel.selectPage(i)
+                            },
                         )
                         registerDetailFocus(DetailFocusTarget.Page(i), chip)
                         pageRow.addView(chip, LinearLayout.LayoutParams(wrap(), dp(chipH)).withEndMargin(dp(12)))
