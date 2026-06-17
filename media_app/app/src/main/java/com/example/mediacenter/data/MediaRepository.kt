@@ -1,129 +1,62 @@
 package com.example.mediacenter.data
 
-enum class VideoDetailsCacheScope {
-    Category,
-    Search,
-}
-
 class MediaRepository(
     private val api: MediaApi,
     private val bilibiliApi: BilibiliApi = BilibiliApi(),
-    private val categoryDetailsCache: VideoDetailsCache? = null,
-    private val searchDetailsCache: VideoDetailsCache? = null,
 ) {
-    suspend fun categories(): List<ContentCategory> {
-        return api.categories().items
+    // 当前选中的 provider(默认 bilibili)。loadProviders 取到列表后自动选第一个。
+    @Volatile var currentProvider: String = "bilibili"
+        private set
+
+    suspend fun providers(): List<ProviderInfo> {
+        val items = api.providers().items
+        if (items.isNotEmpty()) {
+            currentProvider = items.first().id
+        }
+        return items
     }
 
+    // 兼容包装:ViewModel 仍调 categories() 无参版本。
+    suspend fun categories(): List<ContentCategory> = api.categories(currentProvider).items
+
+    suspend fun categories(provider: String): List<ContentCategory> = api.categories(provider).items
+
+    // 兼容包装:ViewModel 的 search/loadMore 仍调此方法,Repository 内部用
+    // categoryVideos 替代旧的 search endpoint(新 API 没有 search)。
     suspend fun search(
         query: String,
         categoryId: String?,
-        page: Int,
-        pageSize: Int,
+        page: Int = 1,
+        pageSize: Int = 18,
     ): SearchResponse {
-        val response = if (query.isNotBlank()) {
-            api.search(query, page = page, pageSize = pageSize)
-        } else if (categoryId != null) {
-            api.searchCategory(categoryId, page = page, pageSize = pageSize)
-        } else {
-            error("请选择一个分类或输入关键词")
+        if (categoryId == null) {
+            return SearchResponse(query = query, page = page, pageSize = pageSize)
         }
-        return response.copy(items = response.items.filter { it.videoKind == "vod" })
-    }
-
-    suspend fun details(
-        video: VideoSummary,
-        cacheScope: VideoDetailsCacheScope = VideoDetailsCacheScope.Category,
-    ): VideoDetails {
-        val cache = detailsCacheFor(cacheScope)
-        // 缓存不持久化 thumbnailHeaders/thumbnailUrl (签名 URL 不落盘)。
-        // toVideoDetails() 已用 video 的值做 fallback;这里补充与 API 路径相同的
-        // 归一化,保持两条路径结构一致。
-        cache?.get(video)?.let { cached ->
-            return cached.copy(
-                thumbnailUrl = cached.thumbnailUrl ?: video.thumbnailUrl,
-                thumbnailHeaders = cached.thumbnailHeaders.ifEmpty { video.thumbnailHeaders },
-            )
-        }
-        val details = try {
-            api.details(video.id)
-        } catch (error: Throwable) {
-            if (error.isNoPlayableStream) {
-                val unavailableDetails = video.toUnavailableDetails()
-                cache?.put(unavailableDetails)
-                return unavailableDetails
-            }
-            throw error
-        }
-        require(details.videoKind == "vod") { "当前只支持普通视频点播" }
-        val resolvedThumbnailUrl = details.thumbnailUrl ?: video.thumbnailUrl
-        val normalizedDetails = details.copy(
-            thumbnailUrl = resolvedThumbnailUrl,
-            thumbnailHeaders = when {
-                details.thumbnailUrl == null -> video.thumbnailHeaders
-                details.thumbnailHeaders.isNotEmpty() -> details.thumbnailHeaders
-                details.thumbnailUrl == video.thumbnailUrl -> video.thumbnailHeaders
-                else -> details.thumbnailHeaders
-            },
-            thumbnailDelivery = if (details.thumbnailUrl != null) details.thumbnailDelivery else video.thumbnailDelivery,
+        val resp = api.categoryVideos(currentProvider, categoryId, page, pageSize)
+        return SearchResponse(
+            query = query,
+            page = resp.page,
+            pageSize = resp.pageSize,
+            total = resp.total,
+            items = resp.items,
         )
-        cache?.put(normalizedDetails)
-        return normalizedDetails
     }
 
-    suspend fun prefetchDetails(
-        video: VideoSummary,
-        cacheScope: VideoDetailsCacheScope = VideoDetailsCacheScope.Category,
-    ) {
-        details(video, cacheScope)
-    }
-
-    /**
-     * 解析视频的可播放选项。按 [video] 的 provider 分流:
-     *  - 国内可直连源(当前 bilibili):**跳过** server `/videos/{id}/playback`,用 nativeId
-     *    调本地 [bilibiliApi] 拿真实播放直链。能否本地解析是 provider 的固有属性,
-     *    不依赖 server 在 PlaybackOption 里塞任何标记。
-     *  - 国外源(youtube 等):走 server,由 server + vod_extractor 解析。
-     */
-    suspend fun playbackOptions(
-        video: VideoDetails,
-        preferProxy: Boolean = false,
-    ): List<PlaybackOption> {
-        val provider = video.provider
-        val nativeId = video.nativeId
-        if (provider == "bilibili" && !nativeId.isNullOrEmpty()) {
-            return bilibiliApi.resolvePlayback(nativeId)
-        }
-        return try {
-            api.playback(video.id, preferProxy).items.filter { it.kind == "vod" }
-        } catch (error: Throwable) {
-            if (error.isNoPlayableStream) emptyList() else throw error
-        }
-    }
-
-    private fun detailsCacheFor(cacheScope: VideoDetailsCacheScope): VideoDetailsCache? {
-        return when (cacheScope) {
-            VideoDetailsCacheScope.Category -> categoryDetailsCache
-            VideoDetailsCacheScope.Search -> searchDetailsCache
-        }
-    }
-
-    private fun VideoSummary.toUnavailableDetails(): VideoDetails {
+    // 兼容包装:不再调 server details 接口,本地从 VideoSummary 构造 VideoDetails。
+    // server 只提供目录数据(id/title/desc/thumb),播放地址由 playbackOptions 按需解析。
+    suspend fun details(video: VideoSummary): VideoDetails {
         return VideoDetails(
-            id = id,
-            videoKind = videoKind,
-            title = title,
-            description = description,
-            year = year,
-            creators = creators,
-            thumbnailUrl = thumbnailUrl,
-            thumbnailHeaders = thumbnailHeaders,
-            thumbnailDelivery = thumbnailDelivery,
-            durationSeconds = durationSeconds,
-            playbackKind = playbackKind,
-            playbackOptions = emptyList(),
-            provider = provider,
-            nativeId = nativeId,
+            id = video.id,
+            title = video.title,
+            description = video.description,
+            thumbnailUrl = video.thumbnailUrl,
+            durationSeconds = video.durationSeconds,
         )
+    }
+
+    // 解析播放地址:当前所有视频来自 bilibili catalog,直接调 BilibiliApi。
+    // 后续加新 provider 时在此按 video.id 格式或 provider 字段分流。
+    suspend fun playbackOptions(video: VideoDetails): List<PlaybackOption> {
+        return bilibiliApi.resolvePlayback(video.id)
     }
 }

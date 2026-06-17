@@ -152,7 +152,6 @@ func newInternalTestServer(t *testing.T, token string) (*mediaServer, *Catalog) 
 		config:         AppConfig{InternalToken: token},
 		categories:     cats,
 		categoriesByID: indexCategories(cats),
-		idCodec:        NewIDCodec("test-secret"),
 		catalog:        c,
 	}
 	return s, c

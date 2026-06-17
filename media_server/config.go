@@ -1,75 +1,64 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
-	"time"
 )
 
 type AppConfig struct {
-	Host             string
-	Port             string
-	CategoriesPath   string
-	SigningKey       string
-	PublicBaseURL    string
-	AssetURLTTL      time.Duration
-	ProviderTimeout  time.Duration
-	MaxCategoryPages int
-	VODExtractorURL  string
-	YouTubeAPIKey    string
-	AssetCacheDir    string
-	AssetCacheMax    int64
+	Host           string
+	Port           string
+	CategoriesPath string
+	PublicBaseURL  string
 	// 分类维护数据库(SQLite, system of record)。分类浏览直接分页查询 approved 行;
 	// 路径为空或打开失败时优雅降级为空分类列表,详见 catalog.go。
 	CatalogDBPath string
 	// 内部管理接口令牌:非空时启用 /internal/* 管理接口(catalog 审校/seed),
 	// 请求需带匹配的 X-Internal-Token。为空则整组 /internal/* 接口关闭(404)。
-	// 仅供内网可信调用方(workwork 的 admin)使用,绝不经公网暴露。详见 internal_api.go。
 	InternalToken         string
 	AppUpdateManifestPath string
 	AppUpdateAPKPath      string
 }
 
+// contentCategories.json 的原始结构。sources 字段保留解析(向后兼容旧配置),
+// 但新方案不再使用——server 端是纯目录服务,不调上游 API,delivery/provider
+// 解析完全由 App 端按 provider 自行处理。
+type rawConfig struct {
+	Sources    []sourceConfig      `json:"sources"`
+	Categories []rawCategoryConfig `json:"categories"`
+}
+
+type sourceConfig struct {
+	ID      string `json:"id"`
+	Enabled bool   `json:"enabled"`
+}
+
+type rawCategoryConfig struct {
+	ID            string            `json:"id"`
+	Title         string            `json:"title"`
+	Description   string            `json:"description"`
+	SearchQuery   string            `json:"searchQuery"`
+	SearchQueries []string          `json:"searchQueries"`
+	SourceQueries map[string]string `json:"sourceQueries"`
+	Keywords      []string          `json:"keywords"`
+}
+
 type contentConfig struct {
-	Sources    []sourceConfig
 	Categories []ContentCategory
 }
 
 func loadAppConfig() (AppConfig, error) {
 	cfg := AppConfig{
-		Host:             getenv("HOST", "0.0.0.0"),
-		Port:             getenv("PORT", "8787"),
-		CategoriesPath:   firstNonEmpty(os.Getenv("CONTENT_CATEGORIES_FILE"), os.Getenv("MEDIA_SERVER_CONTENT_CATEGORIES_FILE"), "src/contentCategories.json"),
-		SigningKey:       firstNonEmpty(os.Getenv("MEDIA_SERVER_SIGNING_KEY"), os.Getenv("MEDIA_ASSET_SIGNING_KEY")),
-		PublicBaseURL:    normalizeBaseURL(firstNonEmpty(os.Getenv("MEDIA_SERVER_PUBLIC_URL"), os.Getenv("PUBLIC_BASE_URL"))),
-		AssetURLTTL:      durationFromSeconds(os.Getenv("MEDIA_SERVER_ASSET_URL_TTL_SECONDS"), 6*time.Hour),
-		ProviderTimeout:  durationFromMillis(os.Getenv("PROVIDER_FETCH_TIMEOUT_MS"), 15*time.Second),
-		MaxCategoryPages: positiveInt(os.Getenv("MEDIA_SERVER_CATEGORY_MAX_PAGES"), 6),
-		VODExtractorURL:  strings.TrimSpace(os.Getenv("VOD_EXTRACTOR_URL")),
-		YouTubeAPIKey:    strings.TrimSpace(os.Getenv("YOUTUBE_API_KEY")),
-		AssetCacheDir:    getenv("MEDIA_ASSET_CACHE_DIR", "/cache"),
-		AssetCacheMax:    positiveInt64(os.Getenv("MEDIA_ASSET_CACHE_MAX_BYTES"), 50*1024*1024*1024),
-		CatalogDBPath:    getenv("MEDIA_SERVER_CATALOG_DB", "data/catalog.db"),
-		InternalToken:    strings.TrimSpace(os.Getenv("MEDIA_SERVER_INTERNAL_TOKEN")),
-		AppUpdateManifestPath: getenv(
-			"MEDIA_SERVER_APP_UPDATE_MANIFEST",
-			"/config/app-update.json",
-		),
-		AppUpdateAPKPath: getenv(
-			"MEDIA_SERVER_APP_UPDATE_APK",
-			"/config/media-center-app.apk",
-		),
-	}
-	if cfg.SigningKey == "" {
-		random := make([]byte, 32)
-		if _, err := rand.Read(random); err != nil {
-			return AppConfig{}, fmt.Errorf("generate signing key: %w", err)
-		}
-		cfg.SigningKey = base64.RawURLEncoding.EncodeToString(random)
+		Host:                  getenv("HOST", "0.0.0.0"),
+		Port:                  getenv("PORT", "8787"),
+		CategoriesPath:        firstNonEmpty(os.Getenv("CONTENT_CATEGORIES_FILE"), os.Getenv("MEDIA_SERVER_CONTENT_CATEGORIES_FILE"), "src/contentCategories.json"),
+		PublicBaseURL:         normalizeBaseURL(firstNonEmpty(os.Getenv("MEDIA_SERVER_PUBLIC_URL"), os.Getenv("PUBLIC_BASE_URL"))),
+		CatalogDBPath:         getenv("MEDIA_SERVER_CATALOG_DB", "data/catalog.db"),
+		InternalToken:         strings.TrimSpace(os.Getenv("MEDIA_SERVER_INTERNAL_TOKEN")),
+		AppUpdateManifestPath: getenv("MEDIA_SERVER_APP_UPDATE_MANIFEST", "/config/app-update.json"),
+		AppUpdateAPKPath:      getenv("MEDIA_SERVER_APP_UPDATE_APK", "/config/media-center-app.apk"),
 	}
 	return cfg, nil
 }
@@ -128,63 +117,7 @@ func loadContentConfig(path string) (contentConfig, error) {
 			Keywords:      trimStrings(item.Keywords),
 		})
 	}
-	return contentConfig{Sources: normalizeSourceConfig(raw.Sources), Categories: categories}, nil
-}
-
-func normalizeSourceConfig(sources []sourceConfig) []sourceConfig {
-	if len(sources) == 0 {
-		return []sourceConfig{{ID: "bilibili", Enabled: true}}
-	}
-	out := make([]sourceConfig, 0, len(sources))
-	for _, source := range sources {
-		id := strings.TrimSpace(source.ID)
-		if id == "" {
-			continue
-		}
-		out = append(out, sourceConfig{ID: id, Enabled: source.Enabled, Direct: source.Direct})
-	}
-	return out
-}
-
-// defaultSourceDirect 是各内置源“国内是否可直连”的默认判断：
-// 国内源(bilibili)默认直连；国外源默认走服务端代理。
-var defaultSourceDirect = map[string]bool{
-	"bilibili":         true,
-	"youtube":          false,
-	"internet-archive": false,
-}
-
-// sourceDeliveryMode 解析某个源的 delivery 模式。优先用配置里的 direct 显式值，
-// 其次用内置默认；未知源默认走代理(proxy)，对国内访问更安全。
-func sourceDeliveryMode(sources []sourceConfig, id string) string {
-	for _, source := range sources {
-		if source.ID != id {
-			continue
-		}
-		if source.Direct != nil {
-			return deliveryModeFromDirect(*source.Direct)
-		}
-		break
-	}
-	if direct, ok := defaultSourceDirect[id]; ok {
-		return deliveryModeFromDirect(direct)
-	}
-	return DeliveryProxy
-}
-
-func deliveryModeFromDirect(direct bool) string {
-	if direct {
-		return DeliveryDirect
-	}
-	return DeliveryProxy
-}
-
-func sourceDeliveryModes(sources []sourceConfig, providerIDs []string) map[string]string {
-	modes := make(map[string]string, len(providerIDs))
-	for _, id := range providerIDs {
-		modes[id] = sourceDeliveryMode(sources, id)
-	}
-	return modes
+	return contentConfig{Categories: categories}, nil
 }
 
 func positiveInt(raw string, fallback int) int {
@@ -209,45 +142,6 @@ func positiveInt64(raw string, fallback int64) int64 {
 	return value
 }
 
-func durationFromMillis(raw string, fallback time.Duration) time.Duration {
-	if raw == "" {
-		return fallback
-	}
-	ms := positiveInt(raw, int(fallback/time.Millisecond))
-	return time.Duration(ms) * time.Millisecond
-}
-
-func durationFromSeconds(raw string, fallback time.Duration) time.Duration {
-	if raw == "" {
-		return fallback
-	}
-	seconds := positiveInt(raw, int(fallback/time.Second))
-	return time.Duration(seconds) * time.Second
-}
-
-func durationFromHours(raw string, fallback time.Duration) time.Duration {
-	if strings.TrimSpace(raw) == "" {
-		return fallback
-	}
-	hours := positiveInt(raw, int(fallback/time.Hour))
-	return time.Duration(hours) * time.Hour
-}
-
-// boolFromEnv 解析布尔型环境变量。空值返回默认;识别 1/true/yes/on 与 0/false/no/off。
-func boolFromEnv(raw string, fallback bool) bool {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "":
-		return fallback
-	case "1", "true", "yes", "on", "enabled":
-		return true
-	case "0", "false", "no", "off", "disabled":
-		return false
-	default:
-		return fallback
-	}
-}
-
-// normalizeBaseURL 去掉末尾斜杠，便于后续拼接 /asset。空值原样返回。
 func normalizeBaseURL(value string) string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
@@ -286,7 +180,6 @@ func trimStrings(values []string) []string {
 	return out
 }
 
-// dedupeStrings 去掉重复项(保持首次出现顺序),用于规整分类的多搜索词列表。
 func dedupeStrings(values []string) []string {
 	if len(values) == 0 {
 		return nil

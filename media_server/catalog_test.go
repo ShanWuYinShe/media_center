@@ -222,28 +222,25 @@ func TestCategoryVideosPageReadsCatalogDirectly(t *testing.T) {
 		categoriesByID: map[string]ContentCategory{
 			"movies": {ID: "movies", Title: "Movies", Description: "d"},
 		},
-		idCodec: NewIDCodec("test-secret"),
 		catalog: c,
 	}
-	resp, err := s.categoryVideosPage(nil, s.categoriesByID["movies"], 1, 10)
+	items, total, err := c.ApprovedPageForProvider("bilibili", "movies", 1, 10)
 	if err != nil {
-		t.Fatalf("categoryVideosPage: %v", err)
+		t.Fatalf("ApprovedPageForProvider: %v", err)
 	}
-	if resp.Total != 1 || len(resp.Items) != 1 {
-		t.Fatalf("unexpected response: total=%d items=%d", resp.Total, len(resp.Items))
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("unexpected response: total=%d items=%d", total, len(items))
 	}
-	if resp.Items[0].Title != "catalog movie" {
-		t.Fatalf("title = %q", resp.Items[0].Title)
+	summary := s.summaryFromCatalogVideo(items[0])
+	if summary.Title != "catalog movie" {
+		t.Fatalf("title = %q", summary.Title)
 	}
-	ref, err := s.idCodec.DecodeVideoRef(resp.Items[0].ID)
-	if err != nil {
-		t.Fatalf("decode id: %v", err)
+	// 新方案:id 直接是 catalog 的 nativeId(如 BV1xxx),不再 encode。
+	if summary.ID != "BV1cat" {
+		t.Fatalf("id = %q, want BV1cat", summary.ID)
 	}
-	if ref.Provider != "bilibili" || ref.ID != "BV1cat" {
-		t.Fatalf("decoded ref = %s/%s", ref.Provider, ref.ID)
-	}
-	if resp.Items[0].ThumbnailHeaders["Referer"] == "" {
-		t.Fatalf("expected bilibili thumbnail referer header")
+	if summary.ThumbnailURL != "https://i0.hdslb.com/test.jpg" {
+		t.Fatalf("thumbnailUrl = %q", summary.ThumbnailURL)
 	}
 }
 

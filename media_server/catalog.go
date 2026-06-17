@@ -388,6 +388,104 @@ WHERE v.provider = ? AND v.native_id = ?`, provider, nativeID)
 	return v, true, nil
 }
 
+// DistinctProviders 返回 catalog 中有 approved 视频的所有 provider(升序)。
+func (c *Catalog) DistinctProviders() ([]string, error) {
+	if c == nil {
+		return nil, nil
+	}
+	rows, err := c.db.Query(`SELECT DISTINCT provider FROM category_members WHERE status = 'approved' ORDER BY provider ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("query distinct providers: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var provider string
+		if err := rows.Scan(&provider); err != nil {
+			return nil, fmt.Errorf("scan provider: %w", err)
+		}
+		out = append(out, provider)
+	}
+	return out, rows.Err()
+}
+
+// CategoriesForProvider 返回某 provider 有 approved 视频的所有 category_id(升序)。
+func (c *Catalog) CategoriesForProvider(provider string) ([]string, error) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" || c == nil {
+		return nil, nil
+	}
+	rows, err := c.db.Query(`SELECT DISTINCT category_id FROM category_members WHERE provider = ? AND status = 'approved' ORDER BY category_id ASC`, provider)
+	if err != nil {
+		return nil, fmt.Errorf("query categories for provider: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var categoryID string
+		if err := rows.Scan(&categoryID); err != nil {
+			return nil, fmt.Errorf("scan category_id: %w", err)
+		}
+		out = append(out, categoryID)
+	}
+	return out, rows.Err()
+}
+
+// ApprovedPageForProvider 返回某 provider 某分类 approved 列表的一页与总条数。
+func (c *Catalog) ApprovedPageForProvider(provider, categoryID string, page, pageSize int) ([]CatalogVideo, int, error) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	categoryID = strings.TrimSpace(categoryID)
+	if provider == "" || categoryID == "" || c == nil {
+		return []CatalogVideo{}, 0, nil
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	var total int
+	if err := c.db.QueryRow(
+		`SELECT COUNT(*) FROM category_members WHERE provider = ? AND category_id = ? AND status = 'approved'`,
+		provider, categoryID,
+	).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count approved for provider: %w", err)
+	}
+	if total == 0 {
+		return []CatalogVideo{}, 0, nil
+	}
+	offset := (page - 1) * pageSize
+	rows, err := c.db.Query(`
+SELECT v.provider, v.native_id, v.title, v.description, v.creators, v.duration_sec, v.year, v.thumbnail_url, v.source_url
+FROM category_members m
+JOIN videos v ON v.provider = m.provider AND v.native_id = m.native_id
+WHERE m.provider = ? AND m.category_id = ? AND m.status = 'approved'
+ORDER BY m.pinned DESC, (m.rank IS NULL), m.rank ASC, m.score DESC, v.native_id ASC
+LIMIT ? OFFSET ?`, provider, categoryID, pageSize, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query approved page for provider: %w", err)
+	}
+	defer rows.Close()
+	out := make([]CatalogVideo, 0, pageSize)
+	for rows.Next() {
+		var v CatalogVideo
+		var creators sql.NullString
+		var description, year, thumb, source sql.NullString
+		var duration sql.NullInt64
+		if err := rows.Scan(&v.Provider, &v.NativeID, &v.Title, &description, &creators, &duration, &year, &thumb, &source); err != nil {
+			return nil, 0, fmt.Errorf("scan approved page for provider: %w", err)
+		}
+		v.Description = description.String
+		v.Year = year.String
+		v.ThumbnailURL = thumb.String
+		v.SourceURL = source.String
+		v.DurationSec = duration.Int64
+		v.Creators = decodeCreators(creators.String)
+		out = append(out, v)
+	}
+	return out, total, rows.Err()
+}
+
 // ApprovedForCategory 返回某分类已通过的成员,按 置顶 > 人工序 > 分数 排序。limit<=0 表示不限。
 func (c *Catalog) ApprovedForCategory(categoryID string, limit int) ([]CatalogVideo, error) {
 	categoryID = strings.TrimSpace(categoryID)

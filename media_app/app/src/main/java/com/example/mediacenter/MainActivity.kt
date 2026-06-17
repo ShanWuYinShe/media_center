@@ -59,13 +59,11 @@ import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.mediacenter.data.ContentCategory
-import com.example.mediacenter.data.DeliveryMode
 import com.example.mediacenter.data.isTransientHttpStatusCode
 import com.example.mediacenter.data.MediaApi
 import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.PlaybackOption
 import com.example.mediacenter.data.VideoDetails
-import com.example.mediacenter.data.VideoDetailsCache
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.player.CappedLoadErrorHandlingPolicy
 import com.example.mediacenter.player.TolerantDashManifestParser
@@ -105,13 +103,6 @@ class MainActivity : ComponentActivity() {
         MediaViewModelFactory(
             MediaRepository(
                 api = MediaApi(BuildConfig.MEDIA_SERVER_URL),
-                categoryDetailsCache = VideoDetailsCache(cacheDir),
-                searchDetailsCache = VideoDetailsCache(
-                    cacheDir = cacheDir,
-                    cacheDirectoryName = VideoDetailsCache.SearchCacheDirectoryName,
-                    maxBytes = VideoDetailsCache.SearchMaxBytes,
-                    maxAgeMillis = VideoDetailsCache.SearchMaxAgeMillis,
-                ),
             ),
         )
     }
@@ -796,7 +787,6 @@ class MainActivity : ComponentActivity() {
     private fun resetHomeDetailsPrefetch() {
         if (prefetchedVisibleVideoIds.isEmpty()) return
         prefetchedVisibleVideoIds = emptyList()
-        viewModel.cancelVisibleDetailsPrefetch()
     }
 
     private fun prefetchVisibleHomeDetails(videos: List<VideoSummary>) {
@@ -807,7 +797,6 @@ class MainActivity : ComponentActivity() {
             return
         }
         prefetchedVisibleVideoIds = ids
-        viewModel.prefetchVisibleDetails(videos)
     }
 
     private fun videoGrid(
@@ -1186,7 +1175,7 @@ class MainActivity : ComponentActivity() {
                 val video = boundVideo ?: return
                 loadImage(
                     url = boundThumbnailUrl,
-                    headers = video.thumbnailHeaders,
+                    headers = emptyMap(),
                     image = image,
                     placeholder = initials,
                     title = video.title,
@@ -1259,7 +1248,7 @@ class MainActivity : ComponentActivity() {
         val backdrop = ThumbnailImageView(this).apply { alpha = 0f }
         screen.addView(backdrop, frameMatch())
         screen.addView(detailBackdropScrim(), frameMatch())
-        loadBackdropImage(details.thumbnailUrl, details.thumbnailHeaders, backdrop)
+        loadBackdropImage(details.thumbnailUrl, emptyMap(), backdrop)
         // 详情页采用 Android TV / Material 设计规范的固定 dp/sp 值:
         // 标题 30sp(headline)、正文 18sp、说明 14sp(caption,均 ≥ TV 最小可读字号),
         // 主操作与可聚焦控件 ≥ 48dp 焦点目标,页边距满足 48/27dp overscan 安全区。
@@ -1318,7 +1307,7 @@ class MainActivity : ComponentActivity() {
         hero.addView(heroInitials, frameMatch())
         loadImage(
             url = details.thumbnailUrl,
-            headers = details.thumbnailHeaders,
+            headers = emptyMap(),
             image = heroImage,
             placeholder = heroInitials,
             title = details.title,
@@ -1346,8 +1335,6 @@ class MainActivity : ComponentActivity() {
 
         val metadata = listOfNotNull(
             details.durationSeconds?.let { formatDurationSeconds(it) },
-            details.year,
-            details.creators.firstOrNull(),
         ).joinToString(" · ")
         if (metadata.isNotBlank()) {
             info.addView(
@@ -1487,7 +1474,7 @@ class MainActivity : ComponentActivity() {
         AppLog.i(
             "Player",
             "prepare stream=${stream.id} kind=${stream.kind} mime=${stream.mimeType} " +
-                "delivery=${stream.delivery} url=${AppLog.redactUrl(playbackUrl)}",
+                "url=${AppLog.redactUrl(playbackUrl)}",
         )
         val dataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
@@ -3093,8 +3080,6 @@ class MainActivity : ComponentActivity() {
     private fun videoMeta(video: VideoSummary): String {
         return listOfNotNull(
             video.durationSeconds?.let { formatDurationSeconds(it) },
-            video.year,
-            video.creators.firstOrNull(),
         ).joinToString(" · ").ifBlank { "公开视频" }
     }
 
@@ -3608,7 +3593,7 @@ private fun isRecoverablePlaybackError(error: PlaybackException): Boolean {
 }
 
 private fun shouldUseProxyPlaybackFallback(error: PlaybackException, stream: PlaybackOption): Boolean {
-    return stream.delivery == DeliveryMode.DIRECT && isRecoverablePlaybackError(error)
+    return isRecoverablePlaybackError(error)
 }
 
 private fun playbackMimeType(mimeType: String?): String {

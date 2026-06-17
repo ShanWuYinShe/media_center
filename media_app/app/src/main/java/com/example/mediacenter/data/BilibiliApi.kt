@@ -68,7 +68,6 @@ class BilibiliApi(
                 url = first.url,
                 mimeType = "video/mp4",
                 headers = DIRECT_HEADERS,
-                delivery = DeliveryMode.DIRECT,
             ),
         )
     }
