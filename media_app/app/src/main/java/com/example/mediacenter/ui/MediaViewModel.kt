@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.mediacenter.data.ContentCategory
 import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.PlaybackOption
+import com.example.mediacenter.data.PlaybackPages
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.VideoDetails
 import com.example.mediacenter.data.VideoSummary
@@ -35,6 +36,8 @@ data class MediaUiState(
     val page: Int = 0,
     val playingVideo: VideoSummary? = null,
     val error: String? = null,
+    // 多P视频的分页信息(当前页/总页数/页标题),UI 据此显示选集按钮。
+    val currentPages: PlaybackPages? = null,
 )
 
 /**
@@ -399,23 +402,58 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             val cached = playbackCache[video.id]
             if (cached != null) {
                 mutableState.update {
-                    it.copy(selected = details.copy(playbackOptions = cached.options), loading = false)
+                    it.copy(selected = details.copy(playbackOptions = cached.options), loading = false,
+                            currentPages = cached.pages)
                 }
                 return@launch
             }
             mutableState.update { it.copy(selected = details, loading = false) }
-            // 缓存未命中:后台调 BilibiliApi 解析,完成后更新 selected.playbackOptions。
             runCatchingCancellable { repository.playbackOptions(details) }
                 .onSuccess { result ->
                     mutableState.update { state ->
                         if (state.selected?.id != details.id) return@update state
-                        state.copy(selected = state.selected.copy(playbackOptions = result.options))
+                        state.copy(selected = state.selected.copy(playbackOptions = result.options),
+                                   currentPages = result.pages)
                     }
                 }
                 .onFailure { error ->
                     mutableState.update { state ->
                         if (state.selected?.id != details.id) return@update state
                         state.copy(error = error.message ?: "解析播放地址失败")
+                    }
+                }
+        }
+    }
+
+    /**
+     * 多P视频选页:切换到指定页码,解析该页播放地址后更新 selected。
+     */
+    fun selectPage(pageIndex: Int) {
+        val current = mutableState.value
+        val selected = current.selected ?: return
+        val bvid = selected.id
+        val pages = current.currentPages ?: return
+        if (pageIndex < 0 || pageIndex >= pages.totalPages) return
+        if (pageIndex == pages.currentPage) return
+        detailsJob?.cancel()
+        detailsJob = viewModelScope.launch {
+            mutableState.update { it.copy(loading = true, error = null, currentPages = pages.copy(currentPage = pageIndex)) }
+            runCatchingCancellable { repository.resolvePagePlayback(bvid, pageIndex) }
+                .onSuccess { options ->
+                    mutableState.update { state ->
+                        if (state.selected?.id != bvid) return@update state
+                        val updatedPages = state.currentPages?.copy(currentPage = pageIndex)
+                        state.copy(
+                            loading = false,
+                            selected = state.selected.copy(playbackOptions = options),
+                            currentPages = updatedPages,
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    mutableState.update { state ->
+                        if (state.selected?.id != bvid) return@update state
+                        state.copy(loading = false, currentPages = pages, error = error.message ?: "切换分P失败")
                     }
                 }
         }

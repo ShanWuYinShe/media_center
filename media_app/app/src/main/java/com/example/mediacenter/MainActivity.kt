@@ -1409,6 +1409,43 @@ class MainActivity : ComponentActivity() {
             registerDetailFocus(DetailFocusTarget.Play, playButton)
             info.addView(playButton, LinearLayout.LayoutParams(wrap(), dp(playH)).withTopMargin(dp(gapPlay)))
 
+            // 多P选集:在清晰度上方显示分P按钮
+            state.currentPages?.let { pages ->
+                if (pages.totalPages > 1) {
+                    info.addView(label("选集", metaSize, Colors.TextTertiary, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapQuality)))
+                    val pageRow = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        clipChildren = false
+                        clipToPadding = false
+                        setPadding(0, dp(gapDisclosure), 0, dp(4))
+                    }
+                    val maxButtons = 12
+                    val showPages = if (pages.totalPages <= maxButtons) pages.totalPages else maxButtons - 1
+                    val startPage = if (pages.currentPage < showPages) 0
+                        else minOf(pages.currentPage - showPages / 2, pages.totalPages - showPages)
+                    for (i in startPage until startPage + showPages) {
+                        val label = "第${i + 1}集"
+                        val chip = pill(
+                            text = label,
+                            selected = i == pages.currentPage,
+                            heightDp = chipH,
+                            horizontalPaddingDp = chipHPad,
+                            onFocusChange = { focused ->
+                                if (focused) detailFocusTarget = DetailFocusTarget.Page(i)
+                            },
+                            onClick = { viewModel.selectPage(i) },
+                        )
+                        registerDetailFocus(DetailFocusTarget.Page(i), chip)
+                        pageRow.addView(chip, LinearLayout.LayoutParams(wrap(), dp(chipH)).withEndMargin(dp(12)))
+                    }
+                    if (pages.totalPages > maxButtons) {
+                        val moreChip = pill("...", selected = false, heightDp = chipH, horizontalPaddingDp = chipHPad, onClick = {})
+                        pageRow.addView(moreChip, LinearLayout.LayoutParams(wrap(), dp(chipH)))
+                    }
+                    info.addView(pageRow, linearMatch())
+                }
+            }
+
             if (options.size > 1) {
                 info.addView(label("清晰度", metaSize, Colors.TextTertiary, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapQuality)))
                 val optionRow = LinearLayout(this).apply {
@@ -3221,6 +3258,7 @@ private sealed class DetailFocusTarget {
     object Play : DetailFocusTarget()
     object Refresh : DetailFocusTarget()
     data class Option(val id: String) : DetailFocusTarget()
+    data class Page(val index: Int) : DetailFocusTarget()
 }
 
 private const val HomeFocusNoCategoryKey = "__no_category__"
