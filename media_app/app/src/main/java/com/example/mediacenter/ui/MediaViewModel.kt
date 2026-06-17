@@ -440,7 +440,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         recoveryJob?.cancel()
         detailsJob = viewModelScope.launch {
             mutableState.update { it.copy(loading = true, error = null) }
-            runCatchingCancellable { repository.playbackOptions(selected.id) }
+            runCatchingCancellable { repository.playbackOptions(selected) }
                 .onSuccess { options ->
                     val freshStream = options.firstOrNull { it.id == stream.id }
                         ?: options.firstOrNull { it.label == stream.label }
@@ -569,7 +569,9 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                 mutableState.update { it.copy(loading = false) }
                 return@launch
             }
-            runCatchingCancellable { repository.playbackOptions(videoId, preferProxyPlayback) }
+            val currentSelected = afterDelay.selected
+                ?: return@launch
+            runCatchingCancellable { repository.playbackOptions(currentSelected, preferProxyPlayback) }
                 .onSuccess { options ->
                     val sameIdx = options.indexOfFirst { it.id == failedOption.id }
                     val candidate = when {
@@ -633,7 +635,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         recoveryJob?.cancel()
         detailsJob = viewModelScope.launch {
             mutableState.update { it.copy(loading = true, error = null) }
-            runCatchingCancellable { repository.playbackOptions(selected.id) }
+            runCatchingCancellable { repository.playbackOptions(selected) }
                 .onSuccess { options ->
                     mutableState.update { state ->
                         if (state.selected?.id != selected.id) {
@@ -727,7 +729,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             mutableState.update { it.copy(loading = true, error = null) }
             runCatchingCancellable {
                 val details = repository.details(nextVideo, cacheScope)
-                val playbackOptions = repository.playbackOptions(details.id)
+                val playbackOptions = repository.playbackOptions(details)
                 details.copy(playbackOptions = playbackOptions)
             }
                 .onSuccess { details ->

@@ -14,13 +14,17 @@ App 应把配置值当作 **API base URL**。当前线上默认是：
 - **缩略图始终走 `proxy`**：`thumbnailUrl` 是签名 `/asset` 代理地址，字节由**后端回源**并转发；
   上游请求头由后端附加，`thumbnailHeaders` 为空。这样可避免 Android TV 直连上游时被老旧证书链、
   Referer/UA 差异或区域网络策略影响。
-- **播放流 `direct`（国内可直连源，如 Bilibili）**：后端直接返回上游 `playbackOptions[].url`，
-  并通过 `playbackOptions[].headers` 下发直连所需请求头，由 **App 直连上游**，
-  避免后端被大流量媒体播放限流。
+- **播放流 `direct`（国内可直连源，如 Bilibili 的某些路径）**：后端直接返回上游 `playbackOptions[].url` + companion headers，App 直连上游。当前 bilibili **不再走此路径**(见下条)。
+- **`provider` 标记的本地解析路径（当前 bilibili 走此路径）**：能否本地解析是 **provider 的固有属性**，
+  不需要在 PlaybackOption 里塞任何标记。后端在 `VideoSummary/VideoDetails` 透传 `provider + nativeId`，
+  App 端识别 `provider=bilibili` 后**跳过** `/videos/{id}/playback`，自己用 `nativeId`（=BVID）调 B 站
+  API（view + playurl + WBI 签名）拿真实播放直链。后端的 `/videos/{id}/playback` 对 bilibili 返回空数组
+  （App 不调，dead path）；`/videos/{id}` 返回 catalog 元数据 + 空 `playbackOptions`。
+  这样省掉 server 端上游调用 + 让 App 直连上游 CDN（国内带宽 + 风控按用户 IP 计）。
 - **播放流 `proxy`（国内不可直连的国外源）**：后端返回的是签名 `/asset` 代理地址，字节由**后端回源**并转发；
   上游请求头由后端附加，**不会**下发给 App（对应 `headers` 为空）。
-- App 必须把 URL 当成**可执行地址**，不要根据 host 推断来源；通过 `deliveryMode` 区分两类资源。
-- `playbackOptions[].headers` 必须原样带到对应请求里（`proxy` 模式下为空）。
+- App 必须把 URL 当成**可执行地址**，不要根据 host 推断来源；通过 `deliveryMode` + `provider` 区分资源走哪条路径。
+- `playbackOptions[].headers` 在 `direct` 模式下必须原样带到对应请求里；`proxy` 模式下为空。
 - `proxy` 模式下的 `thumbnailUrl` / `playbackOptions[].url` 是带签名和有效期的代理地址，**不要持久化**。
 - 视频类型当前只支持 `vod`。
 - 视频 `id` 和播放选项 `id` 都是不透明值；App 必须原样保存，并在放入 path 时 URL encode。
@@ -76,6 +80,10 @@ type VideoSummary = {
   thumbnailDelivery?: DeliveryMode;
   durationSeconds?: number;
   playbackKind: "vod";
+  // 透传 catalog 原始来源(如 "bilibili" + "BV...");App 端据此判断是否需要
+  // 自己解析播放地址(App 按 provider 分流,server 端 PlaybackOption 不带任何标记)。
+  provider?: string;
+  nativeId?: string;
 };
 ```
 
@@ -101,6 +109,9 @@ type PlaybackOption = {
   delivery?: DeliveryMode;
 };
 ```
+
+> **注意**：`PlaybackOption` 不带任何"是否本地解析"标记。能否本地解析是 **provider 的固有属性**，
+> App 端通过 `VideoSummary.provider` 自行判断（见"App 侧必须遵守"第 5 条）。
 
 ### PagedVideos
 
@@ -246,9 +257,12 @@ type PagedVideos = {
 
 ## App 侧必须遵守
 
-1. 不要根据 `thumbnailUrl` 或 `url` 的 host 推断来源逻辑；用 `deliveryMode` 区分 `direct` / `proxy`。
-2. `direct` 请求必须带上 companion headers：
-   - 图片：`thumbnailHeaders`
-   - 播放：`playbackOptions[].headers`
-3. `proxy` 请求直接访问后端 `/asset` 地址即可，`headers` 为空，无需也不应附加上游请求头。
-4. 播放地址（尤其 `proxy` 的签名代理地址）不要持久化；进入播放器前刷新 `/videos/{id}/playback`。
+1. 不要根据 `thumbnailUrl` 或 `url` 的 host 推断来源逻辑;用 `provider` + `deliveryMode` 区分资源走哪条路径。
+2. `direct` 请求必须带上 companion headers:
+   - 图片:`thumbnailHeaders`
+   - 播放:`playbackOptions[].headers`
+3. `proxy` 请求直接访问后端 `/asset` 地址即可,`headers` 为空,无需也不应附加上游请求头。
+4. 播放地址(尤其 `proxy` 的签名代理地址)不要持久化;进入播放器前刷新 `/videos/{id}/playback`。
+5. **能否本地解析是 provider 的固有属性**,App 端按 `VideoSummary.provider` 自行分流,不需要 server 在 PlaybackOption 里塞任何标记:
+   - `provider=bilibili` 等国内可直连源:**跳过** `/videos/{id}/playback`,App 自己用 `nativeId`(=BVID)调上游 API(view + playurl + WBI 签名)拿真实播放直链。当前 App 端只实现了 bilibili 解析器。
+   - `provider=youtube` 等国外源:走 `/videos/{id}/playback` 让 server + vod_extractor 解析。

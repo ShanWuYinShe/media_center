@@ -111,6 +111,11 @@ private data class CachedVideoDetails(
     val durationSeconds: Long? = null,
     val playbackKind: String = "vod",
     val playbackOptions: List<CachedPlaybackOption> = emptyList(),
+    // provider + nativeId 是 catalog 原始来源(稳定字段,不随请求变化),必须持久化:
+    // 缓存命中时 App 端要据此判断走本地解析(bilibili)还是 server,丢失会导致
+    // bilibili 视频二次播放时落到 server /playback(返回空)报"暂无可播放清晰度"。
+    val provider: String? = null,
+    val nativeId: String? = null,
     val cachedAtMillis: Long = 0L,
 ) {
     fun isExpired(maxAgeMillis: Long): Boolean {
@@ -132,6 +137,9 @@ private data class CachedVideoDetails(
             durationSeconds = durationSeconds,
             playbackKind = playbackKind,
             playbackOptions = playbackOptions.map { it.toPlaybackOption() },
+            // 优先用持久化值;旧缓存(本次改造前写入)没有这两字段时退回 VideoSummary 的值。
+            provider = provider ?: video.provider,
+            nativeId = nativeId ?: video.nativeId,
         )
     }
 
@@ -147,6 +155,8 @@ private data class CachedVideoDetails(
                 durationSeconds = details.durationSeconds,
                 playbackKind = details.playbackKind,
                 playbackOptions = details.playbackOptions.map(CachedPlaybackOption::from),
+                provider = details.provider,
+                nativeId = details.nativeId,
                 cachedAtMillis = System.currentTimeMillis(),
             )
         }

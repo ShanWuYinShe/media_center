@@ -2,86 +2,23 @@ package main
 
 import (
 	"context"
-	"crypto/md5"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
-	"regexp"
-	"slices"
 	"strings"
-	"sync"
 	"time"
 )
 
 const (
-	bilibiliAPIBase   = "https://api.bilibili.com"
 	bilibiliWebOrigin = "https://www.bilibili.com"
 	bilibiliUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
-var (
-	qualityDescPattern  = regexp.MustCompile(`(\d+\s*[PpKk][^\s]*|4\s*[Kk])`)
-	wbiSanitizeReplacer = strings.NewReplacer("!", "", "'", "", "(", "", ")", "", "*", "")
-)
-
-var mixinKeyEncTab = []int{
-	46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
-	33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61,
-	26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36,
-	20, 34, 44, 52,
-}
-
+// BilibiliClient 是 bilibili provider 的最小实现:国内可直连源,server 端不再调
+// B 站 view/playurl API,只返回 catalog 元数据 + client-resolve 占位 option,
+// 让 App 端拿到 Provider + NativeID(=BVID)后自己解析播放地址。
+// 保留 http.Client 字段是为了让 NewBilibiliClient 与 providers.go 期望的签名一致。
 type BilibiliClient struct {
-	client    *http.Client
-	keysMu    sync.Mutex
-	imgKey    string
-	subKey    string
-	keyExpiry time.Time
-}
-
-type bilibiliViewResponse struct {
-	Code int `json:"code"`
-	Data struct {
-		BVID     string `json:"bvid"`
-		Title    string `json:"title"`
-		Desc     string `json:"desc"`
-		Pic      string `json:"pic"`
-		CID      int64  `json:"cid"`
-		PubDate  int64  `json:"pubdate"`
-		Duration int64  `json:"duration"`
-		Owner    struct {
-			Name string `json:"name"`
-		} `json:"owner"`
-	} `json:"data"`
-}
-
-type bilibiliPlayURLResponse struct {
-	Code int `json:"code"`
-	Data struct {
-		Quality           int            `json:"quality"`
-		AcceptQuality     []int          `json:"accept_quality"`
-		AcceptDescription []string       `json:"accept_description"`
-		VVoucher          string         `json:"v_voucher"`
-		DURL              []bilibiliDURL `json:"durl"`
-	} `json:"data"`
-}
-
-type bilibiliDURL struct {
-	URL  string `json:"url"`
-	Size int64  `json:"size"`
-}
-
-type bilibiliNavResponse struct {
-	Code int `json:"code"`
-	Data struct {
-		WBIImg struct {
-			ImgURL string `json:"img_url"`
-			SubURL string `json:"sub_url"`
-		} `json:"wbi_img"`
-	} `json:"data"`
+	client *http.Client
 }
 
 func NewBilibiliClient(timeout time.Duration) *BilibiliClient {
@@ -98,323 +35,45 @@ func (c *BilibiliClient) ID() string {
 }
 
 func (c *BilibiliClient) GetDetails(
-	ctx context.Context,
+	_ context.Context,
 	bvid string,
 	codec *IDCodec,
 ) (VideoDetails, error) {
-	view, err := c.fetchView(ctx, bvid)
-	if err != nil {
-		return VideoDetails{}, err
-	}
-	playbackOptions, err := c.fetchPlaybackOptions(ctx, bvid, view.Data.CID, codec)
-	if err != nil {
-		return VideoDetails{}, err
-	}
+	// 国内可直连源:server 端不再调 B 站 view API。handleVideos 会优先从 catalog
+	// 拿元数据 + provider/nativeID,这里只是 catalog 未命中时的兜底:返回最小 details,
+	// App 端拿到 Provider + NativeID 后自己解析播放地址。
+	// PlaybackOptions 留空——App 端看到 provider=bilibili 就直接调本地 BilibiliApi,
+	// 不会走 server /videos/{id}/playback。
 	return VideoDetails{
-		ID:               codec.EncodeVideoID(view.Data.BVID),
-		VideoKind:        "vod",
-		Title:            strings.TrimSpace(defaultString(view.Data.Title, view.Data.BVID)),
-		Description:      view.Data.Desc,
-		Year:             yearString(view.Data.PubDate),
-		Creators:         creatorList(view.Data.Owner.Name),
-		ThumbnailURL:     normalizePicURL(view.Data.Pic),
-		ThumbnailHeaders: directThumbnailHeaders(),
-		DurationSeconds:  view.Data.Duration,
-		PlaybackKind:     "vod",
-		PlaybackOptions:  playbackOptions,
+		ID:           codec.EncodeVideoID(bvid),
+		VideoKind:    "vod",
+		Title:        bvid,
+		PlaybackKind: "vod",
+		Provider:     "bilibili",
+		NativeID:     bvid,
 	}, nil
 }
 
 func (c *BilibiliClient) GetPlaybackOptions(
-	ctx context.Context,
-	bvid string,
-	codec *IDCodec,
+	_ context.Context,
+	_ string,
+	_ *IDCodec,
 ) ([]PlaybackOption, error) {
-	view, err := c.fetchView(ctx, bvid)
-	if err != nil {
-		return nil, err
-	}
-	return c.fetchPlaybackOptions(ctx, bvid, view.Data.CID, codec)
+	// 国内可直连源的 server 端不再调 B 站 playurl,PlaybackOptions 直接返回空。
+	// App 端拿到 VideoSummary.provider=bilibili 后直接调本地 BilibiliApi,
+	// 不会调到 server /videos/{id}/playback;此处仅作兜底。
+	return []PlaybackOption{}, nil
 }
 
-func (c *BilibiliClient) fetchView(ctx context.Context, bvid string) (bilibiliViewResponse, error) {
-	signedURL, err := c.signedURL(ctx, "/x/web-interface/wbi/view", map[string]string{
-		"bvid": bvid,
-	})
-	if err != nil {
-		return bilibiliViewResponse{}, err
-	}
-	var payload bilibiliViewResponse
-	if err := c.getJSON(ctx, signedURL, bilibiliWebHeaders(), &payload); err != nil {
-		return bilibiliViewResponse{}, err
-	}
-	if payload.Code != 0 || payload.Data.BVID == "" {
-		return bilibiliViewResponse{}, &apiError{
-			Status:  http.StatusNotFound,
-			Code:    "NOT_FOUND",
-			Message: "未找到视频详情。",
-		}
-	}
-	if payload.Data.CID == 0 {
-		return bilibiliViewResponse{}, &apiError{
-			Status:  http.StatusUnprocessableEntity,
-			Code:    "NO_PLAYABLE_STREAM",
-			Message: "无法获取视频流信息。",
-		}
-	}
-	return payload, nil
-}
-
-func (c *BilibiliClient) fetchPlaybackOptions(
-	ctx context.Context,
-	bvid string,
-	cid int64,
-	codec *IDCodec,
-) ([]PlaybackOption, error) {
-	probe, err := c.fetchPlayURL(ctx, bvid, cid, 80)
-	if err != nil {
-		return nil, err
-	}
-	if voucherOnly(probe) {
-		return nil, &apiError{
-			Status:  http.StatusBadGateway,
-			Code:    "UPSTREAM_UNAVAILABLE",
-			Message: "B站播放地址请求触发风控，请稍后重试。",
-		}
-	}
-	if len(probe.Data.DURL) == 0 {
-		return nil, &apiError{
-			Status:  http.StatusUnprocessableEntity,
-			Code:    "NO_PLAYABLE_STREAM",
-			Message: "该普通视频暂无可由 App 直接播放的点播媒体地址。",
-		}
-	}
-
-	descByQuality := make(map[int]string, len(probe.Data.AcceptQuality))
-	for index, quality := range probe.Data.AcceptQuality {
-		if index < len(probe.Data.AcceptDescription) && strings.TrimSpace(probe.Data.AcceptDescription[index]) != "" {
-			descByQuality[quality] = probe.Data.AcceptDescription[index]
-		}
-	}
-
-	candidateQualities := slices.Clone(probe.Data.AcceptQuality)
-	if len(candidateQualities) == 0 {
-		candidateQualities = []int{probe.Data.Quality}
-	}
-	if len(candidateQualities) > 4 {
-		candidateQualities = candidateQualities[:4]
-	}
-
-	options := make([]PlaybackOption, 0, len(candidateQualities))
-	seenLabels := make(map[string]struct{}, len(candidateQualities))
-	for _, qn := range candidateQualities {
-		data := probe
-		if qn != probe.Data.Quality {
-			data, err = c.fetchPlayURL(ctx, bvid, cid, qn)
-			if err != nil {
-				return nil, err
-			}
-		}
-		if voucherOnly(data) {
-			return nil, &apiError{
-				Status:  http.StatusBadGateway,
-				Code:    "UPSTREAM_UNAVAILABLE",
-				Message: "B站播放地址请求触发风控，请稍后重试。",
-			}
-		}
-		if len(data.Data.DURL) != 1 || strings.TrimSpace(data.Data.DURL[0].URL) == "" {
-			continue
-		}
-		actualQuality := data.Data.Quality
-		if actualQuality == 0 {
-			actualQuality = qn
-		}
-		label := qualityLabel(actualQuality)
-		if desc, ok := descByQuality[actualQuality]; ok {
-			label = compactQualityDesc(desc, actualQuality)
-		}
-		if _, exists := seenLabels[label]; exists {
-			continue
-		}
-		seenLabels[label] = struct{}{}
-		options = append(options, PlaybackOption{
-			ID:       codec.EncodePlaybackID(bvid, actualQuality),
-			Kind:     "vod",
-			Label:    label,
-			URL:      data.Data.DURL[0].URL,
-			MimeType: "video/mp4",
-			Headers:  directPlaybackHeaders(),
-		})
-	}
-	if len(options) == 0 {
-		return nil, &apiError{
-			Status:  http.StatusUnprocessableEntity,
-			Code:    "NO_PLAYABLE_STREAM",
-			Message: "该普通视频暂无可由 App 直接播放的点播媒体地址。",
-		}
-	}
-	return options, nil
-}
-
-func (c *BilibiliClient) fetchPlayURL(
-	ctx context.Context,
-	bvid string,
-	cid int64,
-	qn int,
-) (bilibiliPlayURLResponse, error) {
-	signedURL, err := c.signedURL(ctx, "/x/player/wbi/playurl", map[string]string{
-		"bvid":  bvid,
-		"cid":   fmt.Sprintf("%d", cid),
-		"fnval": "0",
-		"qn":    fmt.Sprintf("%d", qn),
-		"fourk": "1",
-	})
-	if err != nil {
-		return bilibiliPlayURLResponse{}, err
-	}
-	var payload bilibiliPlayURLResponse
-	if err := c.getJSON(ctx, signedURL, bilibiliWebHeaders(), &payload); err != nil {
-		return bilibiliPlayURLResponse{}, err
-	}
-	if payload.Code != 0 {
-		return bilibiliPlayURLResponse{}, &apiError{
-			Status:  http.StatusBadGateway,
-			Code:    "UPSTREAM_UNAVAILABLE",
-			Message: fmt.Sprintf("B站播放接口返回错误 (code=%d)。", payload.Code),
-		}
-	}
-	return payload, nil
-}
-
-func (c *BilibiliClient) signedURL(
-	ctx context.Context,
-	path string,
-	params map[string]string,
-) (string, error) {
-	imgKey, subKey, err := c.ensureWBIKeys(ctx)
-	if err != nil {
-		return "", err
-	}
-	signed := signWBIParams(params, imgKey, subKey)
-	u, err := url.Parse(bilibiliAPIBase + path)
-	if err != nil {
-		return "", err
-	}
-	query := u.Query()
-	for key, value := range signed {
-		query.Set(key, value)
-	}
-	u.RawQuery = query.Encode()
-	return u.String(), nil
-}
-
-func (c *BilibiliClient) ensureWBIKeys(ctx context.Context) (string, string, error) {
-	// 快速路径：锁内检查缓存，命中即返回。
-	c.keysMu.Lock()
-	if c.imgKey != "" && c.subKey != "" && time.Now().Before(c.keyExpiry) {
-		img, sub := c.imgKey, c.subKey
-		c.keysMu.Unlock()
-		return img, sub, nil
-	}
-	c.keysMu.Unlock()
-
-	// 慢路径：锁外发起 HTTP 请求，避免阻塞其他 goroutine。
-	var payload bilibiliNavResponse
-	if err := c.getJSON(ctx, bilibiliAPIBase+"/x/web-interface/nav", bilibiliWebHeaders(), &payload); err != nil {
-		return "", "", err
-	}
-	imgKey, subKey, err := wbiKeysOrNavError(payload)
-	if err != nil {
-		return "", "", err
-	}
-
-	// 锁内 double-check 更新：如果已被其他 goroutine 刷新，直接用已有的。
-	c.keysMu.Lock()
-	defer c.keysMu.Unlock()
-	if c.imgKey != "" && c.subKey != "" && time.Now().Before(c.keyExpiry) {
-		return c.imgKey, c.subKey, nil
-	}
-	c.imgKey = imgKey
-	c.subKey = subKey
-	c.keyExpiry = time.Now().Add(10 * time.Minute)
-	return c.imgKey, c.subKey, nil
-}
-
-func wbiKeysOrNavError(payload bilibiliNavResponse) (string, string, error) {
-	imgKey, subKey := wbiKeysFromNav(payload)
-	if imgKey != "" && subKey != "" {
-		return imgKey, subKey, nil
-	}
-	if payload.Code != 0 {
-		return "", "", &apiError{
-			Status:  http.StatusBadGateway,
-			Code:    "UPSTREAM_UNAVAILABLE",
-			Message: fmt.Sprintf("B站导航接口返回错误 (code=%d)。", payload.Code),
-		}
-	}
-	return "", "", &apiError{
-		Status:  http.StatusBadGateway,
-		Code:    "UPSTREAM_UNAVAILABLE",
-		Message: "无法获取 B站签名密钥。",
-	}
-}
-
-func wbiKeysFromNav(payload bilibiliNavResponse) (string, string) {
-	return extractWBIKey(payload.Data.WBIImg.ImgURL), extractWBIKey(payload.Data.WBIImg.SubURL)
-}
-
-func (c *BilibiliClient) getJSON(
-	ctx context.Context,
-	rawURL string,
-	headers map[string]string,
-	target any,
-) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return err
-	}
-	for key, value := range headers {
-		req.Header.Set(key, value)
-	}
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return &apiError{
-			Status:  http.StatusBadGateway,
-			Code:    "UPSTREAM_UNAVAILABLE",
-			Message: "无法连接 B站 API。",
-		}
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &apiError{
-			Status:  http.StatusBadGateway,
-			Code:    "UPSTREAM_UNAVAILABLE",
-			Message: "B站 API 返回了错误响应。",
-		}
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(body, target); err != nil {
-		return err
-	}
-	return nil
-}
-
-func bilibiliWebHeaders() map[string]string {
-	return map[string]string{
-		"User-Agent": bilibiliUserAgent,
-		"Referer":    bilibiliWebOrigin,
-	}
-}
-
+// directThumbnailHeaders 返回抓取 B 站缩略图所需的 Referer(catalog_serve.go 透传给 App)。
 func directThumbnailHeaders() map[string]string {
 	return map[string]string{
 		"Referer": bilibiliWebOrigin,
 	}
 }
 
+// directPlaybackHeaders 返回 App 直连 B 站 CDN 播放流所需的请求头。
+// 即便走 client-resolve 路径(App 自己拿 URL),仍需要 Referer/Origin 才能通过 B 站防盗链。
 func directPlaybackHeaders() map[string]string {
 	return map[string]string{
 		"Referer": bilibiliWebOrigin,
@@ -422,32 +81,7 @@ func directPlaybackHeaders() map[string]string {
 	}
 }
 
-func normalizePicURL(raw string) string {
-	if strings.HasPrefix(raw, "//") {
-		return "https:" + raw
-	}
-	return raw
-}
-
-func parseDuration(raw string) int64 {
-	if raw == "" {
-		return 0
-	}
-	parts := strings.Split(raw, ":")
-	if len(parts) != 2 && len(parts) != 3 {
-		return 0
-	}
-	total := int64(0)
-	for _, part := range parts {
-		var value int64
-		if _, err := fmt.Sscanf(strings.TrimSpace(part), "%d", &value); err != nil {
-			return 0
-		}
-		total = total*60 + value
-	}
-	return total
-}
-
+// qualityLabel 把 B 站清晰度代码(qn)转成展示标签。ids.go 的 EncodePlaybackID 用。
 func qualityLabel(quality int) string {
 	switch {
 	case quality >= 120:
@@ -467,64 +101,27 @@ func qualityLabel(quality int) string {
 	}
 }
 
-func compactQualityDesc(desc string, quality int) string {
-	match := qualityDescPattern.FindString(desc)
-	if match == "" {
-		return qualityLabel(quality)
+// parseDuration 把 "HH:MM:SS" / "MM:SS" 字符串解析成秒。internet_archive.go 用。
+func parseDuration(raw string) int64 {
+	if raw == "" {
+		return 0
 	}
-	return strings.ToUpper(strings.ReplaceAll(match, " ", ""))
-}
-
-func voucherOnly(response bilibiliPlayURLResponse) bool {
-	return strings.TrimSpace(response.Data.VVoucher) != "" && len(response.Data.DURL) == 0
-}
-
-func signWBIParams(params map[string]string, imgKey, subKey string) map[string]string {
-	mixinKey := getMixinKey(imgKey + subKey)
-	all := make(map[string]string, len(params)+2)
-	for key, value := range params {
-		all[key] = value
+	parts := strings.Split(raw, ":")
+	if len(parts) != 2 && len(parts) != 3 {
+		return 0
 	}
-	all["wts"] = fmt.Sprintf("%d", time.Now().Unix())
-	keys := make([]string, 0, len(all))
-	for key := range all {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	parts := make([]string, 0, len(keys))
-	for _, key := range keys {
-		sanitizedValue := wbiSanitizeReplacer.Replace(all[key])
-		parts = append(parts, url.QueryEscape(key)+"="+url.QueryEscape(sanitizedValue))
-	}
-	sum := md5.Sum([]byte(strings.Join(parts, "&") + mixinKey))
-	all["w_rid"] = hex.EncodeToString(sum[:])
-	return all
-}
-
-func getMixinKey(orig string) string {
-	var builder strings.Builder
-	for _, index := range mixinKeyEncTab {
-		if index >= 0 && index < len(orig) {
-			builder.WriteByte(orig[index])
+	total := int64(0)
+	for _, part := range parts {
+		var value int64
+		if _, err := fmt.Sscanf(strings.TrimSpace(part), "%d", &value); err != nil {
+			return 0
 		}
+		total = total*60 + value
 	}
-	mixed := builder.String()
-	if len(mixed) > 32 {
-		return mixed[:32]
-	}
-	return mixed
+	return total
 }
 
-func extractWBIKey(raw string) string {
-	parts := strings.Split(raw, "/")
-	file := parts[len(parts)-1]
-	dot := strings.LastIndexByte(file, '.')
-	if dot >= 0 {
-		return file[:dot]
-	}
-	return file
-}
-
+// creatorList 把单个作者名包装成切片(空名返回空切片)。多个 provider 共享。
 func creatorList(name string) []string {
 	if strings.TrimSpace(name) == "" {
 		return []string{}
@@ -532,13 +129,7 @@ func creatorList(name string) []string {
 	return []string{name}
 }
 
-func yearString(unixSeconds int64) string {
-	if unixSeconds <= 0 {
-		return ""
-	}
-	return time.Unix(unixSeconds, 0).UTC().Format("2006")
-}
-
+// defaultString 取首个非空字符串。多个 provider 共享。
 func defaultString(value, fallback string) string {
 	if strings.TrimSpace(value) != "" {
 		return strings.TrimSpace(value)

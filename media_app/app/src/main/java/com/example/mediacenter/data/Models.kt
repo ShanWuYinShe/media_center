@@ -36,6 +36,10 @@ data class VideoSummary(
     val thumbnailDelivery: String = DeliveryMode.DIRECT,
     val durationSeconds: Long? = null,
     val playbackKind: String = "vod",
+    // 透传 catalog 原始来源(如 "bilibili" + "BV...");App 端据此判断是否需要
+    // 自己解析播放地址(见 MediaRepository.playbackOptions 按 provider 分流)。
+    val provider: String? = null,
+    val nativeId: String? = null,
 )
 
 @Serializable
@@ -52,6 +56,8 @@ data class VideoDetails(
     val durationSeconds: Long? = null,
     val playbackKind: String = "vod",
     val playbackOptions: List<PlaybackOption> = emptyList(),
+    val provider: String? = null,
+    val nativeId: String? = null,
 )
 
 @Serializable

@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -352,6 +353,39 @@ func validMemberStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+// FindVideo 按 provider + native_id 查询单条视频元数据(无视审校状态)。
+// 找不到时返回 (zero, false, nil);只有 SQL 错误才返回非 nil err。
+// 供 client-resolved provider(如 bilibili)的详情/播放接口直接读 catalog,
+// 不再调上游 API。
+func (c *Catalog) FindVideo(provider, nativeID string) (CatalogVideo, bool, error) {
+	provider = strings.TrimSpace(provider)
+	nativeID = strings.TrimSpace(nativeID)
+	if provider == "" || nativeID == "" || c == nil {
+		return CatalogVideo{}, false, nil
+	}
+	row := c.db.QueryRow(`
+SELECT v.provider, v.native_id, v.title, v.description, v.creators, v.duration_sec, v.year, v.thumbnail_url, v.source_url
+FROM videos v
+WHERE v.provider = ? AND v.native_id = ?`, provider, nativeID)
+	var v CatalogVideo
+	var creators sql.NullString
+	var description, year, thumb, source sql.NullString
+	var duration sql.NullInt64
+	if err := row.Scan(&v.Provider, &v.NativeID, &v.Title, &description, &creators, &duration, &year, &thumb, &source); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return CatalogVideo{}, false, nil
+		}
+		return CatalogVideo{}, false, fmt.Errorf("find video: %w", err)
+	}
+	v.Description = description.String
+	v.Year = year.String
+	v.ThumbnailURL = thumb.String
+	v.SourceURL = source.String
+	v.DurationSec = duration.Int64
+	v.Creators = decodeCreators(creators.String)
+	return v, true, nil
 }
 
 // ApprovedForCategory 返回某分类已通过的成员,按 置顶 > 人工序 > 分数 排序。limit<=0 表示不限。

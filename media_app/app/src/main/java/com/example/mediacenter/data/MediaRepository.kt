@@ -7,6 +7,7 @@ enum class VideoDetailsCacheScope {
 
 class MediaRepository(
     private val api: MediaApi,
+    private val bilibiliApi: BilibiliApi = BilibiliApi(),
     private val categoryDetailsCache: VideoDetailsCache? = null,
     private val searchDetailsCache: VideoDetailsCache? = null,
 ) {
@@ -77,9 +78,24 @@ class MediaRepository(
         details(video, cacheScope)
     }
 
-    suspend fun playbackOptions(videoId: String, preferProxy: Boolean = false): List<PlaybackOption> {
+    /**
+     * 解析视频的可播放选项。按 [video] 的 provider 分流:
+     *  - 国内可直连源(当前 bilibili):**跳过** server `/videos/{id}/playback`,用 nativeId
+     *    调本地 [bilibiliApi] 拿真实播放直链。能否本地解析是 provider 的固有属性,
+     *    不依赖 server 在 PlaybackOption 里塞任何标记。
+     *  - 国外源(youtube 等):走 server,由 server + vod_extractor 解析。
+     */
+    suspend fun playbackOptions(
+        video: VideoDetails,
+        preferProxy: Boolean = false,
+    ): List<PlaybackOption> {
+        val provider = video.provider
+        val nativeId = video.nativeId
+        if (provider == "bilibili" && !nativeId.isNullOrEmpty()) {
+            return bilibiliApi.resolvePlayback(nativeId)
+        }
         return try {
-            api.playback(videoId, preferProxy).items.filter { it.kind == "vod" }
+            api.playback(video.id, preferProxy).items.filter { it.kind == "vod" }
         } catch (error: Throwable) {
             if (error.isNoPlayableStream) emptyList() else throw error
         }

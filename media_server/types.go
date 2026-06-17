@@ -15,6 +15,15 @@ const (
 	DeliveryProxy  = "proxy"
 )
 
+// isClientResolvedProvider 判断某来源是否由 App 端自己解析播放地址:
+// 国内可直连的源由 App 拿到 VideoSummary.provider + nativeId 后自行调上游 API,
+// server 端不再代理解析(避免 server 端 IP 被限流 + 省回源带宽)。
+// 当前仅 bilibili 走此路径;youtube 等国外源仍由 server + vod_extractor 代理。
+// App 端识别 VideoSummary.provider 后自行分流,PlaybackOption 不需要任何特殊标记。
+func isClientResolvedProvider(providerID string) bool {
+	return providerID == "bilibili"
+}
+
 type rawConfig struct {
 	Sources    []sourceConfig      `json:"sources"`
 	Categories []rawCategoryConfig `json:"categories"`
@@ -83,6 +92,11 @@ type VideoSummary struct {
 	ThumbnailDelivery string            `json:"thumbnailDelivery,omitempty"`
 	DurationSeconds   int64             `json:"durationSeconds,omitempty"`
 	PlaybackKind      string            `json:"playbackKind"`
+	// Provider + NativeID 透传 catalog 原始来源(如 bilibili/BV...),
+	// App 端据此判断是否需要自己解析播放地址。国内可直连源(direct)的 PlaybackOption
+	// 走 client-resolve 路径时必填;其他情况省略。
+	Provider string `json:"provider,omitempty"`
+	NativeID string `json:"nativeId,omitempty"`
 }
 
 type VideoDetails struct {
@@ -98,6 +112,9 @@ type VideoDetails struct {
 	DurationSeconds   int64             `json:"durationSeconds,omitempty"`
 	PlaybackKind      string            `json:"playbackKind"`
 	PlaybackOptions   []PlaybackOption  `json:"playbackOptions"`
+	// Provider + NativeID 同 VideoSummary。
+	Provider string `json:"provider,omitempty"`
+	NativeID string `json:"nativeId,omitempty"`
 }
 
 type PlaybackOptionsResponse struct {

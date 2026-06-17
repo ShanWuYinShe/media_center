@@ -249,6 +249,16 @@ func (s *mediaServer) handleVideos(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "视频来源不受支持。"})
 		return
 	}
+	// client-resolved provider(国内可直连源):详情接口不调上游 API,
+	// 直接用 catalog 数据 + provider/nativeID 填充,PlaybackOptions 留空。
+	// App 端看到 provider=bilibili 就直接调本地解析器,不调 server playback 接口。
+	if isClientResolvedProvider(ref.Provider) {
+		if details, ok := s.detailsFromCatalog(r, ref.Provider, ref.ID); ok {
+			s.writeJSON(w, http.StatusOK, details)
+			return
+		}
+		// catalog 未命中:fallback 到 provider.GetDetails(provider 自己返回 catalog 兜底)。
+	}
 	details, detailErr := provider.GetDetails(r.Context(), ref.ID, s.idCodec)
 	if detailErr != nil {
 		s.writeError(w, detailErr)
@@ -256,6 +266,37 @@ func (s *mediaServer) handleVideos(w http.ResponseWriter, r *http.Request) {
 	}
 	s.applyDeliveryToDetailsForProvider(s.assetBaseURL(r), ref.Provider, &details)
 	s.writeJSON(w, http.StatusOK, details)
+}
+
+// detailsFromCatalog 用 catalog 数据构造 VideoDetails,PlaybackOptions 留空。
+// 第二个返回值 false 表示 catalog 未命中(调用方应 fallback 到 provider.GetDetails)。
+func (s *mediaServer) detailsFromCatalog(r *http.Request, provider, nativeID string) (VideoDetails, bool) {
+	if s.catalog == nil {
+		return VideoDetails{}, false
+	}
+	cv, ok, err := s.catalog.FindVideo(provider, nativeID)
+	if err != nil || !ok {
+		return VideoDetails{}, false
+	}
+	summary := s.summaryFromCatalogVideo(cv)
+	details := VideoDetails{
+		ID:                summary.ID,
+		VideoKind:         summary.VideoKind,
+		Title:             summary.Title,
+		Description:       summary.Description,
+		Year:              summary.Year,
+		Creators:          summary.Creators,
+		ThumbnailURL:      summary.ThumbnailURL,
+		ThumbnailHeaders:  summary.ThumbnailHeaders,
+		ThumbnailDelivery: summary.ThumbnailDelivery,
+		DurationSeconds:   summary.DurationSeconds,
+		PlaybackKind:      summary.PlaybackKind,
+		Provider:          summary.Provider,
+		NativeID:          summary.NativeID,
+		// PlaybackOptions 留空:App 端拿到 provider=bilibili 后自己调本地 BilibiliApi。
+	}
+	s.applyDeliveryToDetailsForProvider(s.assetBaseURL(r), provider, &details)
+	return details, true
 }
 
 func (s *mediaServer) handlePlayback(w http.ResponseWriter, r *http.Request, videoID string) {
@@ -271,6 +312,12 @@ func (s *mediaServer) handlePlayback(w http.ResponseWriter, r *http.Request, vid
 	provider := s.providers[ref.Provider]
 	if provider == nil {
 		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "视频来源不受支持。"})
+		return
+	}
+	// client-resolved provider:App 端拿到 VideoSummary.provider 后直接调本地解析器,
+	// 不会调到本 endpoint。返回空数组作为兜底(防 server 端逻辑漏洞)。
+	if isClientResolvedProvider(ref.Provider) {
+		s.writeJSON(w, http.StatusOK, PlaybackOptionsResponse{Items: []PlaybackOption{}})
 		return
 	}
 	options, playbackErr := provider.GetPlaybackOptions(r.Context(), ref.ID, s.idCodec)
