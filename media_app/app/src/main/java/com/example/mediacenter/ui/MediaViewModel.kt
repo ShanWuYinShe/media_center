@@ -78,6 +78,10 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     private var loadMoreJob: Job? = null
     private var detailsJob: Job? = null
     private var recoveryJob: Job? = null
+    private var playbackPrefetchJob: Job? = null
+    // 播放地址预取缓存:列表可见视频在后台提前解析,用户点详情时直接可用。
+    private val playbackCache = mutableMapOf<String, List<PlaybackOption>>()
+    private val prefetchedPlaybackIds = mutableSetOf<String>()
     // 在列表末尾按"下一个"时,记录续播来源 id:loadMore 拉到新一页后,
     // 在其 onSuccess 里自动续播该来源的下一条,避免自动续播在分页边界"断档"。
     private var pendingAutoAdvanceFromId: String? = null
@@ -111,6 +115,34 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         if (items.isEmpty()) return
         categoryListCache[categoryId] =
             CategoryCacheEntry(items, page, canLoadMore, System.currentTimeMillis())
+    }
+
+    // 预取列表可见视频的播放地址:浏览时后台提前解析 B 站 API,
+    // 用户点详情时直接可用,无需网络等待。按视频 id 去重避免重复请求。
+    private fun prefetchVisiblePlayback(videos: List<VideoSummary>) {
+        playbackPrefetchJob?.cancel()
+        val candidates = videos
+            .asSequence()
+            .distinctBy { it.id }
+            .filter { it.id !in prefetchedPlaybackIds }
+            .toList()
+        if (candidates.isEmpty()) return
+        playbackPrefetchJob = viewModelScope.launch {
+            for (video in candidates) {
+                if (video.id in prefetchedPlaybackIds) continue
+                val details = VideoDetails(
+                    id = video.id, title = video.title,
+                    description = video.description,
+                    thumbnailUrl = video.thumbnailUrl,
+                    durationSeconds = video.durationSeconds,
+                )
+                runCatchingCancellable { repository.playbackOptions(details) }
+                    .onSuccess { options ->
+                        playbackCache[video.id] = options
+                        prefetchedPlaybackIds.add(video.id)
+                    }
+            }
+        }
     }
 
     init {
@@ -196,6 +228,8 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                             canLoadMore = response.items.size >= PageSize,
                         )
                     }
+                    // 后台预取列表视频的播放地址,用户点详情时直接可用。
+                    prefetchVisiblePlayback(response.items)
                 }
                 .onFailure { error ->
                     if (silentRefresh) {
@@ -250,6 +284,8 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                             canLoadMore = response.items.size >= PageSize,
                         )
                     }
+                    // 后台预取新增视频的播放地址。
+                    prefetchVisiblePlayback(response.items)
                     // 若是"末尾按下一个/自动续播触发的 loadMore",新页到手后
                     // 继续把焦点视频续播下去,补上分页边界的断档。
                     val pendingId = pendingAutoAdvanceFromId
@@ -354,15 +390,20 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     }
 
     fun openDetails(video: VideoSummary) {
-        // 修复:快速连点两条 video 时,后到的请求要把前一条取消,
-        // 否则可能出现"先看到 B 详情、再被 A 详情覆盖"的乱序。
         detailsJob?.cancel()
         detailsJob = viewModelScope.launch {
             mutableState.update { it.copy(loading = true, error = null) }
-            // 本地构造 VideoDetails,不走 server(server 端纯目录服务)。
             val details = repository.details(video)
+            // 如果列表预取已缓存该视频的播放地址,直接写入 selected。
+            val cached = playbackCache[video.id]
+            if (cached != null) {
+                mutableState.update {
+                    it.copy(selected = details.copy(playbackOptions = cached), loading = false)
+                }
+                return@launch
+            }
             mutableState.update { it.copy(selected = details, loading = false) }
-            // 后台自动解析播放地址,用户点播放时直接可用,无需额外刷新。
+            // 缓存未命中:后台调 BilibiliApi 解析,完成后更新 selected.playbackOptions。
             runCatchingCancellable { repository.playbackOptions(details) }
                 .onSuccess { options ->
                     mutableState.update { state ->
