@@ -912,6 +912,8 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             durationSeconds = durationSeconds,
             playbackKind = playbackKind,
             playbackOptions = listOfNotNull(failedOption),
+            provider = provider,
+            nativeId = nativeId,
         )
     }
 }

@@ -122,6 +122,8 @@ class MediaRepository(
             durationSeconds = durationSeconds,
             playbackKind = playbackKind,
             playbackOptions = emptyList(),
+            provider = provider,
+            nativeId = nativeId,
         )
     }
 }
