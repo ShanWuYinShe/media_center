@@ -376,8 +376,15 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     mutableState.update { it.copy(selected = details, loading = false) }
                 }
                 .onFailure { error ->
+                    // 即使详情接口失败,也保留 selected(用 video 构造占位),
+                    // 保证 UI 停留在详情页显示错误,而不是回主页。
+                    val fallback = video.toPlaybackFailureDetails(null)
                     mutableState.update {
-                        it.copy(loading = false, error = error.message ?: "获取详情失败")
+                        it.copy(
+                            loading = false,
+                            selected = it.selected ?: fallback,
+                            error = error.message ?: "获取详情失败",
+                        )
                     }
                 }
         }
@@ -527,15 +534,10 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                 "attempts=$playbackRecoveryAttempts -> show error, back to ${if (selected != null) "details" else "home"}: $message",
         )
         playbackRecoveryAttempts = 0
-        mutableState.update {
-            val fallbackSelected = it.selected ?: selected
-            when {
-                // 没有 details 信息可退时,留在播放页显示错误,不跳到主页
-                fallbackSelected == null -> it.copy(error = message)
-                it.playing == null -> it.copy(selected = fallbackSelected, error = message)
-                else -> it.copy(playing = null, selected = fallbackSelected, error = message)
-            }
-        }
+        // 错误处理:清 playing 保留 selected(无论是原本就有,还是 line 508-510 的
+        // fallback 设上的占位),让 UI 留在详情页显示错误原因。**不**调 back():
+        // back() 是用户主动按 Back 的语义,不该在程序响应错误时自动触发。
+        mutableState.update { it.copy(playing = null, error = message) }
     }
 
     /**
@@ -790,6 +792,8 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         // playing 重新写成非空 → 用户被强行拽回播放页。这与"BACK 漏拦截"同类:
         // BACK 的效果被异步写默默撤销。同理清掉待续播标记,避免 loadMore 完成后
         // 触发自动续播再次跳回播放页。
+        // 注意:back() **不清 error**——主动 Back 和错误触发 Back 都保留错误信息,
+        // 让用户在详情页/主页上能看到错误原因。
         detailsJob?.cancel()
         recoveryJob?.cancel()
         playbackSession++
@@ -805,8 +809,8 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             // recoverPlayback 的退避 delay 中被取消)。BACK 已无在途加载需要等待,
             // 这里顺手把 loading 复位,避免返回详情/首页后卡在"正在加载/重试"提示上。
             when {
-                it.playing != null -> it.copy(playing = null, loading = false, error = null)
-                it.selected != null -> it.copy(selected = null, loading = false, error = null)
+                it.playing != null -> it.copy(playing = null, loading = false)
+                it.selected != null -> it.copy(selected = null, loading = false)
                 else -> it
             }
         }
