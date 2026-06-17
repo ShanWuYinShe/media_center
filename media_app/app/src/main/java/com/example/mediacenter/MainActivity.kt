@@ -8,7 +8,6 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import androidx.core.graphics.ColorUtils
 import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
@@ -1334,12 +1333,7 @@ class MainActivity : ComponentActivity() {
         }
         row.addView(info, LinearLayout.LayoutParams(0, wrap(), 1f))
 
-        val categoryName = state.categories.firstOrNull { it.id == state.selectedCategoryId }?.title
-        val collectionLabel = categoryName?.ifBlank { null }?.let { name ->
-            if (state.categoryTotal > 0) "$name · 共 ${state.categoryTotal} 集" else name
-        }
         val metadata = listOfNotNull(
-            collectionLabel,
             details.durationSeconds?.let { formatDurationSeconds(it) },
         ).joinToString(" · ")
         if (metadata.isNotBlank()) {
@@ -1370,51 +1364,6 @@ class MainActivity : ComponentActivity() {
                 },
                 LinearLayout.LayoutParams(wrap(), dp(chipH)).withTopMargin(dp(gapDisclosure)),
             )
-        }
-
-        // 合集导航:当前视频在合集内的位置、上一集/下一集/查看全部
-        if (state.selectedCategoryId != null && state.items.size > 1) {
-            val curIdx = state.items.indexOfFirst { it.id == details.id }
-            if (curIdx >= 0) {
-                val canPrev = curIdx > 0
-                val canNext = curIdx < state.items.size - 1
-                info.addView(
-                    label("合集 · $collectionLabel", metaSize, Colors.TextTertiary, bold = true, maxLines = 1),
-                    LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapQuality)),
-                )
-                val navRow = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    clipChildren = false
-                    clipToPadding = false
-                    setPadding(0, dp(gapDisclosure), 0, dp(4))
-                }
-                if (canPrev) {
-                    val prevChip = pill("上一集", selected = false, heightDp = chipH, horizontalPaddingDp = chipHPad) {
-                        val prevVideo = state.items[curIdx - 1]
-                        viewModel.openDetails(prevVideo)
-                    }
-                    navRow.addView(prevChip, LinearLayout.LayoutParams(wrap(), dp(chipH)).withEndMargin(dp(12)))
-                }
-                navRow.addView(
-                    label("第${curIdx + 1}/${state.categoryTotal.coerceAtLeast(state.items.size)}集", 13f, Colors.TextTertiary, bold = true, maxLines = 1).apply {
-                        gravity = Gravity.CENTER
-                        minWidth = dp(60)
-                    },
-                    LinearLayout.LayoutParams(wrap(), dp(chipH)).withEndMargin(dp(12)),
-                )
-                if (canNext) {
-                    val nextChip = pill("下一集", selected = false, heightDp = chipH, horizontalPaddingDp = chipHPad) {
-                        val nextVideo = state.items[curIdx + 1]
-                        viewModel.openDetails(nextVideo)
-                    }
-                    navRow.addView(nextChip, LinearLayout.LayoutParams(wrap(), dp(chipH)).withEndMargin(dp(12)))
-                }
-                val allChip = pill("查看全部", selected = false, heightDp = chipH, horizontalPaddingDp = chipHPad) {
-                    showCollectionDialog(state, details.id)
-                }
-                navRow.addView(allChip, LinearLayout.LayoutParams(wrap(), dp(chipH)))
-                info.addView(navRow, linearMatch())
-            }
         }
 
         val options = details.playbackOptions
@@ -2098,71 +2047,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            card.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(16)))
-            setContentView(card)
-            window?.setBackgroundDrawableResource(android.R.color.transparent)
-            window?.setLayout((resources.displayMetrics.widthPixels * 0.62f).toInt(), (resources.displayMetrics.heightPixels * 0.72f).toInt())
-            close.post { close.requestFocus() }
-        }.show()
-    }
-
-    private fun showCollectionDialog(state: MediaUiState, currentId: String) {
-        val items = state.items
-        if (items.isEmpty()) return
-        val title = state.categories.firstOrNull { it.id == state.selectedCategoryId }?.title ?: "合集"
-        Dialog(this).apply {
-            requestWindowFeature(Window.FEATURE_NO_TITLE)
-            val card = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(28), dp(24), dp(28), dp(24))
-                background = rounded(Colors.SurfaceElevated, 24, 1, Colors.GlassBorder)
-            }
-            card.addView(
-                label("$title · 共${state.categoryTotal.coerceAtLeast(items.size)}集", 22f, Colors.TextPrimary, bold = true, maxLines = 1),
-                linearMatch(),
-            )
-            val scroll = ScrollView(this@MainActivity)
-            val list = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-            }
-            items.forEachIndexed { index, video ->
-                val row = LinearLayout(this@MainActivity).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dp(4), dp(8), dp(4), dp(8))
-                    isFocusable = true
-                    isClickable = true
-                    setOnClickListener {
-                        dismiss()
-                        viewModel.openDetails(video)
-                    }
-                    val isCurrent = video.id == currentId
-                    background = rounded(
-                        if (isCurrent) ColorUtils.setAlphaComponent(Colors.AppleBlue, 38) else Color.TRANSPARENT,
-                        12, 0, Color.TRANSPARENT,
-                    )
-                    val idxLabel = label("${index + 1}", 13f, Colors.TextTertiary, bold = true, maxLines = 1).apply {
-                        gravity = Gravity.CENTER
-                        minWidth = dp(36)
-                    }
-                    addView(idxLabel, LinearLayout.LayoutParams(dp(36), wrap()))
-                    val titleLabel = label(video.title, 15f, if (isCurrent) Colors.AppleBlue else Colors.TextPrimary, bold = isCurrent, maxLines = 1).apply {
-                        layoutParams = LinearLayout.LayoutParams(0, wrap(), 1f).withStartMargin(dp(8))
-                    }
-                    addView(titleLabel)
-                    val durLabel = video.durationSeconds?.let { sec ->
-                        label(formatDurationSeconds(sec), 12f, Colors.TextTertiary, maxLines = 1)
-                    }
-                    if (durLabel != null) {
-                        addView(durLabel, LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(12)))
-                    }
-                }
-                applyCardFocus(row)
-                list.addView(row, linearMatch())
-            }
-            scroll.addView(list, frameMatch())
-            card.addView(scroll, LinearLayout.LayoutParams(match(), 0, 1f).withTopMargin(dp(12)))
-            val close = pill("关闭", selected = true, heightDp = 48, horizontalPaddingDp = 28) { dismiss() }
             card.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(16)))
             setContentView(card)
             window?.setBackgroundDrawableResource(android.R.color.transparent)
@@ -3233,9 +3117,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun videoMeta(video: VideoSummary): String {
-        val categoryName = currentState.categories.firstOrNull { it.id == currentState.selectedCategoryId }?.title
         return listOfNotNull(
-            categoryName?.ifBlank { null },
             video.durationSeconds?.let { formatDurationSeconds(it) },
         ).joinToString(" · ").ifBlank { "公开视频" }
     }

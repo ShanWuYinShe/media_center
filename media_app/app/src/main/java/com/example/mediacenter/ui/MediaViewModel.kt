@@ -27,7 +27,6 @@ data class MediaUiState(
     // 自动取列表首项作为默认分类。
     val selectedCategoryId: String? = null,
     val items: List<VideoSummary> = emptyList(),
-    val categoryTotal: Int = 0,
     val selected: VideoDetails? = null,
     val playing: PlaybackOption? = null,
     val loading: Boolean = false,
@@ -105,7 +104,6 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         val items: List<VideoSummary>,
         val page: Int,
         val canLoadMore: Boolean,
-        val total: Int = 0,
         val timestamp: Long,
     )
 
@@ -117,11 +115,10 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         items: List<VideoSummary>,
         page: Int,
         canLoadMore: Boolean,
-        total: Int = 0,
     ) {
         if (items.isEmpty()) return
         categoryListCache[categoryId] =
-            CategoryCacheEntry(items, page, canLoadMore, total, System.currentTimeMillis())
+            CategoryCacheEntry(items, page, canLoadMore, System.currentTimeMillis())
     }
 
     // 预取列表可见视频的播放地址:浏览时后台提前解析 B 站 API,
@@ -220,7 +217,6 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     mutableState.update { state ->
                         state.copy(
                             items = response.items,
-                            categoryTotal = response.total,
                             loading = if (silentRefresh || state.isContentScreen) state.loading else false,
                             canLoadMore = response.items.size >= PageSize,
                             page = 1,
@@ -234,7 +230,6 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                             response.items,
                             page = 1,
                             canLoadMore = response.items.size >= PageSize,
-                            total = response.total,
                         )
                     }
                     // 后台预取列表视频的播放地址,用户点详情时直接可用。
@@ -277,7 +272,6 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                         val merged = (state.items + response.items).distinctBy { it.id }
                         state.copy(
                             items = merged,
-                            categoryTotal = response.total,
                             loadingMore = false,
                             loadMoreError = null,
                             canLoadMore = response.items.size >= PageSize,
@@ -292,7 +286,6 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                             latest.items,
                             page = nextPage,
                             canLoadMore = response.items.size >= PageSize,
-                            total = response.total,
                         )
                     }
                     // 后台预取新增视频的播放地址。
@@ -365,7 +358,6 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                 query = "",
                 selectedCategoryId = categoryId,
                 items = cached.items,
-                categoryTotal = cached.total,
                 loading = false,
                 loadingMore = false,
                 loadMoreError = null,
@@ -393,7 +385,6 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                         response.items,
                         page = 1,
                         canLoadMore = response.items.size >= PageSize,
-                        total = response.total,
                     )
                 }
                 .onFailure { error ->
