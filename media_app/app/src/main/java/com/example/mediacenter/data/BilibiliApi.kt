@@ -47,38 +47,45 @@ class BilibiliApi(
      * 解析某 bvid 的可播放直链。返回(播放选项, 多P信息)。
      * 多P信息包含总页数和各页 cid,供 playNext/playPrevious 切换分页用。
      */
-    suspend fun resolvePlayback(bvid: String): PlaybackResult = withContext(Dispatchers.IO) {
+    /**
+     * 解析某 bvid 的可播放直链。返回(播放选项, 多P信息)。
+     * id 支持 "bvid_pN" 格式(多P分条目录),自动提取页码。
+     */
+    suspend fun resolvePlayback(id: String): PlaybackResult = withContext(Dispatchers.IO) {
+        val (bvid, pageIndex) = parsePageId(id)
         val viewPayload = fetchView(bvid)
         val pages = viewPayload.data?.pages ?: emptyList()
-        val firstCid = pages.firstOrNull()?.cid ?: viewPayload.data?.cid ?: throw BilibiliApiException("无 cid")
-        val totalPages = maxOf(pages.size, 1)
-        val pageCids = if (pages.isNotEmpty()) pages.map { it.cid } else listOf(firstCid)
+        val allCids = if (pages.isNotEmpty()) pages.map { it.cid }
+            else listOf(viewPayload.data?.cid ?: throw BilibiliApiException("无 cid"))
+        val totalPages = allCids.size
+        val targetCid = if (pageIndex in allCids.indices) allCids[pageIndex] else allCids.first()
         val pageTitles = pages.map { it.part }
         if (totalPages > 1) {
-            AppLog.i("Bili", "multi-page video: $bvid has $totalPages pages")
+            AppLog.i("Bili", "multi-page video: $bvid has $totalPages pages, requesting cid=$targetCid (page=$pageIndex)")
         }
-        val payload = fetchPlayUrl(bvid, firstCid, quality = DEFAULT_QUALITY)
+        val payload = fetchPlayUrl(bvid, targetCid, quality = DEFAULT_QUALITY)
         if (payload.code != 0) throw BilibiliApiException("playurl 接口返回 code=${payload.code}")
         val durlList = payload.data.durl
         if (durlList.isEmpty()) throw BilibiliApiException("B 站未返回播放流(可能触发风控)")
         val first = durlList.first()
         PlaybackResult(
             listOf(PlaybackOption(
-                id = "bili-$bvid-q${payload.data.quality}",
+                id = "bili-$bvid-p$pageIndex-q${payload.data.quality}",
                 kind = "vod",
                 label = qualityLabel(payload.data.quality),
                 url = first.url,
                 mimeType = "video/mp4",
                 headers = DIRECT_HEADERS,
             )),
-            PlaybackPages(currentPage = 0, totalPages = totalPages, pageCids = pageCids, pageTitles = pageTitles),
+            PlaybackPages(currentPage = pageIndex, totalPages = totalPages, pageCids = allCids, pageTitles = pageTitles),
         )
     }
 
     /**
-     * 解析某 bvid 指定分页的播放地址。用于 playNext 切换多P时按需拉取。
+     * 解析某 bvid 指定分页的播放地址。id 支持 "bvid_pN" 格式。
      */
-    suspend fun resolvePagePlayback(bvid: String, pageIndex: Int): List<PlaybackOption> = withContext(Dispatchers.IO) {
+    suspend fun resolvePagePlayback(id: String, pageIndex: Int): List<PlaybackOption> = withContext(Dispatchers.IO) {
+        val bvid = parsePageId(id).first
         val viewPayload = fetchView(bvid)
         val pages = viewPayload.data?.pages ?: emptyList()
         val cids = if (pages.isNotEmpty()) pages.map { it.cid }
@@ -206,6 +213,22 @@ class BilibiliApi(
             "Origin" to "https://www.bilibili.com",
         )
     }
+}
+
+/**
+ * 解析 catalog id,支持 "bvid" (单视频) 和 "bvid_pN" (多P分条) 格式。
+ * 返回 (真实bvid, 页码)。单视频页码为 0。
+ */
+internal fun parsePageId(id: String): Pair<String, Int> {
+    val idx = id.lastIndexOf("_p")
+    if (idx > 0) {
+        val suffix = id.substring(idx + 2)
+        val pageNum = suffix.toIntOrNull()
+        if (pageNum != null && pageNum > 0) {
+            return id.substring(0, idx) to (pageNum - 1)
+        }
+    }
+    return id to 0
 }
 
 @Serializable
