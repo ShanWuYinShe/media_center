@@ -13,6 +13,17 @@
 
 App 现在按 Android 4.4.2/API 19 作为主目标设计，使用单一原生 View UI，不再维护 API 21+ 专用 Compose 变体，也不打包 Compose、Coil 2.x、TV Material 等 API 21+ 依赖。
 
+## B 站多 P 视频支持
+
+B 站单视频（bvid）可能包含多个分 P（如 P1/P2/P3）。App 自动识别多 P：
+
+- **列表预取**：浏览分类时后台解析播放地址，同时也缓存页数信息
+- **详情页**：进入详情后自动解析首页播放地址
+- **播放页按"下"**：多 P 视频先依次翻页（P1→P2→P3），播完所有 P 后跳转列表下一个视频
+- **单 P 视频**：按"下"直接跳到列表下一个视频
+
+下载器不落盘；每次播放前调用 `BilibiliApi.resolvePlayback` 获取最新直链。
+
 如需覆盖默认服务端 URL：
 
 在 Android Studio 里可以把 `MEDIA_SERVER_URL=https://your-domain.example/api/media` 写入 `media_app/gradle.properties` 或用户级 `~/.gradle/gradle.properties`，然后重新 Sync。
