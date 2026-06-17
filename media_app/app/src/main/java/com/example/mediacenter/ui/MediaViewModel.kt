@@ -359,20 +359,21 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         detailsJob?.cancel()
         detailsJob = viewModelScope.launch {
             mutableState.update { it.copy(loading = true, error = null) }
-            runCatchingCancellable { repository.details(video) }
-                .onSuccess { details ->
-                    mutableState.update { it.copy(selected = details, loading = false) }
+            // 本地构造 VideoDetails,不走 server(server 端纯目录服务)。
+            val details = repository.details(video)
+            mutableState.update { it.copy(selected = details, loading = false) }
+            // 后台自动解析播放地址,用户点播放时直接可用,无需额外刷新。
+            runCatchingCancellable { repository.playbackOptions(details) }
+                .onSuccess { options ->
+                    mutableState.update { state ->
+                        if (state.selected?.id != details.id) return@update state
+                        state.copy(selected = state.selected.copy(playbackOptions = options))
+                    }
                 }
                 .onFailure { error ->
-                    // 即使详情接口失败,也保留 selected(用 video 构造占位),
-                    // 保证 UI 停留在详情页显示错误,而不是回主页。
-                    val fallback = video.toPlaybackFailureDetails(null)
-                    mutableState.update {
-                        it.copy(
-                            loading = false,
-                            selected = it.selected ?: fallback,
-                            error = error.message ?: "获取详情失败",
-                        )
+                    mutableState.update { state ->
+                        if (state.selected?.id != details.id) return@update state
+                        state.copy(error = error.message ?: "解析播放地址失败")
                     }
                 }
         }
@@ -387,10 +388,19 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             ?: selected?.let { sel -> current.items.find { it.id == sel.id } }
         AppLog.i("Playback", "play requested video=${selected?.id ?: "<none>"} option=${stream.id} kind=${stream.kind}")
         if (selected == null) {
-            // 没有 details 时不直接开播:播放失败后无 fallbackSelected,
-            // 会让用户直接跳到主页。当前 UI 调用图下不应到达此分支。
             AppLog.w("Playback", "play() called with selected==null, ignoring to avoid unrecoverable state")
             return
+        }
+        // 如果 playbackOptions 已由 openDetails 后台自动解析好,直接取用,
+        // 避免每次点播放都重调 B 站 API(耗时 5-15s)。
+        val cached = selected.playbackOptions
+        if (cached.isNotEmpty()) {
+            val match = cached.firstOrNull { it.id == stream.id }
+                ?: cached.firstOrNull { it.label == stream.label }
+            if (match != null) {
+                mutableState.update { it.copy(playing = match, playingVideo = video) }
+                return
+            }
         }
         detailsJob?.cancel()
         recoveryJob?.cancel()
