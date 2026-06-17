@@ -950,6 +950,7 @@ LIMIT ? OFFSET ?`
 func (c *Catalog) ConsolidatePages() (groups int, deleted int, created int, err error) {
 	const pagePattern = `%\_p%`
 
+	// Step 1: 把所有 _pN 条目读入内存(提前释放连接,避免随后的事务死锁)
 	rows, err := c.db.Query(`
 SELECT v.provider, v.native_id, v.title, v.description, v.creators, v.duration_sec, v.year, v.thumbnail_url, v.source_url
 FROM videos v
@@ -990,63 +991,98 @@ ORDER BY v.provider, v.native_id`, pagePattern)
 		return 0, 0, 0, err
 	}
 
+	// Step 2: 读取所有 _pN 的分类成员(一次查出,避免逐条 Query)
+	memberSQL := `SELECT provider, native_id, category_id, status, score, pinned, rank, COALESCE(reviewer,''), COALESCE(reviewed_at,'') FROM category_members WHERE provider=? AND native_id=?`
+	type memberRow struct {
+		provider, nativeID, catID, status, reviewer, reviewedAt string
+		score, pinned                                           int64
+		rank                                                    sql.NullInt64
+	}
+	pageMembers := make(map[string][]memberRow) // key: provider|native_id
+	for _, key := range allKeys {
+		entries := pageMap[key]
+		for _, entry := range entries {
+			mrows, qerr := c.db.Query(memberSQL, entry.Provider, entry.NativeID)
+			if qerr != nil {
+				return 0, 0, 0, fmt.Errorf("query members for %s/%s: %w", entry.Provider, entry.NativeID, qerr)
+			}
+			for mrows.Next() {
+				var mr memberRow
+				if err := mrows.Scan(&mr.provider, &mr.nativeID, &mr.catID, &mr.status, &mr.score, &mr.pinned, &mr.rank, &mr.reviewer, &mr.reviewedAt); err != nil {
+					mrows.Close()
+					return 0, 0, 0, fmt.Errorf("scan member: %w", err)
+				}
+				mkey := entry.Provider + "|" + entry.NativeID
+				pageMembers[mkey] = append(pageMembers[mkey], mr)
+			}
+			mrows.Close()
+		}
+	}
+
+	// Step 3: 检查哪些 base 视频已存在
+	baseExists := make(map[string]bool)
+	for _, key := range allKeys {
+		parts := strings.SplitN(key, "|", 2)
+		var exists bool
+		_ = c.db.QueryRow(`SELECT 1 FROM videos WHERE provider=? AND native_id=?`, parts[0], parts[1]).Scan(&exists)
+		baseExists[key] = exists
+	}
+
+	// Step 4: 在一个事务内完成所有写入
+	tx, err := c.db.Begin()
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
 	for _, key := range allKeys {
 		entries := pageMap[key]
 		parts := strings.SplitN(key, "|", 2)
 		provider := parts[0]
 		baseID := parts[1]
 
-		var exists bool
-		_ = c.db.QueryRow(`SELECT 1 FROM videos WHERE provider=? AND native_id=?`, provider, baseID).Scan(&exists)
-
-		if !exists {
+		if !baseExists[key] {
 			first := entries[0]
 			var totalSec int64
 			for _, e := range entries {
 				totalSec += e.DurationSec
 			}
 			creatorsJSON, _ := json.Marshal(first.Creators)
-			_, err = c.db.Exec(`
+			if _, err = tx.Exec(`
 INSERT INTO videos (provider, native_id, title, description, creators, duration_sec, year, thumbnail_url, source_url, fetched_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				provider, baseID, first.Title, first.Description, string(creatorsJSON),
-				totalSec, first.Year, first.ThumbnailURL, first.SourceURL, time.Now().UTC().Format(time.RFC3339))
-			if err != nil {
+				totalSec, first.Year, first.ThumbnailURL, first.SourceURL, time.Now().UTC().Format(time.RFC3339)); err != nil {
 				return 0, 0, 0, fmt.Errorf("create base video %s/%s: %w", provider, baseID, err)
 			}
 			created++
 		}
 
 		for _, entry := range entries {
-			mrows, qerr := c.db.Query(`SELECT category_id, status, score, pinned, rank, reviewer, reviewed_at FROM category_members WHERE provider=? AND native_id=?`,
-				provider, entry.NativeID)
-			if qerr != nil {
-				return 0, 0, 0, fmt.Errorf("query members for %s/%s: %w", provider, entry.NativeID, qerr)
-			}
-			for mrows.Next() {
-				var catID, statusVal, reviewer sql.NullString
-				var score, pinned int64
-				var rank sql.NullInt64
-				var reviewedAt sql.NullString
-				if err := mrows.Scan(&catID, &statusVal, &score, &pinned, &rank, &reviewer, &reviewedAt); err != nil {
-					mrows.Close()
-					return 0, 0, 0, fmt.Errorf("scan member: %w", err)
-				}
-				if !catID.Valid {
-					continue
-				}
-				_, _ = c.db.Exec(`
+			mkey := entry.Provider + "|" + entry.NativeID
+			for _, mr := range pageMembers[mkey] {
+				if _, err = tx.Exec(`
 INSERT INTO category_members (category_id, provider, native_id, status, score, pinned, rank, reviewer, reviewed_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(category_id, provider, native_id) DO NOTHING`,
-					catID.String, provider, baseID, statusVal.String, score, pinned, rank, reviewer.String, reviewedAt.String)
+					mr.catID, provider, baseID, mr.status, mr.score, mr.pinned, mr.rank, mr.reviewer, mr.reviewedAt); err != nil {
+					return 0, 0, 0, fmt.Errorf("insert base member %s/%s/%s: %w", mr.catID, provider, baseID, err)
+				}
 			}
-			mrows.Close()
 		}
 
 		for _, entry := range entries {
-			_, _ = c.db.Exec(`DELETE FROM category_members WHERE provider=? AND native_id=?`, provider, entry.NativeID)
-			res, _ := c.db.Exec(`DELETE FROM videos WHERE provider=? AND native_id=?`, provider, entry.NativeID)
+			if _, err = tx.Exec(`DELETE FROM category_members WHERE provider=? AND native_id=?`, provider, entry.NativeID); err != nil {
+				return 0, 0, 0, fmt.Errorf("delete member %s/%s: %w", provider, entry.NativeID, err)
+			}
+			res, delErr := tx.Exec(`DELETE FROM videos WHERE provider=? AND native_id=?`, provider, entry.NativeID)
+			if delErr != nil {
+				return 0, 0, 0, fmt.Errorf("delete video %s/%s: %w", provider, entry.NativeID, delErr)
+			}
 			if n, _ := res.RowsAffected(); n > 0 {
 				deleted++
 			}
@@ -1054,5 +1090,8 @@ ON CONFLICT(category_id, provider, native_id) DO NOTHING`,
 		groups++
 	}
 
+	if err = tx.Commit(); err != nil {
+		return 0, 0, 0, fmt.Errorf("commit: %w", err)
+	}
 	return groups, deleted, created, nil
 }
