@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -181,14 +183,81 @@ ON CONFLICT(category_id, provider, native_id) DO NOTHING`,
 	return affected > 0, nil
 }
 
+// stripPageSuffix 移除 B 站分 P 的后缀 _pN,返回基础 native_id。
+// 例如 "BV1xx_p3" → "BV1xx", "BV1xx" → "BV1xx"。
+func stripPageSuffix(nativeID string) string {
+	idx := strings.LastIndex(nativeID, "_p")
+	if idx < 0 {
+		return nativeID
+	}
+	suffix := nativeID[idx+2:]
+	if _, err := strconv.Atoi(suffix); err != nil {
+		return nativeID
+	}
+	return nativeID[:idx]
+}
+
 // ImportPending 把候选导入 catalog。每条按其 Status 落库:空或 "pending" 记为待审,"approved"
 // 直接收录上线并记录 reviewer + reviewed_at(供"已审核视频集一步上线")。videos 元数据始终
 // upsert 刷新;category_members 用 ON CONFLICT DO NOTHING,绝不覆盖已有审校决定——即只对新成员
 // 生效,重复导入只刷新元数据并计入 skipped(要改既有成员状态请走 review)。
+//
+// 同一视频的分 P 条目(含 _pN 后缀,如 BV1xx_p1 / BV1xx_p2)会在导入时自动聚合成一条:
+// 以首次出现的标题/描述等元数据为准,时长累加,只创建一条 category_member。这避免了
+// 分 P 被拆成多条独立候选的脏数据,也确保公共 API 的 _pN 过滤层不会意外吞掉整部视频。
 // 返回:videos(元数据写入数)、imported(新增成员数)、approved(其中直接收录数)、skipped(已存在跳过数)。
 func (c *Catalog) ImportPending(items []CatalogImportItem, reviewer string) (videos int, imported int, approved int, skipped int, err error) {
 	if len(items) == 0 {
 		return 0, 0, 0, 0, nil
+	}
+
+	// 聚合分 P 条目:按 (category, provider, base_id) 分组,合并元数据。
+	type importGroup struct {
+		categoryID string
+		provider   string
+		nativeID   string
+		first      CatalogImportItem
+		totalSec   int64
+		count      int
+	}
+	groups := make(map[string]*importGroup)
+	for _, item := range items {
+		cat := strings.TrimSpace(item.CategoryID)
+		prov := strings.ToLower(strings.TrimSpace(item.Video.Provider))
+		nid := strings.TrimSpace(item.Video.NativeID)
+		if cat == "" || prov == "" || nid == "" {
+			continue
+		}
+		baseID := stripPageSuffix(nid)
+		key := cat + "|" + prov + "|" + baseID
+		g, ok := groups[key]
+		if !ok {
+			groups[key] = &importGroup{
+				categoryID: cat,
+				provider:   prov,
+				nativeID:   baseID,
+				first:      item,
+				totalSec:   item.Video.DurationSec,
+				count:      1,
+			}
+		} else {
+			g.totalSec += item.Video.DurationSec
+			g.count++
+		}
+	}
+
+	merged := make([]CatalogImportItem, 0, len(groups))
+	for _, g := range groups {
+		item := g.first
+		item.Video.NativeID = g.nativeID
+		if g.totalSec > 0 {
+			item.Video.DurationSec = g.totalSec
+		}
+		if g.count > 1 {
+			log.Printf("catalog: aggregated %d page entries into %s/%s/%s",
+				g.count, g.provider, g.nativeID, g.categoryID)
+		}
+		merged = append(merged, item)
 	}
 	reviewer = strings.TrimSpace(reviewer)
 	tx, err := c.db.Begin()
@@ -200,7 +269,7 @@ func (c *Catalog) ImportPending(items []CatalogImportItem, reviewer string) (vid
 			_ = tx.Rollback()
 		}
 	}()
-	for i, item := range items {
+	for i, item := range merged {
 		categoryID := strings.TrimSpace(item.CategoryID)
 		provider := strings.ToLower(strings.TrimSpace(item.Video.Provider))
 		nativeID := strings.TrimSpace(item.Video.NativeID)
@@ -875,4 +944,115 @@ LIMIT ? OFFSET ?`
 		return nil, 0, err
 	}
 	return out, total, nil
+}
+
+// ConsolidatePages 清理 catalog 中已有的分 P 脏数据:合并同 base native_id 的 _pN 条目。
+func (c *Catalog) ConsolidatePages() (groups int, deleted int, created int, err error) {
+	const pagePattern = `%\_p%`
+
+	rows, err := c.db.Query(`
+SELECT v.provider, v.native_id, v.title, v.description, v.creators, v.duration_sec, v.year, v.thumbnail_url, v.source_url
+FROM videos v
+WHERE v.native_id LIKE ? ESCAPE '\'
+ORDER BY v.provider, v.native_id`, pagePattern)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("query page videos: %w", err)
+	}
+
+	type pageEntry struct{ CatalogVideo }
+	pageMap := make(map[string][]pageEntry)
+	var allKeys []string
+	for rows.Next() {
+		var v CatalogVideo
+		var creators sql.NullString
+		var desc, year, thumb, src sql.NullString
+		var dur sql.NullInt64
+		if err := rows.Scan(&v.Provider, &v.NativeID, &v.Title, &desc, &creators, &dur, &year, &thumb, &src); err != nil {
+			rows.Close()
+			return 0, 0, 0, fmt.Errorf("scan page video: %w", err)
+		}
+		v.Description = desc.String
+		v.Year = year.String
+		v.ThumbnailURL = thumb.String
+		v.SourceURL = src.String
+		v.DurationSec = dur.Int64
+		v.Creators = decodeCreators(creators.String)
+
+		baseID := stripPageSuffix(v.NativeID)
+		key := v.Provider + "|" + baseID
+		if _, ok := pageMap[key]; !ok {
+			allKeys = append(allKeys, key)
+		}
+		pageMap[key] = append(pageMap[key], pageEntry{v})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, 0, 0, err
+	}
+
+	for _, key := range allKeys {
+		entries := pageMap[key]
+		parts := strings.SplitN(key, "|", 2)
+		provider := parts[0]
+		baseID := parts[1]
+
+		var exists bool
+		_ = c.db.QueryRow(`SELECT 1 FROM videos WHERE provider=? AND native_id=?`, provider, baseID).Scan(&exists)
+
+		if !exists {
+			first := entries[0]
+			var totalSec int64
+			for _, e := range entries {
+				totalSec += e.DurationSec
+			}
+			creatorsJSON, _ := json.Marshal(first.Creators)
+			_, err = c.db.Exec(`
+INSERT INTO videos (provider, native_id, title, description, creators, duration_sec, year, thumbnail_url, source_url, fetched_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				provider, baseID, first.Title, first.Description, string(creatorsJSON),
+				totalSec, first.Year, first.ThumbnailURL, first.SourceURL, time.Now().UTC().Format(time.RFC3339))
+			if err != nil {
+				return 0, 0, 0, fmt.Errorf("create base video %s/%s: %w", provider, baseID, err)
+			}
+			created++
+		}
+
+		for _, entry := range entries {
+			mrows, qerr := c.db.Query(`SELECT category_id, status, score, pinned, rank, reviewer, reviewed_at FROM category_members WHERE provider=? AND native_id=?`,
+				provider, entry.NativeID)
+			if qerr != nil {
+				return 0, 0, 0, fmt.Errorf("query members for %s/%s: %w", provider, entry.NativeID, qerr)
+			}
+			for mrows.Next() {
+				var catID, statusVal, reviewer sql.NullString
+				var score, pinned int64
+				var rank sql.NullInt64
+				var reviewedAt sql.NullString
+				if err := mrows.Scan(&catID, &statusVal, &score, &pinned, &rank, &reviewer, &reviewedAt); err != nil {
+					mrows.Close()
+					return 0, 0, 0, fmt.Errorf("scan member: %w", err)
+				}
+				if !catID.Valid {
+					continue
+				}
+				_, _ = c.db.Exec(`
+INSERT INTO category_members (category_id, provider, native_id, status, score, pinned, rank, reviewer, reviewed_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(category_id, provider, native_id) DO NOTHING`,
+					catID.String, provider, baseID, statusVal.String, score, pinned, rank, reviewer.String, reviewedAt.String)
+			}
+			mrows.Close()
+		}
+
+		for _, entry := range entries {
+			_, _ = c.db.Exec(`DELETE FROM category_members WHERE provider=? AND native_id=?`, provider, entry.NativeID)
+			res, _ := c.db.Exec(`DELETE FROM videos WHERE provider=? AND native_id=?`, provider, entry.NativeID)
+			if n, _ := res.RowsAffected(); n > 0 {
+				deleted++
+			}
+		}
+		groups++
+	}
+
+	return groups, deleted, created, nil
 }

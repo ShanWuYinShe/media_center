@@ -26,6 +26,7 @@ func main() {
 	catalogReviewCategory := flag.String("catalog-review-category", "", "限定只审校某个分类 ID(默认全部)")
 	catalogReviewDryRun := flag.Bool("catalog-review-dry-run", false, "只打印审校结果,不写库")
 	catalogReviewReviewer := flag.String("catalog-review-reviewer", "", "审校人留痕(默认按模式自动填)")
+	catalogConsolidate := flag.Bool("catalog-consolidate", false, "合并 catalog 中分 P 条目(_pN)为单一视频,删除冗余记录后退出")
 	flag.Parse()
 
 	config, err := loadAppConfig()
@@ -65,6 +66,19 @@ func main() {
 		if err := server.runCatalogReview(context.Background(), opts); err != nil {
 			log.Fatalf("catalog review: %v", err)
 		}
+		return
+	}
+
+	if *catalogConsolidate {
+		if server.catalog == nil {
+			log.Fatalf("catalog consolidate requires a catalog db (set MEDIA_SERVER_CATALOG_DB)")
+		}
+		log.Printf("consolidating page entries in catalog (db=%s)…", config.CatalogDBPath)
+		groups, deleted, created, err := server.catalog.ConsolidatePages()
+		if err != nil {
+			log.Fatalf("catalog consolidate: %v", err)
+		}
+		log.Printf("consolidation done: %d groups processed, %d _pN records deleted, %d base videos created", groups, deleted, created)
 		return
 	}
 
