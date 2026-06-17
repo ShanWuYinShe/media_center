@@ -56,4 +56,4 @@ API 由本仓库的 `media_server` 维护。实现或调整 App 前先看：
 
 - `media_server/API.md`
 
-App 端使用 `VideoSummary.id`（nativeId，如 BV1xxx）直接调用本地解析器播放。拓展其他 Provider 时应遵守：国内可直连源由 App 端实现本地解析器，国外源由 server 端 + vod_extractor 代理解析。
+App 端使用 `VideoSummary.id`（nativeId，如 BV1xxx）直接调用本地解析器播放。(当前仅 bilibili 源,App 端本地解析)

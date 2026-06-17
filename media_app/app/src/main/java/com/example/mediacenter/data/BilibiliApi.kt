@@ -84,6 +84,9 @@ class BilibiliApi(
         if (payload.data.cid == 0L) {
             throw BilibiliApiException("view 接口未返回 cid(可能视频被删/审核)")
         }
+        if (payload.data.pages.size > 1) {
+            AppLog.i("Bili", "multi-page video: $bvid has ${payload.data.pages.size} parts, using first cid=${payload.data.cid}")
+        }
         return payload.data.cid
     }
 
@@ -208,7 +211,14 @@ private data class BiliViewResponse(
     data class ViewData(
         val bvid: String = "",
         val cid: Long = 0,
-    )
+        val pages: List<PageData> = emptyList(),
+    ) {
+        @Serializable
+        data class PageData(
+            val cid: Long = 0,
+            val part: String = "",
+        )
+    }
 }
 
 @Serializable

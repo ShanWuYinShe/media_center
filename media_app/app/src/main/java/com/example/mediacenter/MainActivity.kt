@@ -1455,7 +1455,7 @@ class MainActivity : ComponentActivity() {
     @OptIn(UnstableApi::class)
     private fun renderPlayer(state: MediaUiState) {
         val stream = state.playing ?: return
-        // 恢复流程会先保持旧 stream 并显示 loading,延迟后再刷新 /playback。
+        // 恢复流程会先保持旧 stream 并显示 loading,延迟后再刷新播放地址。
         // 这段期间不要因播放器已进入 IDLE 而立刻重建同一个失败 URL。
         if (currentPlayerUrl == stream.url && root.childCount > 0) {
             if (state.loading || state.error != null || player?.playbackState != Player.STATE_IDLE) return
@@ -3574,7 +3574,7 @@ private fun playbackErrorMessage(error: PlaybackException): String {
 }
 
 // 过期/拒绝的短期播放 URL(401/403)、网关超时/限流/瞬时 5xx,以及 Bilibili CDN
-// 读首包时偶发的连接重置,都可通过刷新 /playback 拿到新地址/新 CDN 后恢复。
+// 读首包时偶发的连接重置,都可通过刷新播放地址拿到新地址/新 CDN 后恢复。
 private fun isRecoverablePlaybackError(error: PlaybackException): Boolean {
     val responseCode = error.findCause<HttpDataSource.InvalidResponseCodeException>()?.responseCode
         ?: return when (error.errorCode) {
