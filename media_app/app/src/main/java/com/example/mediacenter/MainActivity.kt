@@ -161,7 +161,11 @@ class MainActivity : ComponentActivity() {
                 override fun handleOnBackPressed() {
                     when {
                         currentState.playing != null -> viewModel.back()
-                        currentState.selected != null -> viewModel.back()
+                        currentState.selected != null -> {
+                            homeFocusArea = HomeFocusArea.Video
+                            pendingHomeFocus = currentState.items.firstOrNull()?.let { HomeFocusTarget.Video(it.id) }
+                            viewModel.back()
+                        }
                         searchVisible -> {
                             searchVisible = false
                             pendingHomeFocus = homeDefaultCategoryTarget(currentState)
@@ -2082,6 +2086,7 @@ class MainActivity : ComponentActivity() {
             val list = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
             }
+            var currentRow: View? = null
             for (i in 0 until pages.totalPages) {
                 val title = pages.pageTitles.getOrElse(i) { "第${i + 1}集" }
                 val isCurrent = i == pages.currentPage
@@ -2123,6 +2128,7 @@ class MainActivity : ComponentActivity() {
                         animate().scaleX(if (focused) 1.04f else 1f).scaleY(if (focused) 1.04f else 1f).setDuration(140).start()
                     }
                 }
+                if (isCurrent) currentRow = row
                 list.addView(row, linearMatch())
             }
             scroll.addView(list, frameMatch())
@@ -2132,7 +2138,8 @@ class MainActivity : ComponentActivity() {
             setContentView(card)
             window?.setBackgroundDrawableResource(android.R.color.transparent)
             window?.setLayout((resources.displayMetrics.widthPixels * 0.62f).toInt(), (resources.displayMetrics.heightPixels * 0.72f).toInt())
-            close.post { close.requestFocus() }
+            val focusView = currentRow ?: close
+            focusView.post { focusView.requestFocus() }
         }.show()
     }
 
