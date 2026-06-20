@@ -90,22 +90,39 @@ class AppUpdateManager(
     }
 
     fun launchInstallPermissionSettings() {
-        val settingsIntent = Intent(
+        // 国产 TV 可能不支持 ACTION_MANAGE_UNKNOWN_APP_SOURCES，降级到应用详情页。
+        val primaryIntent = Intent(
             Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
             Uri.parse("package:${context.packageName}"),
         ).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(settingsIntent)
+        runCatching {
+            context.startActivity(primaryIntent)
+        }.onFailure {
+            AppLog.w("Update", "launchInstallPermissionSettings: redirect to app details", it)
+            val fallbackIntent = Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:${context.packageName}"),
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(fallbackIntent)
+        }
     }
 
     fun launchInstaller(apk: File): InstallLaunchResult {
-        // 优先使用 PackageInstaller API（API 21+），国产电视兼容性更好。
+        // 第1优先：PackageInstaller API（API 21+），session-based 安装。
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             val result = tryInstallWithSession(apk)
             if (result is InstallLaunchResult.Started) return result
-            AppLog.w("Update", "PackageInstaller session failed, falling back to ACTION_VIEW")
+            AppLog.w("Update", "PackageInstaller session failed")
         }
+        // 第2优先：Intent.ACTION_INSTALL_PACKAGE。国产 TV 上比 ACTION_VIEW 更兼容。
+        val result = tryInstallWithInstallPackage(apk)
+        if (result is InstallLaunchResult.Started) return result
+        AppLog.w("Update", "ACTION_INSTALL_PACKAGE failed")
+        // 第3优先（回退）：Intent.ACTION_VIEW + 权限弹窗引导。
         return tryInstallWithIntent(apk)
     }
 
@@ -152,6 +169,32 @@ class AppUpdateManager(
             InstallLaunchResult.Started
         } catch (error: Throwable) {
             AppLog.w("Update", "PackageInstaller session failed: ${error.message}", error)
+            InstallLaunchResult.Failed("安装失败：${error.message}")
+        }
+    }
+
+    /**
+     * 用 Intent.ACTION_INSTALL_PACKAGE 启动安装器。部分国产 TV 不支持
+     * PackageInstaller API 但支持此 intent（比 ACTION_VIEW 兼容性更广）。
+     */
+    private fun tryInstallWithInstallPackage(apk: File): InstallLaunchResult {
+        return try {
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                apk,
+            )
+            val intent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+                data = uri
+                putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
+                putExtra(Intent.EXTRA_RETURN_RESULT, true)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            InstallLaunchResult.Started
+        } catch (error: Throwable) {
+            AppLog.w("Update", "ACTION_INSTALL_PACKAGE failed: ${error.message}", error)
             InstallLaunchResult.Failed("安装失败：${error.message}")
         }
     }

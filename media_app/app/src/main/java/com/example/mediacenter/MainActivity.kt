@@ -2249,7 +2249,9 @@ class MainActivity : ComponentActivity() {
                 linearMatch(),
             )
             card.addView(
-                label("请在系统设置中允许本应用安装 APK，返回后会自动继续安装。", 16f, Colors.TextSecondary, maxLines = 3),
+                label("请在系统设置 → 安全 → 允许安装未知应用 中找到本应用并开启权限。" +
+                       "如果找不到该选项，请检查系统设置中是否有「纯净模式」或「应用锁」并关闭。",
+                    16f, Colors.TextSecondary, maxLines = 5),
                 LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(12)),
             )
             val open = primaryPill("打开设置", heightDp = 48, horizontalPaddingDp = 28) {
