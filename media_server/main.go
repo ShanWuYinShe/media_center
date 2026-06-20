@@ -19,6 +19,7 @@ type mediaServer struct {
 	categories     []ContentCategory
 	categoriesByID map[string]ContentCategory
 	catalog        *Catalog
+	credentials    []ProviderCredential
 }
 
 func main() {
@@ -41,6 +42,15 @@ func main() {
 		config:         config,
 		categories:     content.Categories,
 		categoriesByID: indexCategories(content.Categories),
+	}
+
+	if config.CredentialsPath != "" {
+		if creds, err := loadCredentials(config.CredentialsPath); err != nil {
+			log.Printf("warning: load credentials %q failed: %v", config.CredentialsPath, err)
+		} else {
+			server.credentials = creds
+			log.Printf("loaded %d provider credential(s) from %s", len(creds), config.CredentialsPath)
+		}
 	}
 
 	if config.CatalogDBPath != "" {
@@ -97,6 +107,8 @@ func (s *mediaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleInternal(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/providers":
 		s.handleProviders(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/providers/credentials":
+		s.handleProviderCredentials(w)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/providers/"):
 		s.handleProviderRoute(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/app/update":
@@ -129,6 +141,16 @@ func (s *mediaServer) handleProviders(w http.ResponseWriter) {
 		items = append(items, ProviderInfo{ID: id, Name: providerDisplayName(id)})
 	}
 	s.writeJSON(w, http.StatusOK, ProvidersResponse{Items: items})
+}
+
+// handleProviderCredentials 返回 admin 配置的 provider 凭证（如 bilibili SESSDATA）。
+// App 端拉取后用于请求高分辨率内容。无凭证时返回空数组。
+func (s *mediaServer) handleProviderCredentials(w http.ResponseWriter) {
+	creds := s.credentials
+	if creds == nil {
+		creds = []ProviderCredential{}
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"credentials": creds})
 }
 
 // handleProviderRoute 按 /api/providers/{provider}/... 后续路径分发。

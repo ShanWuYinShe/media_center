@@ -1,5 +1,7 @@
 package com.example.mediacenter.data
 
+import com.example.mediacenter.log.AppLog
+
 class MediaRepository(
     private val api: MediaApi,
     private val bilibiliApi: BilibiliApi = BilibiliApi(),
@@ -9,11 +11,27 @@ class MediaRepository(
         private set
 
     suspend fun providers(): List<ProviderInfo> {
+        refreshCredentials()
         val items = api.providers().items
         if (items.isNotEmpty()) {
             currentProvider = items.first().id
         }
         return items
+    }
+
+    // 从 server 拉取 provider 凭证并注入到对应的 API 客户端。
+    // 失败时静默降级为无凭证模式(不影响基本播放)。
+    suspend fun refreshCredentials() {
+        try {
+            val response = api.credentials()
+            for (cred in response.credentials) {
+                if (cred.provider == "bilibili" && cred.fields.isNotEmpty()) {
+                    bilibiliApi.updateCredentials(cred.fields)
+                }
+            }
+        } catch (e: Exception) {
+            AppLog.w("Repo", "failed to fetch provider credentials, using no-credential mode", e)
+        }
     }
 
     // 兼容包装:ViewModel 仍调 categories() 无参版本。

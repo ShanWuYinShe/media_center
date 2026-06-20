@@ -26,7 +26,8 @@ class BilibiliApiException(message: String) : Exception(message)
  *  3. `/x/player/wbi/playurl` 用 cid + bvid 拿 durl(真实播放直链)
  *
  * 第 1、2、3 步均需 WBI 签名(见 [signWbiParams])。
- * 不需要 SESSDATA cookie——只支持免费可见视频(与 server 端原行为一致)。
+ * 配置了 provider 凭证(如 SESSDATA)时,自动注入 Cookie 以获取会员高分辨率;
+ * 未配置时降级为免费 1080P。
  */
 class BilibiliApi(
     private val client: OkHttpClient = AppHttpClient.newBuilder()
@@ -42,6 +43,16 @@ class BilibiliApi(
     @Volatile private var imgKey: String = ""
     @Volatile private var subKey: String = ""
     @Volatile private var keyExpiryMillis: Long = 0L
+    // Provider 凭证(由 MediaRepository 从 server 拉取后注入)。
+    // 非空时自动附加 Cookie header 并请求更高清晰度。
+    @Volatile private var cookieFields: Map<String, String> = emptyMap()
+
+    fun updateCredentials(fields: Map<String, String>) {
+        cookieFields = fields
+        if (fields.isNotEmpty()) {
+            AppLog.i("Bili", "credentials updated: ${fields.size} field(s)")
+        }
+    }
 
     /**
      * 解析某 bvid 的可播放直链。返回(播放选项, 多P信息)。
@@ -63,7 +74,7 @@ class BilibiliApi(
         if (totalPages > 1) {
             AppLog.i("Bili", "multi-page video: $bvid has $totalPages pages, requesting cid=$targetCid (page=$pageIndex)")
         }
-        val payload = fetchPlayUrl(bvid, targetCid, quality = DEFAULT_QUALITY)
+        val payload = fetchPlayUrl(bvid, targetCid, quality = preferredQuality())
         if (payload.code != 0) throw BilibiliApiException("playurl 接口返回 code=${payload.code}")
         val durlList = payload.data.durl
         if (durlList.isEmpty()) throw BilibiliApiException("B 站未返回播放流(可能触发风控)")
@@ -93,7 +104,7 @@ class BilibiliApi(
         if (pageIndex < 0 || pageIndex >= cids.size) {
             throw BilibiliApiException("pageIndex $pageIndex out of bounds (${cids.size} pages)")
         }
-        val payload = fetchPlayUrl(bvid, cids[pageIndex], quality = DEFAULT_QUALITY)
+        val payload = fetchPlayUrl(bvid, cids[pageIndex], quality = preferredQuality())
         if (payload.code != 0) throw BilibiliApiException("playurl 接口返回 code=${payload.code}")
         val durlList = payload.data.durl
         if (durlList.isEmpty()) throw BilibiliApiException("B 站未返回播放流(可能触发风控)")
@@ -186,10 +197,24 @@ class BilibiliApi(
         return builder.build().toString()
     }
 
+    private fun preferredQuality(): Int =
+        if (cookieFields.isNotEmpty()) PREFERRED_QUALITY_WITH_COOKIE else DEFAULT_QUALITY
+
+    private fun buildCookieHeader(): String {
+        if (cookieFields.isEmpty()) return ""
+        return cookieFields.entries.joinToString("; ") { "${it.key}=${it.value}" }
+    }
+
     private suspend inline fun <reified T> getJson(url: String): T {
         val request = Request.Builder()
             .url(url)
             .apply { DIRECT_HEADERS.forEach { (k, v) -> header(k, v) } }
+            .apply {
+                val cookie = buildCookieHeader()
+                if (cookie.isNotEmpty()) {
+                    header("Cookie", cookie)
+                }
+            }
             .get()
             .build()
         client.newCall(request).execute().use { response ->
@@ -202,8 +227,10 @@ class BilibiliApi(
     }
 
     companion object {
-        // 默认清晰度:80 = 1080P(B 站大会员更高清晰度需 SESSDATA cookie,本客户端不支持)。
+        // 无凭证时默认清晰度:80 = 1080P。
         private const val DEFAULT_QUALITY = 80
+        // 有凭证(如 SESSDATA)时首选清晰度:127 = 4K,B 站自动降级到视频可用的最高质量。
+        private const val PREFERRED_QUALITY_WITH_COOKIE = 127
         private const val WBI_KEY_TTL_MILLIS = 10L * 60 * 1000
 
         // B 站反爬要求:必须带 PC 端 User-Agent + Referer 才能拿到 playurl。

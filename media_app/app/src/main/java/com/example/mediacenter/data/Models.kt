@@ -14,6 +14,17 @@ data class ProvidersResponse(
 )
 
 @Serializable
+data class ProviderCredential(
+    val provider: String,
+    val fields: Map<String, String> = emptyMap(),
+)
+
+@Serializable
+data class CredentialsResponse(
+    val credentials: List<ProviderCredential> = emptyList(),
+)
+
+@Serializable
 data class ContentCategory(
     val id: String,
     val title: String,

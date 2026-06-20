@@ -35,6 +35,8 @@ class MediaApi(
 
     suspend fun providers(): ProvidersResponse = get(listOf("providers"))
 
+    suspend fun credentials(): CredentialsResponse = get(listOf("providers", "credentials"))
+
     suspend fun categories(provider: String): CategoriesResponse =
         get(listOf("providers", provider, "categories"))
 

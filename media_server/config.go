@@ -15,6 +15,8 @@ type AppConfig struct {
 	// 分类维护数据库(SQLite, system of record)。分类浏览直接分页查询 approved 行;
 	// 路径为空或打开失败时优雅降级为空分类列表,详见 catalog.go。
 	CatalogDBPath string
+	// Provider 凭证文件路径(由 admin 生成注入)。为空则不加载凭证。
+	CredentialsPath string
 	// 内部管理接口令牌:非空时启用 /internal/* 管理接口(catalog 审校/seed),
 	// 请求需带匹配的 X-Internal-Token。为空则整组 /internal/* 接口关闭(404)。
 	InternalToken         string
@@ -56,6 +58,7 @@ func loadAppConfig() (AppConfig, error) {
 		CategoriesPath:        firstNonEmpty(os.Getenv("CONTENT_CATEGORIES_FILE"), os.Getenv("MEDIA_SERVER_CONTENT_CATEGORIES_FILE"), "src/contentCategories.json"),
 		PublicBaseURL:         normalizeBaseURL(firstNonEmpty(os.Getenv("MEDIA_SERVER_PUBLIC_URL"), os.Getenv("PUBLIC_BASE_URL"))),
 		CatalogDBPath:         getenv("MEDIA_SERVER_CATALOG_DB", "data/catalog.db"),
+		CredentialsPath:       firstNonEmpty(os.Getenv("PROVIDER_CREDENTIALS_FILE"), os.Getenv("MEDIA_SERVER_PROVIDER_CREDENTIALS_FILE")),
 		InternalToken:         strings.TrimSpace(os.Getenv("MEDIA_SERVER_INTERNAL_TOKEN")),
 		AppUpdateManifestPath: getenv("MEDIA_SERVER_APP_UPDATE_MANIFEST", "/config/app-update.json"),
 		AppUpdateAPKPath:      getenv("MEDIA_SERVER_APP_UPDATE_APK", "/config/media-center-app.apk"),
@@ -211,4 +214,36 @@ func cloneStringMap(value map[string]string) map[string]string {
 		return nil
 	}
 	return out
+}
+
+// ProviderCredential 存储 provider 的认证凭证（如 bilibili 的 SESSDATA/bili_jct）。
+// Fields 是任意 key-value 对，不同 provider 可有不同的字段集。
+// 通过 /api/providers/credentials 返回给 App 端用于请求高分辨率内容。
+type ProviderCredential struct {
+	Provider string            `json:"provider"`
+	Fields   map[string]string `json:"fields"`
+}
+
+type credentialsConfig struct {
+	Credentials []ProviderCredential `json:"credentials"`
+}
+
+// loadCredentials 从 admin 生成的 providerCredentials.json 加载凭证。
+// 路径为空或文件不存在时返回 nil（App 端降级为无凭证模式）。
+func loadCredentials(path string) ([]ProviderCredential, error) {
+	if path == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read credentials config: %w", err)
+	}
+	var raw credentialsConfig
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("decode credentials config: %w", err)
+	}
+	return raw.Credentials, nil
 }
