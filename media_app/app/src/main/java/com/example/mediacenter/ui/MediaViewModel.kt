@@ -908,6 +908,8 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
 
     private fun loadCategoriesAndSearch() {
         viewModelScope.launch {
+            // 启动时拉取 provider 凭证(如 bilibili SESSDATA),失败时静默降级。
+            repository.refreshCredentials()
             // categories 失败时直接 setError 退出,**不再**调 search()。
             // 避免:网络持续不通 → categories 失败 + search(query="", null) 也 400 失败 → 用户陷入"重试 → 失败 → 重试"的死循环。
             val silentRefresh = mutableState.value.isContentScreen
