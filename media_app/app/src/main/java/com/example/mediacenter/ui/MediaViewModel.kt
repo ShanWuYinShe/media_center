@@ -549,25 +549,25 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     ) {
         val current = mutableState.value
         val failedOption = current.playing
-        val selected = current.selected
+        val fallbackSelected = current.selected
             ?: current.playingVideo?.toPlaybackFailureDetails(failedOption)
-        if (current.selected == null && selected != null) {
-            mutableState.update { it.copy(selected = selected) }
-        }
         // 短期 URL 失效 / 瞬时 5xx / CDN 断流且仍有恢复额度时,自动刷新播放地址
         // 并尝试切换清晰度续播,不打断用户;额度耗尽或非瞬时错误才落到错误态。
-        if (recoverable && selected != null && failedOption != null &&
+        if (recoverable && fallbackSelected != null && failedOption != null &&
             playbackRecoveryAttempts < MaxPlaybackRecoveryAttempts
         ) {
+            if (current.selected == null) {
+                mutableState.update { it.copy(selected = fallbackSelected) }
+            }
             playbackRecoveryAttempts++
             AppLog.w(
                 "Playback",
-                "failed (recoverable) video=${selected.id} option=${failedOption.id} " +
+                "failed (recoverable) video=${fallbackSelected.id} option=${failedOption.id} " +
                     "-> recover attempt $playbackRecoveryAttempts/$MaxPlaybackRecoveryAttempts: $message",
             )
             recoverPlayback(
                 session = playbackSession,
-                videoId = selected.id,
+                videoId = fallbackSelected.id,
                 failedOption = failedOption,
                 fallbackMessage = message,
             )
@@ -575,14 +575,19 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         }
         AppLog.w(
             "Playback",
-            "failed video=${selected?.id} option=${failedOption?.id} recoverable=$recoverable " +
-                "attempts=$playbackRecoveryAttempts -> show error, back to ${if (selected != null) "details" else "home"}: $message",
+            "failed video=${fallbackSelected?.id} option=${failedOption?.id} recoverable=$recoverable " +
+                "attempts=$playbackRecoveryAttempts -> show error, back to ${if (fallbackSelected != null) "details" else "home"}: $message",
         )
         playbackRecoveryAttempts = 0
-        // 错误处理:清 playing 保留 selected(无论是原本就有,还是 line 508-510 的
-        // fallback 设上的占位),让 UI 留在详情页显示错误原因。**不**调 back():
-        // back() 是用户主动按 Back 的语义,不该在程序响应错误时自动触发。
-        mutableState.update { it.copy(playing = null, error = message) }
+        // 错误处理:清 playing 保留 selected(无论是原本就有,还是 fallback 的占位),
+        // 让 UI 留在详情页显示错误原因。一次 update 避免详情页先无错误渲染再闪现错误。
+        mutableState.update {
+            it.copy(
+                selected = fallbackSelected ?: it.selected,
+                playing = null,
+                error = message,
+            )
+        }
     }
 
     /**
@@ -809,9 +814,9 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             runCatchingCancellable {
                 val details = repository.details(nextVideo)
                 val result = repository.playbackOptions(details)
-                details.copy(playbackOptions = result.options)
+                Pair(details.copy(playbackOptions = result.options), result.pages)
             }
-                .onSuccess { details ->
+                .onSuccess { (details, pages) ->
                     if (session != playbackSession) return@onSuccess
                     val option = details.playbackOptions.firstOrNull()
                     if (option == null) {
@@ -822,6 +827,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                                 selected = details,
                                 playingVideo = nextVideo,
                                 playing = null,
+                                currentPages = pages,
                                 error = "该视频暂无可播放清晰度",
                             )
                         }
@@ -832,6 +838,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                                 selected = details,
                                 playingVideo = nextVideo,
                                 playing = option,
+                                currentPages = pages,
                             )
                         }
                     }

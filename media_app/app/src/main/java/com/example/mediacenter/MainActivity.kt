@@ -1511,12 +1511,13 @@ class MainActivity : ComponentActivity() {
     @OptIn(UnstableApi::class)
     private fun renderPlayer(state: MediaUiState) {
         val stream = state.playing ?: return
-        // 播放时阻止系统进入屏保。
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // 恢复流程会先保持旧 stream 并显示 loading,延迟后再刷新播放地址。
         // 这段期间不要因播放器已进入 IDLE 而立刻重建同一个失败 URL。
         if (currentPlayerUrl == stream.url && root.childCount > 0) {
-            if (state.loading || state.error != null || player?.playbackState != Player.STATE_IDLE) return
+            if (state.loading || state.error != null || player?.playbackState != Player.STATE_IDLE) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                return
+            }
         }
 
         val playbackUrl = stream.url
@@ -1544,6 +1545,10 @@ class MainActivity : ComponentActivity() {
         }
 
         releasePlayer()
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // 在 prepare 之前加载上次保存的位置并一次 seek 到位，避免在 STATE_READY
+        // 回调中 seek 导致 seek→buffer→ready→seek 的死循环。
+        val initialSeekPos = if (!currentState.loading) loadPlaybackPosition() else 0L
         var builtPlayer: ExoPlayer? = null
         try {
             builtPlayer = ExoPlayer.Builder(this)
@@ -1566,6 +1571,7 @@ class MainActivity : ComponentActivity() {
                 .setSeekForwardIncrementMs(10_000)
                 .build()
             builtPlayer!!.apply {
+                val seekPos = initialSeekPos.coerceAtLeast(0L)
                 val mediaItem = MediaItem.Builder()
                     .setUri(playbackUrl)
                     .setMimeType(playbackMimeType(stream.mimeType))
@@ -1577,8 +1583,9 @@ class MainActivity : ComponentActivity() {
                             .setLoadErrorHandlingPolicy(playbackLoadErrorHandlingPolicy)
                             .createMediaSource(mediaItem),
                     )
+                    if (seekPos > 0L) seekTo(seekPos)
                 } else {
-                    setMediaItem(mediaItem)
+                    setMediaItem(mediaItem, seekPos)
                 }
                 repeatMode = Player.REPEAT_MODE_OFF
                 playWhenReady = true
@@ -1587,17 +1594,11 @@ class MainActivity : ComponentActivity() {
                         when (playbackState) {
                             // 就绪后才开始计稳定计时;持续顺畅播放超过窗口才清零恢复额度,
                             // 避免“就绪即失败”的流靠 STATE_READY 反复复位计数器造成无限恢复循环。
+                            // 续播位置已在 prepare 之前通过 setMediaItem(..., seekPos) 或
+                            // seekTo() 一次设好，不在回调中 seek 以避免 seek→buffer→ready 死循环。
                             Player.STATE_READY -> {
                                 AppLog.i("Player", "stream ${stream.id} READY")
                                 schedulePlaybackStabilityReset(stream.id)
-                                // 续播：seek 到上次保存的位置。
-                                if (!currentState.loading) {
-                                    val savedPos = loadPlaybackPosition()
-                                    if (savedPos > 5000L) {
-                                        this@apply.seekTo(savedPos)
-                                        AppLog.i("Player", "resumed to $savedPos")
-                                    }
-                                }
                             }
                             Player.STATE_ENDED -> {
                                 AppLog.i("Player", "stream ${stream.id} ENDED -> playNext")
@@ -1976,6 +1977,7 @@ class MainActivity : ComponentActivity() {
         overlay.addView(bottom, FrameLayout.LayoutParams(match(), wrap(), Gravity.BOTTOM))
 
         fun updateProgress() {
+            if (player.playbackState == Player.STATE_IDLE && !player.playWhenReady) return
             val duration = player.duration.takeIf { it > 0 } ?: 0L
             val position = player.currentPosition.coerceAtLeast(0L)
             val buffered = player.bufferedPosition.coerceAtLeast(position)
@@ -2031,7 +2033,9 @@ class MainActivity : ComponentActivity() {
             }
 
             override fun onViewDetachedFromWindow(view: View) {
-                player.removeListener(listener)
+                if (player.playbackState != Player.STATE_IDLE || player.playWhenReady) {
+                    player.removeListener(listener)
+                }
                 overlay.removeCallbacks(progressTick)
             }
         })
