@@ -28,6 +28,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -1510,6 +1511,8 @@ class MainActivity : ComponentActivity() {
     @OptIn(UnstableApi::class)
     private fun renderPlayer(state: MediaUiState) {
         val stream = state.playing ?: return
+        // 播放时阻止系统进入屏保。
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // 恢复流程会先保持旧 stream 并显示 loading,延迟后再刷新播放地址。
         // 这段期间不要因播放器已进入 IDLE 而立刻重建同一个失败 URL。
         if (currentPlayerUrl == stream.url && root.childCount > 0) {
@@ -1587,10 +1590,21 @@ class MainActivity : ComponentActivity() {
                             Player.STATE_READY -> {
                                 AppLog.i("Player", "stream ${stream.id} READY")
                                 schedulePlaybackStabilityReset(stream.id)
+                                // 续播：seek 到上次保存的位置。
+                                if (!currentState.loading) {
+                                    val savedPos = loadPlaybackPosition()
+                                    if (savedPos > 5000L) {
+                                        this@apply.seekTo(savedPos)
+                                        AppLog.i("Player", "resumed to $savedPos")
+                                    }
+                                }
                             }
                             Player.STATE_ENDED -> {
                                 AppLog.i("Player", "stream ${stream.id} ENDED -> playNext")
                                 cancelPlaybackStabilityReset()
+                                // 播放完成，清除保存的位置。
+                                val key = playbackPosKey()
+                                if (key.isNotEmpty()) prefs().edit().remove(key).apply()
                                 viewModel.playNext()
                             }
                             Player.STATE_BUFFERING -> {
@@ -2328,11 +2342,33 @@ class MainActivity : ComponentActivity() {
 
     private fun releasePlayer() {
         cancelPlaybackStabilityReset()
+        // 释放播放器前保存播放位置。
+        val pos = player?.currentPosition ?: 0L
         player?.release()
+        if (pos > 5000L) savePlaybackPosition(pos)
         player = null
         currentPlayerUrl = null
         playerSurface = null
         orientationIndicator = null
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    // 播放进度持久化，方便下次续播。
+    private fun prefs() = getSharedPreferences("playback", Context.MODE_PRIVATE)
+
+    private fun playbackPosKey() = currentState.playing?.let { "pos_${it.id}" } ?: ""
+
+    private fun savePlaybackPosition(pos: Long) {
+        val key = playbackPosKey()
+        if (key.isEmpty()) return
+        prefs().edit().putLong(key, pos).apply()
+        AppLog.i("Player", "saved position $pos for $key")
+    }
+
+    private fun loadPlaybackPosition(): Long {
+        val key = playbackPosKey()
+        if (key.isEmpty()) return 0L
+        return prefs().getLong(key, 0L)
     }
 
     private fun applyPlayerVideoRotation() {
