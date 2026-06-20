@@ -1,7 +1,11 @@
 package com.example.mediacenter.update
 
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageInstaller
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -12,6 +16,7 @@ import com.example.mediacenter.data.MediaApi
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.net.AppHttpClient
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +29,8 @@ class AppUpdateManager(
     private val api: MediaApi,
     private val client: OkHttpClient = AppHttpClient.shared,
 ) {
+    private var installReceiver: BroadcastReceiver? = null
+    private val installAction = "${context.packageName}.INSTALL_RESULT"
     suspend fun checkAndDownload(): AppUpdateResult {
         val update = try {
             api.appUpdate(BuildConfig.VERSION_CODE)
@@ -93,12 +100,68 @@ class AppUpdateManager(
     }
 
     fun launchInstaller(apk: File): InstallLaunchResult {
+        // 优先使用 PackageInstaller API（API 21+），国产电视兼容性更好。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            val result = tryInstallWithSession(apk)
+            if (result is InstallLaunchResult.Started) return result
+            AppLog.w("Update", "PackageInstaller session failed, falling back to ACTION_VIEW")
+        }
+        return tryInstallWithIntent(apk)
+    }
+
+    private fun tryInstallWithSession(apk: File): InstallLaunchResult {
+        return try {
+            val packageInstaller = context.packageManager.packageInstaller
+            val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+            val sessionId = packageInstaller.createSession(params)
+            val session = packageInstaller.openSession(sessionId)
+
+            FileInputStream(apk).use { input ->
+                val size = apk.length()
+                val out = session.openWrite("base.apk", 0, size)
+                input.copyTo(out)
+                session.fsync(out)
+                out.close()
+            }
+
+            val intent = Intent(installAction).apply {
+                `package` = context.packageName
+            }
+            val pendingIntent = PendingIntent.getBroadcast(
+                context, sessionId, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+            installReceiver?.let { context.unregisterReceiver(it) }
+            installReceiver = object : BroadcastReceiver() {
+                override fun onReceive(ctx: Context, intent: Intent) {
+                    val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+                    AppLog.i("Update", "install result: status=$status")
+                    ctx.unregisterReceiver(this)
+                    installReceiver = null
+                }
+            }
+            val registerFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                Context.RECEIVER_NOT_EXPORTED
+            } else {
+                0
+            }
+            context.registerReceiver(installReceiver, IntentFilter(installAction), registerFlags)
+            session.commit(pendingIntent.intentSender)
+            session.close()
+            InstallLaunchResult.Started
+        } catch (error: Throwable) {
+            AppLog.w("Update", "PackageInstaller session failed: ${error.message}", error)
+            InstallLaunchResult.Failed("安装失败：${error.message}")
+        }
+    }
+
+    private fun tryInstallWithIntent(apk: File): InstallLaunchResult {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             !context.packageManager.canRequestPackageInstalls()
         ) {
             return InstallLaunchResult.NeedsPermission
         }
-
         return try {
             val uri = FileProvider.getUriForFile(
                 context,
@@ -113,7 +176,7 @@ class AppUpdateManager(
             context.startActivity(intent)
             InstallLaunchResult.Started
         } catch (error: Throwable) {
-            AppLog.w("Update", "launch installer failed: ${error.message}", error)
+            AppLog.w("Update", "ACTION_VIEW install failed: ${error.message}", error)
             InstallLaunchResult.Failed("无法打开系统安装器，请手动安装更新包")
         }
     }
