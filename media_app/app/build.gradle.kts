@@ -14,8 +14,8 @@ android {
         applicationId = "com.example.mediacenter"
         minSdk = 19
         targetSdk = 34
-        versionCode = 20260620
-        versionName = "1.0.260620"
+        versionCode = 20260621
+        versionName = "1.0.260621"
         multiDexEnabled = true
 
         val serverBaseUrl = providers.gradleProperty("MEDIA_SERVER_URL")
