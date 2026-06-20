@@ -1882,6 +1882,16 @@ class MainActivity : ComponentActivity() {
             },
             linearMatch(),
         )
+        state.currentPages?.let { pages ->
+            if (pages.totalPages > 1) {
+                val pageTitle = pages.pageTitles.getOrNull(pages.currentPage)?.takeIf { it.isNotBlank() }
+                val pageLabel = pageTitle ?: "第${pages.currentPage + 1}集"
+                top.addView(
+                    label("$pageLabel · ${pages.currentPage + 1}/${pages.totalPages}", 16f, Colors.TextSecondary, maxLines = 1),
+                    LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(8)),
+                )
+            }
+        }
         val statusDot = View(this).apply { background = rounded(Colors.AppleBlue, 999) }
         val statusText = label("", 15f, Colors.TextSecondary, bold = true, maxLines = 1)
         val statusRow = LinearLayout(this).apply {

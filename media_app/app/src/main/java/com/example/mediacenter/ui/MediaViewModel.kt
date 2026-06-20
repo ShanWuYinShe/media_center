@@ -431,32 +431,10 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     fun selectPage(pageIndex: Int) {
         val current = mutableState.value
         val selected = current.selected ?: return
-        val bvid = selected.id
         val pages = current.currentPages ?: return
         if (pageIndex < 0 || pageIndex >= pages.totalPages) return
         if (pageIndex == pages.currentPage) return
-        detailsJob?.cancel()
-        detailsJob = viewModelScope.launch {
-            mutableState.update { it.copy(loading = true, error = null, currentPages = pages.copy(currentPage = pageIndex)) }
-            runCatchingCancellable { repository.resolvePagePlayback(bvid, pageIndex) }
-                .onSuccess { options ->
-                    mutableState.update { state ->
-                        if (state.selected?.id != bvid) return@update state
-                        val updatedPages = state.currentPages?.copy(currentPage = pageIndex)
-                        state.copy(
-                            loading = false,
-                            selected = state.selected.copy(playbackOptions = options),
-                            currentPages = updatedPages,
-                        )
-                    }
-                }
-                .onFailure { error ->
-                    mutableState.update { state ->
-                        if (state.selected?.id != bvid) return@update state
-                        state.copy(loading = false, currentPages = pages, error = error.message ?: "切换分P失败")
-                    }
-                }
-        }
+        switchPlaybackPage(selected.id, pageIndex, pages)
     }
 
     fun play(stream: PlaybackOption) {
@@ -723,40 +701,13 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         val current = mutableState.value
         val curId = current.playingVideo?.id ?: current.selected?.id ?: return
         val items = current.items
-        // 多P切页:检查当前视频是否还有下一页。
-        val cached = playbackCache[curId]
-        if (cached != null && cached.pages.totalPages > 1) {
-            val nextPage = cached.pages.currentPage + 1
-            if (nextPage < cached.pages.totalPages) {
-                val bvid = curId
-                AppLog.i("Nav", "playNext -> page $nextPage/${cached.pages.totalPages} for $bvid")
-                // 更新缓存中的当前页索引,便于后续继续翻页。
-                val updatedPages = cached.pages.copy(currentPage = nextPage)
-                playbackCache[bvid] = cached.copy(pages = updatedPages)
-                playbackSession++
-                detailsJob?.cancel()
-                recoveryJob?.cancel()
-                detailsJob = viewModelScope.launch {
-                    mutableState.update { it.copy(loading = true, error = null) }
-                    runCatchingCancellable { repository.resolvePagePlayback(bvid, nextPage) }
-                        .onSuccess { options ->
-                            val option = options.firstOrNull()
-                            mutableState.update { state ->
-                                if (state.selected?.id != bvid) return@update state
-                                state.copy(
-                                    loading = false,
-                                    selected = state.selected.copy(playbackOptions = options),
-                                    playing = option,
-                                )
-                            }
-                        }
-                        .onFailure { error ->
-                            mutableState.update { state ->
-                                if (state.selected?.id != bvid) return@update state
-                                state.copy(loading = false, error = error.message ?: "切换分页失败")
-                            }
-                        }
-                }
+        // 多P切页:优先用 UI state 的 currentPages(权威来源),回退到预取缓存。
+        val pages = current.currentPages ?: playbackCache[curId]?.pages
+        if (pages != null && pages.totalPages > 1) {
+            val nextPage = pages.currentPage + 1
+            if (nextPage < pages.totalPages) {
+                AppLog.i("Nav", "playNext -> page $nextPage/${pages.totalPages} for $curId")
+                switchPlaybackPage(curId, nextPage, pages)
                 return
             }
         }
@@ -781,13 +732,59 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
      */
     fun playPrevious() {
         val current = mutableState.value
-        val items = current.items
         val curId = current.playingVideo?.id ?: current.selected?.id ?: return
+        val items = current.items
+        // 多P切页:优先用 UI state 的 currentPages(权威来源),回退到预取缓存。
+        val pages = current.currentPages ?: playbackCache[curId]?.pages
+        if (pages != null && pages.totalPages > 1) {
+            val prevPage = pages.currentPage - 1
+            if (prevPage >= 0) {
+                AppLog.i("Nav", "playPrevious -> page $prevPage/${pages.totalPages} for $curId")
+                switchPlaybackPage(curId, prevPage, pages)
+                return
+            }
+        }
+        // 多P已在第一集或单P视频:跳到列表上一个视频。
         val idx = items.indexOfFirst { it.id == curId }
         if (idx <= 0) return
         pendingAutoAdvanceFromId = null
         AppLog.i("Nav", "playPrevious to index ${idx - 1} of ${items.size}")
         playVideoAt(idx - 1, items, prefetchNextPage = false)
+    }
+
+    /**
+     * 切换多P视频到指定分页:解析该页播放地址并同步更新 UI state(playing +
+     * currentPages)与预取缓存。供 selectPage/playNext/playPrevious 共用,
+     * 确保 currentPages 和 playbackCache 始终一致。
+     */
+    private fun switchPlaybackPage(bvid: String, pageIndex: Int, pages: PlaybackPages) {
+        val updatedPages = pages.copy(currentPage = pageIndex)
+        playbackCache[bvid]?.let { cached -> playbackCache[bvid] = cached.copy(pages = updatedPages) }
+        playbackSession++
+        detailsJob?.cancel()
+        recoveryJob?.cancel()
+        detailsJob = viewModelScope.launch {
+            mutableState.update { it.copy(loading = true, error = null, currentPages = updatedPages) }
+            runCatchingCancellable { repository.resolvePagePlayback(bvid, pageIndex) }
+                .onSuccess { options ->
+                    val option = options.firstOrNull()
+                    mutableState.update { state ->
+                        if (state.selected?.id != bvid) return@update state
+                        state.copy(
+                            loading = false,
+                            selected = state.selected.copy(playbackOptions = options),
+                            playing = option,
+                            currentPages = state.currentPages?.copy(currentPage = pageIndex) ?: updatedPages,
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    mutableState.update { state ->
+                        if (state.selected?.id != bvid) return@update state
+                        state.copy(loading = false, currentPages = pages, error = error.message ?: "切换分页失败")
+                    }
+                }
+        }
     }
 
     /**
