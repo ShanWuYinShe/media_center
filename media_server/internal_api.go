@@ -4,8 +4,10 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -302,6 +304,12 @@ func (s *mediaServer) handleInternalReview(w http.ResponseWriter, r *http.Reques
 	}
 	affected, err := s.catalog.ReviewMember(req.CategoryID, req.Provider, req.NativeID, req.Status, req.Pinned, rankArg, reviewer)
 	if err != nil {
+		// 校验类错误(无 Unwrap)是可安全返回的业务消息；底层 SQL/DB 错误(有 Unwrap)不泄露细节。
+		if errors.Unwrap(err) != nil {
+			log.Printf("review member: %v", err)
+			s.writeError(w, fmt.Errorf("review member"))
+			return
+		}
 		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: err.Error()})
 		return
 	}

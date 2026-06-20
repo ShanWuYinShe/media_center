@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // mediaServer 是纯目录服务:只从 catalog(SQLite)提供 provider 列表、分类列表、
@@ -93,8 +94,16 @@ func main() {
 	}
 
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           server,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 	log.Printf("media_server listening on %s", addr)
-	if err := http.ListenAndServe(addr, server); err != nil {
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }
