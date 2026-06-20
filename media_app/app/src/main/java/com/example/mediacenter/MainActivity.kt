@@ -118,6 +118,10 @@ class MainActivity : ComponentActivity() {
     private var searchVisible: Boolean = false
     private var player: ExoPlayer? = null
     private var currentPlayerUrl: String? = null
+    // 当前播放的 PlaybackOption.id，用于进度保存键。
+    // 与 currentState.playing?.id 不同：该字段在 renderPlayer 开始时就固定，
+    // 不受后续 playNext 等高线状态变化影响，确保 releasePlayer 时存对键。
+    private var currentPlayerOptionId: String? = null
     // 播放页画面旋转。TV 本身不能像手机一样物理转屏,所以对“竖向编码但需要横看”的视频
     // 旋转播放器画面本身。自动恢复重建同一视频时保持手动选择;换视频后重新自动检测。
     private var playerRotationVideoId: String? = null
@@ -1544,7 +1548,11 @@ class MainActivity : ComponentActivity() {
             dataSourceFactory.setUserAgent(PlaybackUserAgent)
         }
 
+        // 先释放旧播放器，此时 currentPlayerOptionId 仍是旧值，
+        // releasePlayer 会用旧 id 正确保存当前进度。
         releasePlayer()
+        // 更新为当前流的 id，后续加载和保存进度都使用此键。
+        currentPlayerOptionId = stream.id
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // 在 prepare 之前加载上次保存的位置并一次 seek 到位，避免在 STATE_READY
         // 回调中 seek 导致 seek→buffer→ready→seek 的死循环。
@@ -2346,12 +2354,13 @@ class MainActivity : ComponentActivity() {
 
     private fun releasePlayer() {
         cancelPlaybackStabilityReset()
-        // 释放播放器前保存播放位置。
+        // 释放播放器前保存播放位置，所有非零进度都保存。
         val pos = player?.currentPosition ?: 0L
         player?.release()
-        if (pos > 5000L) savePlaybackPosition(pos)
+        if (pos > 0L) savePlaybackPosition(pos)
         player = null
         currentPlayerUrl = null
+        currentPlayerOptionId = null
         playerSurface = null
         orientationIndicator = null
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -2360,7 +2369,7 @@ class MainActivity : ComponentActivity() {
     // 播放进度持久化，方便下次续播。
     private fun prefs() = getSharedPreferences("playback", Context.MODE_PRIVATE)
 
-    private fun playbackPosKey() = currentState.playing?.let { "pos_${it.id}" } ?: ""
+    private fun playbackPosKey() = currentPlayerOptionId?.let { "pos_$it" } ?: ""
 
     private fun savePlaybackPosition(pos: Long) {
         val key = playbackPosKey()
