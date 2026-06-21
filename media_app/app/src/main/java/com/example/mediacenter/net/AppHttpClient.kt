@@ -7,6 +7,7 @@ import java.security.GeneralSecurityException
 import java.security.KeyStore
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
+import java.util.Date
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
@@ -24,7 +25,7 @@ import okhttp3.OkHttpClient
  * 落在服务端 OCSP 装订(stapling)响应的 `thisUpdate..nextUpdate` 有效区间之外,Conscrypt
  * 会在 TLS 握手阶段直接以
  * `Chain validation failed / Response is unreliable: its validity interval is out-of-date`
- * 失败,导致连「拉分类」「检查更新」这种最基本的请求都报“网络连接失败”。证书本身的
+ * 失败,导致连「拉分类」「检查更新」这种最基本的请求都报"网络连接失败"。证书本身的
  * notBefore/notAfter 区间宽达数月,所以证书没过期,偏偏卡在窄短的 OCSP 区间上。
  *
  * **修复策略**:复刻主流桌面浏览器对 OCSP 装订的 **soft-fail** 行为——证书链、有效期、
@@ -97,9 +98,18 @@ object AppHttpClient {
     }
 
     /**
-     * 委托系统默认 TrustManager 做完整链校验,但对 OCSP / 吊销类“不可用”异常 soft-fail。
-     * 由于本类不是 Conscrypt 的 `TrustManagerImpl`,握手时平台不会把装订 OCSP 交给它强校验,
-     * 因此装订 OCSP 过期 / 时钟漂移不会再中断握手;此处的 catch 仅作兜底。
+     * 委托系统默认 TrustManager 做完整链校验,但对以下场景 soft-fail:
+     * 1) OCSP / 吊销类"不可用"异常(clock skew 导致装订响应过期);
+     * 2) 纯"Chain validation failed"且原因是时钟漂移(证书尚未生效 / 刚刚过期)。
+     *
+     * 场景 1 是因为本类不是 Conscrypt 的 `TrustManagerImpl`,握手时平台不会把装订
+     * OCSP 交给它强校验,因此装订 OCSP 过期不会再中断握手;此处的 catch 仅作兜底。
+     *
+     * 场景 2 是因为 Android TV 盒子的 RTC 没有电池,时钟可能偏移几天。当 Let's Encrypt
+     * 或 Google Trust Services 更换证书时,新证书的 `notBefore` 可能在设备本地时间的
+     * "未来",Conscrypt 抛出泛化的 `CertificateException: Chain validation failed`
+     * (非 OCSP 路径),不会被场景 1 兜住。这里额外检测证书叶子的时间窗口:如果证书在
+     * 未来 7 天内就会生效,或者过去 7 天内刚刚过期,则判定为时钟漂移而非真正的安全攻击。
      */
     private class OcspSoftFailTrustManager(
         private val delegate: X509TrustManager,
@@ -116,12 +126,17 @@ object AppHttpClient {
                     AppLog.w("Http", "soft-fail OCSP/revocation staleness: ${error.message}")
                     return
                 }
+                if (isClockDriftChainValidation(error, chain)) {
+                    AppLog.w("Http", "soft-fail chain validation (likely clock drift): ${error.message}")
+                    return
+                }
                 throw error
             }
         }
 
         override fun getAcceptedIssuers(): Array<X509Certificate> = delegate.acceptedIssuers
 
+        /** 检查异常信息是否匹配 OCSP / 吊销不可用的关键字。 */
         private fun isRevocationStaleness(error: Throwable?): Boolean {
             var cause = error
             while (cause != null) {
@@ -134,8 +149,49 @@ object AppHttpClient {
             return false
         }
 
+        /**
+         * 当错误是泛化的"Chain validation failed"时,检查证书叶子的有效期:
+         * 如果叶子证书在 ±7 天内是合法区间,则说明是设备时钟漂移。
+         */
+        private fun isClockDriftChainValidation(
+            error: CertificateException,
+            chain: Array<out X509Certificate>?,
+        ): Boolean {
+            // 确认异常链中存在"Chain validation failed"
+            var cause: Throwable? = error
+            var hasChainValidation = false
+            while (cause != null) {
+                if (cause.message?.contains("Chain validation", ignoreCase = true) == true) {
+                    hasChainValidation = true
+                    break
+                }
+                cause = cause.cause
+            }
+            if (!hasChainValidation) return false
+            // 没有证书链可供分析 → 不应跳过
+            if (chain.isNullOrEmpty()) return false
+
+            val leaf = chain[0]
+            val now = System.currentTimeMillis()
+            // ±7 天容差:覆盖大多数 TV 盒子的电池耗尽场景
+            val toleranceMs = 7L * 24 * 60 * 60 * 1000
+
+            // 时钟偏慢:证书尚未生效但在未来 7 天内会生效
+            try {
+                leaf.checkValidity(Date(now + toleranceMs))
+                return true
+            } catch (_: CertificateException) { /* 继续 */ }
+            // 时钟偏快:证书刚刚过期在过去 7 天内仍有效
+            try {
+                leaf.checkValidity(Date(now - toleranceMs))
+                return true
+            } catch (_: CertificateException) { /* 继续 */ }
+
+            return false
+        }
+
         private companion object {
-            // 仅匹配“吊销状态不可用 / 过期”这类信号,绝不放行真正的链 / 域名 / 过期错误。
+            // 仅匹配"吊销状态不可用 / 过期"这类信号,绝不放行真正的链 / 域名 / 过期错误。
             val SOFT_FAIL_MARKERS = listOf(
                 "validity interval is out-of-date",
                 "Response is unreliable",
@@ -148,7 +204,7 @@ object AppHttpClient {
     /**
      * 包裹真实 [SSLSocketFactory],为每个创建出来的 [SSLSocket] 显式启用现代 TLS 版本。
      * 作用:作为 `HttpsURLConnection` 全局默认时,在 TLSv1.2 默认未开启的旧系统(API 19/20)
-     * 上也能与仅支持 TLS1.2+ 的服务端(Cloudflare / 本站 nginx)握手;只在“受支持”集合内启用,
+     * 上也能与仅支持 TLS1.2+ 的服务端(Cloudflare / 本站 nginx)握手;只在"受支持"集合内启用,
      * 不会因不支持的协议名抛异常,也不会降级到 SSLv3 / TLSv1.0。
      */
     private class ModernTlsSocketFactory(
