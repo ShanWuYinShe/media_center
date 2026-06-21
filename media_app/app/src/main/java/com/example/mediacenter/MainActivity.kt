@@ -57,6 +57,7 @@ import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.GridLayoutManager
@@ -1580,19 +1581,27 @@ class MainActivity : ComponentActivity() {
                 .build()
             builtPlayer!!.apply {
                 val seekPos = initialSeekPos.coerceAtLeast(0L)
-                val mediaItem = MediaItem.Builder()
-                    .setUri(playbackUrl)
-                    .setMimeType(playbackMimeType(stream.mimeType))
-                    .build()
-                if (mediaItem.localConfiguration?.mimeType == MimeTypes.APPLICATION_MPD) {
-                    setMediaSource(
-                        DashMediaSource.Factory(dataSourceFactory)
-                            .setManifestParser(TolerantDashManifestParser())
-                            .setLoadErrorHandlingPolicy(playbackLoadErrorHandlingPolicy)
-                            .createMediaSource(mediaItem),
-                    )
-                    if (seekPos > 0L) seekTo(seekPos)
+                val audioUrl = stream.audioUrl
+                if (audioUrl != null) {
+                    // DASH: 视频轨和音频轨作为独立 Progressive 源,用 MergingMediaSource 合并。
+                    val videoItem = MediaItem.Builder()
+                        .setUri(playbackUrl)
+                        .setMimeType(playbackMimeType(stream.mimeType))
+                        .build()
+                    val audioItem = MediaItem.Builder()
+                        .setUri(audioUrl)
+                        .setMimeType(MimeTypes.AUDIO_MP4)
+                        .build()
+                    val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
+                    val videoSource = mediaSourceFactory.createMediaSource(videoItem)
+                    val audioSource = mediaSourceFactory.createMediaSource(audioItem)
+                    val mergingSource = MergingMediaSource(videoSource, audioSource)
+                    setMediaSource(mergingSource, seekPos)
                 } else {
+                    val mediaItem = MediaItem.Builder()
+                        .setUri(playbackUrl)
+                        .setMimeType(playbackMimeType(stream.mimeType))
+                        .build()
                     setMediaItem(mediaItem, seekPos)
                 }
                 repeatMode = Player.REPEAT_MODE_OFF

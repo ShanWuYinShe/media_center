@@ -83,6 +83,7 @@ data class PlaybackOption(
     val kind: String,
     val label: String,
     val url: String,
+    val audioUrl: String? = null,
     val mimeType: String? = null,
     val headers: Map<String, String> = emptyMap(),
 )

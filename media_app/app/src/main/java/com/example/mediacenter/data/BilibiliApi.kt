@@ -76,18 +76,12 @@ class BilibiliApi(
         }
         val payload = fetchPlayUrl(bvid, targetCid, quality = preferredQuality())
         if (payload.code != 0) throw BilibiliApiException("playurl 接口返回 code=${payload.code}")
-        val durlList = payload.data.durl
-        if (durlList.isEmpty()) throw BilibiliApiException("B 站未返回播放流(可能触发风控)")
-        val first = durlList.first()
+
+        val options = buildPlaybackOptions(bvid, pageIndex, payload)
+        if (options.isEmpty()) throw BilibiliApiException("B 站未返回播放流(可能触发风控)")
+
         PlaybackResult(
-            listOf(PlaybackOption(
-                id = "bili-$bvid-p$pageIndex-q${payload.data.quality}",
-                kind = "vod",
-                label = qualityLabel(payload.data.quality),
-                url = first.url,
-                mimeType = "video/mp4",
-                headers = DIRECT_HEADERS,
-            )),
+            options,
             PlaybackPages(currentPage = pageIndex, totalPages = totalPages, pageCids = allCids, pageTitles = pageTitles),
         )
     }
@@ -106,10 +100,43 @@ class BilibiliApi(
         }
         val payload = fetchPlayUrl(bvid, cids[pageIndex], quality = preferredQuality())
         if (payload.code != 0) throw BilibiliApiException("playurl 接口返回 code=${payload.code}")
+        val options = buildPlaybackOptions(bvid, pageIndex, payload)
+        if (options.isEmpty()) throw BilibiliApiException("B 站未返回播放流(可能触发风控)")
+        options
+    }
+
+    /**
+     * 解析 playurl 响应，构建多清晰度播放选项。
+     * 优先使用 DASH 流的视频轨+音频轨构建多个档位；
+     * DASH 不可用时回退到单 durl(MP4 兼容)。
+     */
+    private fun buildPlaybackOptions(bvid: String, pageIndex: Int, payload: BiliPlayUrlResponse): List<PlaybackOption> {
+        val dash = payload.data.dash
+        if (dash != null && dash.video.isNotEmpty()) {
+            val audioTracks = dash.audio
+            // 选码率最高的音轨
+            val bestAudio = audioTracks.maxByOrNull { it.bandwidth }?.baseUrl
+            // 按清晰度从高到低排序(根据 id 或分辨率)
+            val sorted = dash.video.sortedByDescending { it.id }
+            return sorted.map { track ->
+                val label = qualityLabel(track.id)
+                AppLog.i("Bili", "dash track: ${label} (${track.width}x${track.height}) id=${track.id}")
+                PlaybackOption(
+                    id = "bili-$bvid-p$pageIndex-q${track.id}",
+                    kind = "vod",
+                    label = label,
+                    url = track.baseUrl,
+                    audioUrl = bestAudio,
+                    mimeType = track.mimeType,
+                    headers = DIRECT_HEADERS,
+                )
+            }
+        }
+        // 回退:使用 durl 单 MP4 流
         val durlList = payload.data.durl
-        if (durlList.isEmpty()) throw BilibiliApiException("B 站未返回播放流(可能触发风控)")
+        if (durlList.isEmpty()) return emptyList()
         val first = durlList.first()
-        listOf(PlaybackOption(
+        return listOf(PlaybackOption(
             id = "bili-$bvid-p$pageIndex-q${payload.data.quality}",
             kind = "vod",
             label = qualityLabel(payload.data.quality),
@@ -140,7 +167,7 @@ class BilibiliApi(
             mapOf(
                 "bvid" to bvid,
                 "cid" to cid.toString(),
-                "fnval" to "0",
+                "fnval" to "4048",
                 "qn" to quality.toString(),
                 "fourk" to "1",
             ),
@@ -306,6 +333,7 @@ private data class BiliPlayUrlResponse(
     data class PlayUrlData(
         val quality: Int = 0,
         val durl: List<Durl> = emptyList(),
+        val dash: BiliDash? = null,
     ) {
         @Serializable
         data class Durl(
@@ -314,3 +342,22 @@ private data class BiliPlayUrlResponse(
         )
     }
 }
+
+@Serializable
+private data class BiliDash(
+    val duration: Int = 0,
+    val video: List<BiliDashTrack> = emptyList(),
+    val audio: List<BiliDashTrack> = emptyList(),
+)
+
+@Serializable
+private data class BiliDashTrack(
+    val id: Int = 0,
+    @SerialName("baseUrl")
+    val baseUrl: String = "",
+    val bandwidth: Int = 0,
+    val mimeType: String = "",
+    val codecs: String = "",
+    val width: Int = 0,
+    val height: Int = 0,
+)
