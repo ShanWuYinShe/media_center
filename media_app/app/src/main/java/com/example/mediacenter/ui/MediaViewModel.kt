@@ -96,6 +96,8 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     // 就清零,否则“就绪即失败”的流会绕过上限陷入无限恢复循环。
     private var playbackRecoveryAttempts = 0
     private var playbackSession = 0L
+    // 当前已缓存的播放清晰度 qn,选不同清晰度时需重新请求。
+    private var currentPlaybackQn: Int = 0
 
     // 分类级内存缓存:再次进入已加载过的分类时,立即展示缓存内容,不再清空列表、
     // 不再 loading 转圈阻塞。仅当缓存过期(超过 [CategoryCacheTtlMs])时在后台静默刷新,
@@ -410,6 +412,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             mutableState.update { it.copy(selected = details, loading = false) }
             runCatchingCancellable { repository.playbackOptions(details) }
                 .onSuccess { result ->
+                    currentPlaybackQn = result.options.firstOrNull()?.qn ?: 0
                     mutableState.update { state ->
                         if (state.selected?.id != details.id) return@update state
                         state.copy(selected = state.selected.copy(playbackOptions = result.options),
@@ -447,6 +450,11 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         AppLog.i("Playback", "play requested video=${selected?.id ?: "<none>"} option=${stream.id} kind=${stream.kind}")
         if (selected == null) {
             AppLog.w("Playback", "play() called with selected==null, ignoring to avoid unrecoverable state")
+            return
+        }
+        // 选不同清晰度时重新请求 playurl,使用 durl(完整 MP4)播放
+        if (stream.qn > 0 && stream.qn != currentPlaybackQn) {
+            switchQuality(selected, stream, video)
             return
         }
         // 如果 playbackOptions 已由 openDetails 后台自动解析好,直接取用,
@@ -501,6 +509,38 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                                 error = error.message ?: "刷新播放地址失败",
                             )
                         }
+                    }
+                }
+        }
+    }
+
+    // 切换到指定清晰度后播放，重新请求 playurl 获取该清晰度的 durl。
+    private fun switchQuality(selected: VideoDetails, stream: PlaybackOption, video: VideoSummary?) {
+        detailsJob?.cancel()
+        recoveryJob?.cancel()
+        detailsJob = viewModelScope.launch {
+            mutableState.update { it.copy(loading = true, error = null) }
+            runCatchingCancellable { repository.playbackOptions(selected, stream.qn) }
+                .onSuccess { result ->
+                    currentPlaybackQn = stream.qn
+                    val fresh = result.options.firstOrNull { it.id == stream.id }
+                        ?: result.options.firstOrNull { it.label == stream.label }
+                        ?: result.options.firstOrNull()
+                    mutableState.update { state ->
+                        if (state.selected?.id != selected.id) return@update state
+                        state.copy(
+                            loading = false,
+                            selected = state.selected.copy(playbackOptions = result.options),
+                            playing = fresh,
+                            playingVideo = video ?: state.playingVideo,
+                            currentPages = result.pages,
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    mutableState.update { state ->
+                        if (state.selected?.id != selected.id) return@update state
+                        state.copy(loading = false, error = error.message ?: "切换清晰度失败")
                     }
                 }
         }
@@ -598,8 +638,11 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             }
             val currentSelected = afterDelay.selected
                 ?: return@launch
-            runCatchingCancellable { repository.playbackOptions(currentSelected) }
-                .onSuccess { result ->
+            val qn = currentPlaybackQn
+            runCatchingCancellable {
+                if (qn > 0) repository.playbackOptions(currentSelected, qn)
+                else repository.playbackOptions(currentSelected)
+            }.onSuccess { result ->
                     val options = result.options
                     val sameIdx = options.indexOfFirst { it.id == failedOption.id }
                     val candidate = when {

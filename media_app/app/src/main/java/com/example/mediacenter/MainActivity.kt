@@ -55,9 +55,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.GridLayoutManager
@@ -1300,7 +1298,7 @@ class MainActivity : ComponentActivity() {
         val gapQuality = 18
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            gravity = Gravity.TOP
             setPadding(hPad, vPad, hPad, vPad)
             clipChildren = false
         }
@@ -1352,28 +1350,29 @@ class MainActivity : ComponentActivity() {
 
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_VERTICAL
+            gravity = Gravity.TOP
             clipChildren = false
             clipToPadding = false
         }
-        row.addView(info, LinearLayout.LayoutParams(0, wrap(), 1f))
-
-        val metadata = listOfNotNull(
-            details.durationSeconds?.let { formatDurationSeconds(it) },
-        ).joinToString(" · ")
-        if (metadata.isNotBlank()) {
-            info.addView(
-                label(metadata, metaSize, Colors.TextTertiary, bold = true, maxLines = 1).apply {
-                    letterSpacingCompat(0.04f)
-                },
-                linearMatch(),
-            )
+        val infoScroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = 2 // OVERSCROLL_NEVER
+            clipChildren = false
+            clipToPadding = false
         }
+        infoScroll.addView(info, ViewGroup.LayoutParams(match(), wrap()))
+        row.addView(infoScroll, LinearLayout.LayoutParams(0, match(), 1f))
+
+        val options = details.playbackOptions
+        val selectedOption = if (options.isNotEmpty()) {
+            options.firstOrNull { it.id == selectedPlaybackOptionId } ?: options.first()
+        } else null
+
         info.addView(
             label(details.title, titleSize, Colors.TextPrimary, bold = true, maxLines = 2).apply {
                 letterSpacingCompat(-0.01f)
             },
-            LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(if (metadata.isNotBlank()) gapTitle else 0)),
+            linearMatch(),
         )
         info.addView(
             label(details.description.ifBlank { "暂无简介" }, descSize, Colors.TextSecondary, maxLines = descLines).apply {
@@ -1391,7 +1390,6 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        val options = details.playbackOptions
         var detailErrorRetry: () -> Unit = viewModel::refreshSelectedPlayback
         if (options.isEmpty()) {
             info.addView(label("暂无可播放视频", 15f, Colors.TextTertiary, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapPlay)))
@@ -1414,12 +1412,14 @@ class MainActivity : ComponentActivity() {
             registerDetailFocus(DetailFocusTarget.Refresh, refresh)
             info.addView(refresh, LinearLayout.LayoutParams(wrap(), dp(chipH)).withTopMargin(dp(12)))
         } else {
-            val selectedOption = options.firstOrNull { it.id == selectedPlaybackOptionId } ?: options.first()
-            selectedPlaybackOptionId = selectedOption.id
+            selectedPlaybackOptionId = selectedOption!!.id
             detailErrorRetry = { viewModel.play(selectedOption) }
+            val currentDuration = state.currentPages?.currentPageDurationSeconds ?: details.durationSeconds
+            val durationText = currentDuration?.let { formatDurationSeconds(it) }
             val playButton = primaryPill(
                 text = buildString {
                     append("播放")
+                    durationText?.let { append(" $it") }
                     selectedOption.label.takeIf { it.isNotBlank() }?.let { append(" · $it") }
                 },
                 heightDp = playH,
@@ -1433,6 +1433,38 @@ class MainActivity : ComponentActivity() {
             )
             registerDetailFocus(DetailFocusTarget.Play, playButton)
             info.addView(playButton, LinearLayout.LayoutParams(wrap(), dp(playH)).withTopMargin(dp(gapPlay)))
+
+            if (options.size > 1) {
+                info.addView(label("清晰度", metaSize, Colors.TextTertiary, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapQuality)))
+                val optionRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    clipChildren = false
+                    clipToPadding = false
+                    setPadding(0, dp(gapDisclosure), 0, dp(4))
+                }
+                options.take(5).forEach { option ->
+                    val chip = pill(
+                        text = option.label.ifBlank { "播放" },
+                        selected = option.id == selectedOption.id,
+                        heightDp = chipH,
+                        horizontalPaddingDp = chipHPad,
+                        onFocusChange = { focused ->
+                            if (focused) detailFocusTarget = DetailFocusTarget.Option(option.id)
+                        },
+                        onClick = {
+                            selectedPlaybackOptionId = option.id
+                            detailFocusTarget = DetailFocusTarget.Option(option.id)
+                            invalidateUi()
+                        },
+                    )
+                    registerDetailFocus(DetailFocusTarget.Option(option.id), chip)
+                    optionRow.addView(
+                        chip,
+                        LinearLayout.LayoutParams(wrap(), dp(chipH)).withEndMargin(dp(14)),
+                    )
+                }
+                info.addView(optionRow, linearMatch())
+            }
 
             // 多P选集:分P数量多时用导航+弹窗替代水平一排按钮
             state.currentPages?.let { pages ->
@@ -1468,38 +1500,6 @@ class MainActivity : ComponentActivity() {
                         info.addView(pageRow, linearMatch())
                     }
                 }
-            }
-
-            if (options.size > 1) {
-                info.addView(label("清晰度", metaSize, Colors.TextTertiary, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapQuality)))
-                val optionRow = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    clipChildren = false
-                    clipToPadding = false
-                    setPadding(0, dp(gapDisclosure), 0, dp(4))
-                }
-                options.take(5).forEach { option ->
-                    val chip = pill(
-                        text = option.label.ifBlank { "播放" },
-                        selected = option.id == selectedOption.id,
-                        heightDp = chipH,
-                        horizontalPaddingDp = chipHPad,
-                        onFocusChange = { focused ->
-                            if (focused) detailFocusTarget = DetailFocusTarget.Option(option.id)
-                        },
-                        onClick = {
-                            selectedPlaybackOptionId = option.id
-                            detailFocusTarget = DetailFocusTarget.Option(option.id)
-                            invalidateUi()
-                        },
-                    )
-                    registerDetailFocus(DetailFocusTarget.Option(option.id), chip)
-                    optionRow.addView(
-                        chip,
-                        LinearLayout.LayoutParams(wrap(), dp(chipH)).withEndMargin(dp(14)),
-                    )
-                }
-                info.addView(optionRow, linearMatch())
             }
         }
 
@@ -1581,29 +1581,11 @@ class MainActivity : ComponentActivity() {
                 .build()
             builtPlayer!!.apply {
                 val seekPos = initialSeekPos.coerceAtLeast(0L)
-                val audioUrl = stream.audioUrl
-                if (audioUrl != null) {
-                    // DASH: 视频轨和音频轨作为独立 Progressive 源,用 MergingMediaSource 合并。
-                    val videoItem = MediaItem.Builder()
-                        .setUri(playbackUrl)
-                        .setMimeType(playbackMimeType(stream.mimeType))
-                        .build()
-                    val audioItem = MediaItem.Builder()
-                        .setUri(audioUrl)
-                        .setMimeType(MimeTypes.AUDIO_MP4)
-                        .build()
-                    val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
-                    val videoSource = mediaSourceFactory.createMediaSource(videoItem)
-                    val audioSource = mediaSourceFactory.createMediaSource(audioItem)
-                    val mergingSource = MergingMediaSource(videoSource, audioSource)
-                    setMediaSource(mergingSource, seekPos)
-                } else {
-                    val mediaItem = MediaItem.Builder()
-                        .setUri(playbackUrl)
-                        .setMimeType(playbackMimeType(stream.mimeType))
-                        .build()
-                    setMediaItem(mediaItem, seekPos)
-                }
+                val mediaItem = MediaItem.Builder()
+                    .setUri(playbackUrl)
+                    .setMimeType(playbackMimeType(stream.mimeType))
+                    .build()
+                setMediaItem(mediaItem, seekPos)
                 repeatMode = Player.REPEAT_MODE_OFF
                 playWhenReady = true
                 addListener(object : Player.Listener {

@@ -86,15 +86,19 @@ data class PlaybackOption(
     val audioUrl: String? = null,
     val mimeType: String? = null,
     val headers: Map<String, String> = emptyMap(),
+    val qn: Int = 0,
 )
 
-// PlaybackPages 记录视频的多P信息:当前播放第几页、总共几页、所有分页的 cid。
+// PlaybackPages 记录视频的多P信息:当前播放第几页、总共几页、所有分页的 cid 和时长。
 data class PlaybackPages(
     val currentPage: Int = 0,
     val totalPages: Int = 0,
     val pageCids: List<Long> = emptyList(),
     val pageTitles: List<String> = emptyList(),
-)
+    val pageDurations: List<Long> = emptyList(),
+) {
+    val currentPageDurationSeconds: Long? get() = pageDurations.getOrNull(currentPage)
+}
 
 // PlaybackResult 是解析播放地址的完整结果:播放选项列表 + 多P信息。
 data class PlaybackResult(

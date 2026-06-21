@@ -77,6 +77,11 @@ class MediaRepository(
         return bilibiliApi.resolvePlayback(video.id)
     }
 
+    // 指定清晰度解析播放地址。
+    suspend fun playbackOptions(video: VideoDetails, qn: Int): PlaybackResult {
+        return bilibiliApi.resolvePlayback(video.id, qn)
+    }
+
     // 解析多P视频指定分页的播放地址。
     suspend fun resolvePagePlayback(bvid: String, pageIndex: Int): List<PlaybackOption> {
         return bilibiliApi.resolvePagePlayback(bvid, pageIndex)

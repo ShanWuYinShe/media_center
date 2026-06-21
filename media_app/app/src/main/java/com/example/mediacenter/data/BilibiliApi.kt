@@ -62,7 +62,9 @@ class BilibiliApi(
      * 解析某 bvid 的可播放直链。返回(播放选项, 多P信息)。
      * id 支持 "bvid_pN" 格式(多P分条目录),自动提取页码。
      */
-    suspend fun resolvePlayback(id: String): PlaybackResult = withContext(Dispatchers.IO) {
+    suspend fun resolvePlayback(id: String): PlaybackResult = resolvePlayback(id, preferredQuality())
+
+    suspend fun resolvePlayback(id: String, qn: Int): PlaybackResult = withContext(Dispatchers.IO) {
         val (bvid, pageIndex) = parsePageId(id)
         val viewPayload = fetchView(bvid)
         val pages = viewPayload.data?.pages ?: emptyList()
@@ -72,17 +74,24 @@ class BilibiliApi(
         val targetCid = if (pageIndex in allCids.indices) allCids[pageIndex] else allCids.first()
         val pageTitles = pages.map { it.part }
         if (totalPages > 1) {
-            AppLog.i("Bili", "multi-page video: $bvid has $totalPages pages, requesting cid=$targetCid (page=$pageIndex)")
+            AppLog.i("Bili", "multi-page video: $bvid has $totalPages pages, requesting cid=$targetCid (page=$pageIndex) quality=$qn")
         }
-        val payload = fetchPlayUrl(bvid, targetCid, quality = preferredQuality())
+        val payload = fetchPlayUrl(bvid, targetCid, quality = qn)
         if (payload.code != 0) throw BilibiliApiException("playurl 接口返回 code=${payload.code}")
 
         val options = buildPlaybackOptions(bvid, pageIndex, payload)
         if (options.isEmpty()) throw BilibiliApiException("B 站未返回播放流(可能触发风控)")
 
+        val pageDurations = if (pages.isNotEmpty()) pages.map { it.duration } else emptyList()
         PlaybackResult(
             options,
-            PlaybackPages(currentPage = pageIndex, totalPages = totalPages, pageCids = allCids, pageTitles = pageTitles),
+            PlaybackPages(
+                currentPage = pageIndex,
+                totalPages = totalPages,
+                pageCids = allCids,
+                pageTitles = pageTitles,
+                pageDurations = pageDurations,
+            ),
         )
     }
 
@@ -107,42 +116,55 @@ class BilibiliApi(
 
     /**
      * 解析 playurl 响应，构建多清晰度播放选项。
-     * 优先使用 DASH 流的视频轨+音频轨构建多个档位；
-     * DASH 不可用时回退到单 durl(MP4 兼容)。
+     * 不使用 DASH(.m4s 分片不能直接作为 Progressive 流播放)，
+     * 而是用 API 返回的 accept_quality/accept_description 做质量标签，
+     * 播放统一使用 durl(完整 MP4，已混流音视频)。
      */
     private fun buildPlaybackOptions(bvid: String, pageIndex: Int, payload: BiliPlayUrlResponse): List<PlaybackOption> {
-        val dash = payload.data.dash
-        if (dash != null && dash.video.isNotEmpty()) {
-            val audioTracks = dash.audio
-            // 选码率最高的音轨
-            val bestAudio = audioTracks.maxByOrNull { it.bandwidth }?.baseUrl
-            // 按清晰度从高到低排序(根据 id 或分辨率)
-            val sorted = dash.video.sortedByDescending { it.id }
-            return sorted.map { track ->
-                val label = qualityLabel(track.id)
-                AppLog.i("Bili", "dash track: ${label} (${track.width}x${track.height}) id=${track.id}")
+        val data = payload.data
+        val durlUrl = data.durl.firstOrNull()?.url
+        // 用 accept_quality/accept_description 构建多清晰度标签
+        val acceptQn = data.acceptQuality
+        val acceptDesc = data.acceptDescription
+        if (durlUrl != null && acceptQn.isNotEmpty() && acceptQn.size == acceptDesc.size) {
+            val zipped = acceptQn.zip(acceptDesc).sortedByDescending { it.first }
+            return zipped.map { (qn, desc) ->
+                val label = desc.ifBlank { qualityLabel(qn) }
+                AppLog.i("Bili", "option: $label qn=$qn")
                 PlaybackOption(
-                    id = "bili-$bvid-p$pageIndex-q${track.id}",
+                    id = "bili-$bvid-p$pageIndex-q$qn",
                     kind = "vod",
                     label = label,
-                    url = track.baseUrl,
-                    audioUrl = bestAudio,
-                    mimeType = track.mimeType,
+                    url = durlUrl,
+                    mimeType = "video/mp4",
                     headers = DIRECT_HEADERS,
+                    qn = qn,
                 )
             }
         }
         // 回退:使用 durl 单 MP4 流
-        val durlList = payload.data.durl
+        if (durlUrl != null) {
+            return listOf(PlaybackOption(
+                id = "bili-$bvid-p$pageIndex-q${data.quality}",
+                kind = "vod",
+                label = qualityLabel(data.quality),
+                url = durlUrl,
+                mimeType = "video/mp4",
+                headers = DIRECT_HEADERS,
+                qn = data.quality,
+            ))
+        }
+        val durlList = data.durl
         if (durlList.isEmpty()) return emptyList()
         val first = durlList.first()
         return listOf(PlaybackOption(
-            id = "bili-$bvid-p$pageIndex-q${payload.data.quality}",
+            id = "bili-$bvid-p$pageIndex-q${data.quality}",
             kind = "vod",
-            label = qualityLabel(payload.data.quality),
+            label = qualityLabel(data.quality),
             url = first.url,
             mimeType = "video/mp4",
             headers = DIRECT_HEADERS,
+            qn = data.quality,
         ))
     }
 
@@ -167,7 +189,7 @@ class BilibiliApi(
             mapOf(
                 "bvid" to bvid,
                 "cid" to cid.toString(),
-                "fnval" to "4048",
+                "fnval" to "0",
                 "qn" to quality.toString(),
                 "fourk" to "1",
             ),
@@ -320,6 +342,7 @@ private data class BiliViewResponse(
         data class PageData(
             val cid: Long = 0,
             val part: String = "",
+            val duration: Long = 0,
         )
     }
 }
@@ -333,7 +356,10 @@ private data class BiliPlayUrlResponse(
     data class PlayUrlData(
         val quality: Int = 0,
         val durl: List<Durl> = emptyList(),
-        val dash: BiliDash? = null,
+        @SerialName("accept_quality")
+        val acceptQuality: List<Int> = emptyList(),
+        @SerialName("accept_description")
+        val acceptDescription: List<String> = emptyList(),
     ) {
         @Serializable
         data class Durl(
@@ -343,21 +369,4 @@ private data class BiliPlayUrlResponse(
     }
 }
 
-@Serializable
-private data class BiliDash(
-    val duration: Int = 0,
-    val video: List<BiliDashTrack> = emptyList(),
-    val audio: List<BiliDashTrack> = emptyList(),
-)
 
-@Serializable
-private data class BiliDashTrack(
-    val id: Int = 0,
-    @SerialName("baseUrl")
-    val baseUrl: String = "",
-    val bandwidth: Int = 0,
-    val mimeType: String = "",
-    val codecs: String = "",
-    val width: Int = 0,
-    val height: Int = 0,
-)
