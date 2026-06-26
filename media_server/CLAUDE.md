@@ -1,6 +1,8 @@
 # CLAUDE.md
 
-`media_center` 的合规公开视频聚合后端：Go HTTP 服务，对外只提供目录服务——视频来源列表、分类列表、视频元数据。
+`media_center` 的合规公开视频聚合后端：Go HTTP 服务，对外只提供目录服务。
+
+API 契约见 @API.md。
 
 ## 构建 & 测试
 
@@ -11,15 +13,7 @@ gofmt -l .            # 格式检查（列出不合规文件）
 go test ./...         # 单元测试
 ```
 
-> HTTP 服务监听 `PORT`（容器内默认 8787）。对外路由统一在 `/api/` 下：`/api/providers`、`/api/providers/{provider}/categories`、`/api/providers/{provider}/categories/{catId}/videos`、`/api/app/update`、`/api/app/download`。
-
-## 约束
-
-- **API 契约**：以本目录 `API.md` 为准。server 端只做目录服务，不做任何上游 API 调用、不做播放地址解析、不做 asset 代理。播放完全由 App 端按 provider 自行处理。
-- **内容分类**：默认读取 `src/contentCategories.json`，可用 `CONTENT_CATEGORIES_FILE` 覆盖；线上由 `workwork` 的 admin 注入运行时分类配置。
-- **分类数据**：`/api/providers/{provider}/categories/{catId}/videos` 只返回 catalog 中 `approved` 的数据。候选经 admin `/internal/catalog/import` 导入 → 人工 + AI 审核 → 上线 `approved`。服务端绝不做实时上游搜索/采集。
-- **视频 id**：`VideoSummary.id` 是 catalog 的 nativeId（如 BV1xxx），App 直接用它调用本地解析器。id 不加密不签名。
-- **合规**：只处理公开视频和授权内容。
+> HTTP 服务监听 `PORT`（容器内默认 8787）。
 
 ## 架构
 
