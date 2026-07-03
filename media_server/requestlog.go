@@ -73,6 +73,15 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// Flush 透传到底层 ResponseWriter,让本中间件包裹的 handler 仍能通过
+// w.(http.Flusher) 类型断言拿到 Flusher(流式响应/大文件分块刷新等场景必需)。
+// 不透传会导致依赖 Flusher 的 handler 退化报错。
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // clientIPFromRequest 解析客户端真实 IP。
 //
 // media_server 部署在 internal_docker 私网,唯一调用方是 nginx(经
