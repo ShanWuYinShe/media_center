@@ -1,4 +1,4 @@
-# CLAUDE.md
+# Media Center VOD Extractor
 
 内部点播解析服务：Python stdlib HTTP server + yt-dlp。只在 Docker `internal_docker` 网络中供 `media_server` 调用。
 

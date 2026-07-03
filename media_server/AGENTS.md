@@ -1,4 +1,4 @@
-# CLAUDE.md
+# Media Center Media Server
 
 `media_center` 的合规公开视频聚合后端：Go HTTP 服务，对外只提供目录服务。
 
