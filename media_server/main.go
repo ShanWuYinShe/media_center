@@ -96,7 +96,7 @@ func main() {
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           server,
+		Handler:           requestLogMiddleware(server),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,

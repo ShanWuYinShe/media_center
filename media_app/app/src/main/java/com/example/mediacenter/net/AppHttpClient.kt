@@ -105,11 +105,11 @@ object AppHttpClient {
      * 场景 1 是因为本类不是 Conscrypt 的 `TrustManagerImpl`,握手时平台不会把装订
      * OCSP 交给它强校验,因此装订 OCSP 过期不会再中断握手;此处的 catch 仅作兜底。
      *
-     * 场景 2 是因为 Android TV 盒子的 RTC 没有电池,时钟可能偏移几天。当 Let's Encrypt
+     * 场景 2 是因为 Android TV 盒子的 RTC 没有电池,时钟可能偏移几天甚至数周。当 Let's Encrypt
      * 或 Google Trust Services 更换证书时,新证书的 `notBefore` 可能在设备本地时间的
      * "未来",Conscrypt 抛出泛化的 `CertificateException: Chain validation failed`
      * (非 OCSP 路径),不会被场景 1 兜住。这里额外检测证书叶子的时间窗口:如果证书在
-     * 未来 7 天内就会生效,或者过去 7 天内刚刚过期,则判定为时钟漂移而非真正的安全攻击。
+     * 容差窗口(±30 天)内就会生效,或刚刚过期,则判定为时钟漂移而非真正的安全攻击。
      */
     private class OcspSoftFailTrustManager(
         private val delegate: X509TrustManager,
@@ -173,17 +173,28 @@ object AppHttpClient {
 
             val leaf = chain[0]
             val now = System.currentTimeMillis()
-            // ±7 天容差:覆盖大多数 TV 盒子的电池耗尽场景
-            val toleranceMs = 7L * 24 * 60 * 60 * 1000
+            // ±30 天容差:覆盖长期断电、NTP 被墙导致 RTC 严重漂移的 TV 盒子。
+            // (此前为 ±7 天,实测仍有用户因断电数周而握手失败。)
+            val toleranceMs = CLOCK_DRIFT_TOLERANCE_MS
 
-            // 时钟偏慢:证书尚未生效但在未来 7 天内会生效
+            // 时钟偏慢:证书尚未生效但在容差窗口内会生效
             try {
                 leaf.checkValidity(Date(now + toleranceMs))
+                AppLog.w(
+                    "Http",
+                    "soft-fail chain validation (clock drift, slow clock): " +
+                        "cert valid ${leaf.notBefore}..${leaf.notAfter}, device now=${Date(now)}",
+                )
                 return true
             } catch (_: CertificateException) { /* 继续 */ }
-            // 时钟偏快:证书刚刚过期在过去 7 天内仍有效
+            // 时钟偏快:证书刚刚过期在容差窗口内仍有效
             try {
                 leaf.checkValidity(Date(now - toleranceMs))
+                AppLog.w(
+                    "Http",
+                    "soft-fail chain validation (clock drift, fast clock): " +
+                        "cert valid ${leaf.notBefore}..${leaf.notAfter}, device now=${Date(now)}",
+                )
                 return true
             } catch (_: CertificateException) { /* 继续 */ }
 
@@ -198,6 +209,8 @@ object AppHttpClient {
                 "OCSP",
                 "revocation",
             )
+            // 时钟漂移容忍窗口:±30 天。
+            val CLOCK_DRIFT_TOLERANCE_MS = 30L * 24 * 60 * 60 * 1000
         }
     }
 
