@@ -1,5 +1,6 @@
 package com.example.mediacenter
 
+import android.app.ActivityManager
 import android.app.Dialog
 import android.content.Context
 import android.content.res.ColorStateList
@@ -150,6 +151,8 @@ class MainActivity : ComponentActivity() {
     // 才把 ViewModel 的恢复额度清零,防止“就绪即失败”的流陷入无限恢复循环。
     private var playbackStabilityRunnable: Runnable? = null
     private val pendingTextUpdates = WeakHashMap<TextView, String>()
+    // 科乐美秘技(上上下下左右左右)的当前匹配进度,见 dispatchKeyEvent。
+    private var konamiIndex = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -211,6 +214,34 @@ class MainActivity : ComponentActivity() {
                 is AppUpdateResult.ReadyToInstall -> promptInstallUpdate(result)
             }
         }
+    }
+
+    /**
+     * Activity 级按键拦截:检测科乐美秘技(上上下下左右左右),匹配成功后弹出
+     * 系统诊断信息弹窗。这是唯一的中央按键入口(此前所有按键都靠 per-view
+     * setOnKeyListener)。
+     *
+     * 设计:序列进行中**不消费**方向键(返回 super),保证正常 D-pad 导航完全
+     * 不受影响;只有完整匹配后才 return true 消费最后一个键避免重复弹窗。
+     * 精确 8 位序列正常导航凑不出,无需超时重置。只在 ACTION_UP 检测避免长按重复触发。
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_UP) {
+            val expected = KONAMI_SEQUENCE.getOrNull(konamiIndex)
+            when {
+                event.keyCode == expected -> {
+                    konamiIndex++
+                    if (konamiIndex == KONAMI_SEQUENCE.size) {
+                        konamiIndex = 0
+                        showSystemInfoDialog()
+                        return true
+                    }
+                }
+                event.keyCode == KONAMI_SEQUENCE.first() -> konamiIndex = 1
+                else -> konamiIndex = 0
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onResume() {
@@ -2097,6 +2128,78 @@ class MainActivity : ComponentActivity() {
         }.show()
     }
 
+    /**
+     * 系统诊断信息弹窗(科乐美秘技触发)。展示电视真实系统环境——用于戳穿国产盒子
+     * "显示 4.4.2 但内核实为 5.0+"的魔改、定位网络/TLS/内存等问题的根因。
+     * 视觉与布局完全复用 [showDescriptionDialog] 的模式。
+     */
+    private fun showSystemInfoDialog() {
+        Dialog(this).apply {
+            requestWindowFeature(Window.FEATURE_NO_TITLE)
+            val card = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(28), dp(24), dp(28), dp(24))
+                background = rounded(Colors.SurfaceElevated, 24, 1, Colors.GlassBorder)
+            }
+            card.addView(
+                label("系统诊断信息", 24f, Colors.TextPrimary, bold = true, maxLines = 1).apply {
+                    letterSpacingCompat(-0.01f)
+                },
+                linearMatch(),
+            )
+            card.addView(
+                label("输入 上上下下左右左右 触发 · 仅用于排查", 13f, Colors.TextTertiary, maxLines = 1),
+                LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(4)),
+            )
+
+            val dm = resources.displayMetrics
+            val memInfo = ActivityManager.MemoryInfo().also {
+                (getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)?.getMemoryInfo(it)
+            }
+            val serverHost = try {
+                java.net.URI(BuildConfig.MEDIA_SERVER_URL).host
+            } catch (_: Exception) {
+                BuildConfig.MEDIA_SERVER_URL
+            }
+            val availMemMb = if (memInfo.availMem > 0) memInfo.availMem / (1024 * 1024) else -1
+            val totalMemMb = if (memInfo.totalMem > 0) memInfo.totalMem / (1024 * 1024) else -1
+
+            // 信息行:左 label(灰)+ 右 value(白),SDK_INT 用 AppleBlue 突出(最关键)。
+            fun row(title: String, value: String, highlight: Boolean = false) {
+                val rowLayout = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                }
+                rowLayout.addView(
+                    label("$title：", 16f, Colors.TextTertiary, maxLines = 1),
+                    LinearLayout.LayoutParams(0, wrap(), 0.42f),
+                )
+                val valueColor = if (highlight) Colors.AppleBlue else Colors.TextPrimary
+                rowLayout.addView(
+                    label(value, 16f, valueColor, maxLines = 2),
+                    LinearLayout.LayoutParams(0, wrap(), 0.58f),
+                )
+                card.addView(rowLayout, linearMatch().withTopMargin(dp(10)))
+            }
+
+            row("系统 API 级别", "${Build.VERSION.SDK_INT} (Android ${Build.VERSION.RELEASE})", highlight = true)
+            row("厂商", Build.MANUFACTURER)
+            row("型号", "${Build.MODEL} / ${Build.DEVICE}")
+            row("CPU 架构", Build.SUPPORTED_ABIS.joinToString(", "))
+            row("屏幕分辨率", "${dm.widthPixels}×${dm.heightPixels}")
+            row("屏幕密度", "${dm.densityDpi}dpi (×${dm.density})")
+            row("App 版本", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+            row("服务端地址", serverHost)
+            row("可用内存", "${availMemMb}MB / ${totalMemMb}MB")
+
+            val close = pill("关闭", selected = true, heightDp = 48, horizontalPaddingDp = 28) { dismiss() }
+            card.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(20)))
+            setContentView(card)
+            window?.setBackgroundDrawableResource(android.R.color.transparent)
+            window?.setLayout((resources.displayMetrics.widthPixels * 0.62f).toInt(), (resources.displayMetrics.heightPixels * 0.72f).toInt())
+            close.post { close.requestFocus() }
+        }.show()
+    }
+
     private fun showAllPagesDialog(pages: PlaybackPages, bvid: String) {
         Dialog(this).apply {
             requestWindowFeature(Window.FEATURE_NO_TITLE)
@@ -3703,6 +3806,13 @@ private const val ViewTypeVideo = 1
 private const val ViewTypeFooter = 2
 private const val FooterStableId = Long.MIN_VALUE
 private const val CategorySelectDebounceMs = 280L
+// 科乐美秘技序列:上上下下左右左右,匹配成功触发系统诊断弹窗(见 dispatchKeyEvent)。
+private val KONAMI_SEQUENCE = intArrayOf(
+    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_UP,
+    KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_DOWN,
+    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+)
 private val ThumbnailFetchSemaphore = Semaphore(4)
 private val ThumbnailHttpClient = AppHttpClient.newBuilder()
     .connectTimeout(8, TimeUnit.SECONDS)
