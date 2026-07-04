@@ -151,9 +151,10 @@ func (s *mediaServer) readAppUpdateManifest(r *http.Request) (AppUpdateManifest,
 		return AppUpdateManifest{}, err
 	}
 
-	if info.Size() != manifest.SizeBytes {
-		return AppUpdateManifest{}, errors.New("app update apk size mismatch")
-	}
+	// 以磁盘上实际 APK 文件大小为准(manifest 里的 SizeBytes 可能因手工写入或
+	// 重新打包而不准)。此前用 info.Size() != manifest.SizeBytes 强校验会直接报错,
+	// 导致「检查更新」也被阻塞——尺寸校验应由客户端下载后按 sha256 做,这里不拦。
+	manifest.SizeBytes = info.Size()
 	manifest.APKURL = s.appDownloadURL(r)
 	return manifest, nil
 }
