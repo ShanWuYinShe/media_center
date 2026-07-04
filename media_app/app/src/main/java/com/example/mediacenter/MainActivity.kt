@@ -221,10 +221,16 @@ class MainActivity : ComponentActivity() {
      * 系统诊断信息弹窗。这是唯一的中央按键入口(此前所有按键都靠 per-view
      * setOnKeyListener)。
      *
+     * 用 dispatchKeyEvent(而非 onKeyUp),因为它在所有 view 之前触发——
+     * 首页方向键会被 RecyclerView 消费,onKeyUp 收不到,秘技就凑不出来。
+     * dispatchKeyEvent 是 ComponentActivity 的 @RestrictTo(LIBRARY_GROUP_PREFIX)
+     * 方法,运行时可正常 override(大量生产 app 在用),此处显式 suppress lint。
+     *
      * 设计:序列进行中**不消费**方向键(返回 super),保证正常 D-pad 导航完全
      * 不受影响;只有完整匹配后才 return true 消费最后一个键避免重复弹窗。
-     * 精确 8 位序列正常导航凑不出,无需超时重置。只在 ACTION_UP 检测避免长按重复触发。
+     * 精确 8 位序列正常导航凑不出,无需超时重置。
      */
+    @Suppress("RestrictedApi", "DEPRECATION")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_UP) {
             val expected = KONAMI_SEQUENCE.getOrNull(konamiIndex)
@@ -1847,7 +1853,10 @@ class MainActivity : ComponentActivity() {
         // 避免控制层淡出后用户以为卡死。
         val bufferingSpinner = ProgressBar(this).apply {
             isIndeterminate = true
-            indeterminateTintList = ColorStateList.valueOf(Colors.AppleBlue)
+            // indeterminateTintList 是 API 21+,API 19 上调用会 NoSuchMethodError。
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                indeterminateTintList = ColorStateList.valueOf(Colors.AppleBlue)
+            }
             visibility = if (nextPlayer.playbackState == Player.STATE_BUFFERING) View.VISIBLE else View.GONE
         }
         screen.addView(bufferingSpinner, FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER))
@@ -2181,10 +2190,16 @@ class MainActivity : ComponentActivity() {
                 card.addView(rowLayout, linearMatch().withTopMargin(dp(10)))
             }
 
+            // CPU 架构:Build.SUPPORTED_ABIS 是 API 21+,API 19 用废弃的 CPU_ABI/CPU_ABI2。
+            val cpuAbi = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                Build.SUPPORTED_ABIS.joinToString(", ")
+            } else {
+                listOf(Build.CPU_ABI, Build.CPU_ABI2).filter { it.isNotEmpty() }.joinToString(", ")
+            }
             row("系统 API 级别", "${Build.VERSION.SDK_INT} (Android ${Build.VERSION.RELEASE})", highlight = true)
             row("厂商", Build.MANUFACTURER)
             row("型号", "${Build.MODEL} / ${Build.DEVICE}")
-            row("CPU 架构", Build.SUPPORTED_ABIS.joinToString(", "))
+            row("CPU 架构", cpuAbi)
             row("屏幕分辨率", "${dm.widthPixels}×${dm.heightPixels}")
             row("屏幕密度", "${dm.densityDpi}dpi (×${dm.density})")
             row("App 版本", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
