@@ -14,8 +14,11 @@ android {
         applicationId = "com.example.mediacenter"
         minSdk = 19
         targetSdk = 34
-        versionCode = 20260625
-        versionName = "1.0.260625"
+        // 版本规范:versionName 用语义化版本(major.minor.patch),versionCode 用
+        // 单调递增整数(机器比较用)。起始 versionCode 取 > 20260625 以兼容已部署旧版
+        // 设备(否则它们收不到更新);之后每次发版 versionCode +1,不再绑死日期语义。
+        versionCode = 20260704
+        versionName = "1.1.0"
         multiDexEnabled = true
 
         val serverBaseUrl = providers.gradleProperty("MEDIA_SERVER_URL")
