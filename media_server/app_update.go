@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -24,6 +25,34 @@ type AppUpdateManifest struct {
 	PublishedAt  string `json:"publishedAt,omitempty"`
 }
 
+// UnmarshalJSON 兼容历史 manifest 文件:早期手工写入的文件用了 size/releaseDate
+// 字段名(而非 sizeBytes/publishedAt),导致 SizeBytes 解析为 0、校验失败、更新
+// 功能完全不可用。这里做向后兼容:优先用标准 tag,缺失时回退到旧字段名。
+// (admin 的正常上传流程写的是正确的 sizeBytes/publishedAt,此兼容仅为兜底。)
+func (m *AppUpdateManifest) UnmarshalJSON(data []byte) error {
+	// alias 避免 UnmarshalJSON 无限递归
+	type alias AppUpdateManifest
+	if err := json.Unmarshal(data, (*alias)(m)); err != nil {
+		return err
+	}
+	// 回退:标准字段未填时尝试历史字段名
+	if m.SizeBytes == 0 {
+		var legacy struct {
+			Size         int64  `json:"size"`
+			ReleaseDate  string `json:"releaseDate"`
+		}
+		if json.Unmarshal(data, &legacy) == nil {
+			if m.SizeBytes == 0 {
+				m.SizeBytes = legacy.Size
+			}
+			if m.PublishedAt == "" {
+				m.PublishedAt = legacy.ReleaseDate
+			}
+		}
+	}
+	return nil
+}
+
 func (s *mediaServer) handleAppUpdate(w http.ResponseWriter, r *http.Request) {
 	manifest, err := s.readAppUpdateManifest(r)
 	if err != nil {
@@ -31,11 +60,8 @@ func (s *mediaServer) handleAppUpdate(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		s.writeError(w, &apiError{
-			Status:  http.StatusInternalServerError,
-			Code:    "INTERNAL_ERROR",
-			Message: "读取 App 更新信息失败。",
-		})
+		log.Printf("app update manifest read error: %v", err)
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
@@ -65,32 +91,39 @@ func (s *mediaServer) handleAppDownload(w http.ResponseWriter, r *http.Request) 
 			})
 			return
 		}
+		log.Printf("app download manifest read error: %v", err)
 		s.writeError(w, &apiError{
-			Status:  http.StatusInternalServerError,
-			Code:    "INTERNAL_ERROR",
-			Message: "读取 App 更新信息失败。",
+			Status:  http.StatusNotFound,
+			Code:    "NOT_FOUND",
+			Message: "暂无可下载的 App 更新。",
 		})
 		return
 	}
 	apkPath := s.appUpdateAPKPath(manifest)
 	info, err := os.Stat(apkPath)
 	if err != nil {
-		status := http.StatusInternalServerError
-		code := "INTERNAL_ERROR"
-		message := "读取 App 安装包失败。"
+		status := http.StatusNotFound
+		code := "NOT_FOUND"
+		message := "暂无可下载的 App 更新。"
 		if errors.Is(err, os.ErrNotExist) {
 			status = http.StatusNotFound
 			code = "NOT_FOUND"
 			message = "暂无可下载的 App 更新。"
+		} else {
+			log.Printf("app download apk stat error: %v", err)
+			status = http.StatusInternalServerError
+			code = "INTERNAL_ERROR"
+			message = "读取 App 安装包失败。"
 		}
 		s.writeError(w, &apiError{Status: status, Code: code, Message: message})
 		return
 	}
 	if info.Size() != manifest.SizeBytes {
+		log.Printf("app download apk size mismatch: manifest=%d actual=%d", manifest.SizeBytes, info.Size())
 		s.writeError(w, &apiError{
-			Status:  http.StatusInternalServerError,
-			Code:    "INTERNAL_ERROR",
-			Message: "App 安装包元数据不一致。",
+			Status:  http.StatusNotFound,
+			Code:    "NOT_FOUND",
+			Message: "暂无可下载的 App 更新。",
 		})
 		return
 	}
