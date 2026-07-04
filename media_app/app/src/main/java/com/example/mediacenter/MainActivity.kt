@@ -151,8 +151,8 @@ class MainActivity : ComponentActivity() {
     // 才把 ViewModel 的恢复额度清零,防止“就绪即失败”的流陷入无限恢复循环。
     private var playbackStabilityRunnable: Runnable? = null
     private val pendingTextUpdates = WeakHashMap<TextView, String>()
-    // 科乐美秘技(上上下下左右左右)的当前匹配进度,见 dispatchKeyEvent。
-    private var konamiIndex = 0
+    // 系统诊断弹窗触发:焦点已在最左分类时连续按左键的次数,达 5 次触发弹窗。
+    private var leftEdgePressCount = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -214,40 +214,6 @@ class MainActivity : ComponentActivity() {
                 is AppUpdateResult.ReadyToInstall -> promptInstallUpdate(result)
             }
         }
-    }
-
-    /**
-     * Activity 级按键拦截:检测科乐美秘技(上上下下左右左右),匹配成功后弹出
-     * 系统诊断信息弹窗。这是唯一的中央按键入口(此前所有按键都靠 per-view
-     * setOnKeyListener)。
-     *
-     * 用 dispatchKeyEvent(而非 onKeyUp),因为它在所有 view 之前触发——
-     * 首页方向键会被 RecyclerView 消费,onKeyUp 收不到,秘技就凑不出来。
-     * dispatchKeyEvent 是 ComponentActivity 的 @RestrictTo(LIBRARY_GROUP_PREFIX)
-     * 方法,运行时可正常 override(大量生产 app 在用),此处显式 suppress lint。
-     *
-     * 设计:序列进行中**不消费**方向键(返回 super),保证正常 D-pad 导航完全
-     * 不受影响;只有完整匹配后才 return true 消费最后一个键避免重复弹窗。
-     * 精确 8 位序列正常导航凑不出,无需超时重置。
-     */
-    @Suppress("RestrictedApi", "DEPRECATION")
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (event.action == KeyEvent.ACTION_UP) {
-            val expected = KONAMI_SEQUENCE.getOrNull(konamiIndex)
-            when {
-                event.keyCode == expected -> {
-                    konamiIndex++
-                    if (konamiIndex == KONAMI_SEQUENCE.size) {
-                        konamiIndex = 0
-                        showSystemInfoDialog()
-                        return true
-                    }
-                }
-                event.keyCode == KONAMI_SEQUENCE.first() -> konamiIndex = 1
-                else -> konamiIndex = 0
-            }
-        }
-        return super.dispatchKeyEvent(event)
     }
 
     override fun onResume() {
@@ -531,7 +497,24 @@ class MainActivity : ComponentActivity() {
                                 false
                             }
                         }
-                        KeyEvent.KEYCODE_DPAD_LEFT -> index == 0
+                        KeyEvent.KEYCODE_DPAD_LEFT -> {
+                            // 焦点已在最左分类时再按左键:边界拦截(焦点不动),
+                            // 并累计次数——连续按 5 次触发系统诊断弹窗。
+                            // 设计:只在最左分类的左键计数,避免与正常分类切换混淆;
+                            // 返回 true 始终消费(保持边界不动行为),无论是否触发弹窗。
+                            if (index == 0) {
+                                leftEdgePressCount++
+                                if (leftEdgePressCount >= DIAGNOSTIC_LEFT_PRESS_COUNT) {
+                                    leftEdgePressCount = 0
+                                    showSystemInfoDialog()
+                                }
+                                true
+                            } else {
+                                // 切到非首分类时重置计数(用户离开了最左边界)。
+                                leftEdgePressCount = 0
+                                false
+                            }
+                        }
                         KeyEvent.KEYCODE_DPAD_RIGHT -> {
                             if (index == categories.lastIndex) {
                                 cancelPendingCategorySelect()
@@ -3821,13 +3804,8 @@ private const val ViewTypeVideo = 1
 private const val ViewTypeFooter = 2
 private const val FooterStableId = Long.MIN_VALUE
 private const val CategorySelectDebounceMs = 280L
-// 科乐美秘技序列:上上下下左右左右,匹配成功触发系统诊断弹窗(见 dispatchKeyEvent)。
-private val KONAMI_SEQUENCE = intArrayOf(
-    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_UP,
-    KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_DOWN,
-    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
-    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
-)
+// 系统诊断弹窗触发阈值:焦点在最左分类后连续按左键的次数。
+private const val DIAGNOSTIC_LEFT_PRESS_COUNT = 5
 private val ThumbnailFetchSemaphore = Semaphore(4)
 private val ThumbnailHttpClient = AppHttpClient.newBuilder()
     .connectTimeout(8, TimeUnit.SECONDS)
