@@ -21,7 +21,7 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 ```
 
 - **部署 APK**：部署时如 `media_app/` 有变更，编译 APK 并上传到服务器的 `.wework/generated/media_center/media-center-app.apk`，同时生成 manifest JSON。
-  - **版本号规范**：`versionName` 用语义化版本 `major.minor.patch`（如 `1.1.0`），`versionCode` 用单调递增整数（仅机器比较用）。两者都在 `app/build.gradle.kts` 的 `defaultConfig` 维护，每次发版**同时**递增：破坏性改动升 major、新功能升 minor、bug 修复升 patch；versionCode 每次发版 +1 且必须大于线上 manifest 的 versionCode（否则已装旧版的设备收不到更新）。
+  - **版本号规范**：只维护 `versionName`（语义化版本 `major.minor.patch`，如 `1.1.0`），`versionCode` 由它自动派生（`major*100000 + minor*1000 + patch`，见 `build.gradle.kts` 的 `semverToCode`）。容量规则：patch 0..999、minor 0..99。比较用 versionCode 整数（永远可靠，无字符串 `1.10<1.9` 陷阱），versionName 纯展示。发版时只改 versionName 一个值；破坏性改动升 major、新功能升 minor、bug 修复升 patch。
   - SHA256 校验和自动计算
   - 命令：`ssh workwork-server "cd service && cat > .wework/generated/media_center/app-update.json << 'EOF' { ... } EOF"`
 - **技术栈**：Compose + TV Material + Media3 ExoPlayer；网络：OkHttp；序列化：kotlinx-serialization；图片：Coil。

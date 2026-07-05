@@ -14,11 +14,14 @@ android {
         applicationId = "com.example.mediacenter"
         minSdk = 19
         targetSdk = 34
-        // 版本规范:versionName 用语义化版本(major.minor.patch),versionCode 用
-        // 单调递增整数(机器比较用)。起始 versionCode 取 > 20260625 以兼容已部署旧版
-        // 设备(否则它们收不到更新);之后每次发版 versionCode +1,不再绑死日期语义。
-        versionCode = 20260704
+        // 版本规范:只维护 versionName(语义化版本 major.minor.patch),versionCode 由
+        // 它自动派生(major*10000 + minor*100 + patch + 基数)。这样:
+        //  - 比较仍用 versionCode 整数(永远可靠,无字符串比较的 1.10<1.9 陷阱);
+        //  - versionCode 与 SemVer 一一对应、单调递增;
+        //  - 基数 20000000 保证 > 历史日期值(20260704),兼容已部署旧版设备收得到更新。
+        // 发版时只需改 versionName 一个值。
         versionName = "1.1.0"
+        versionCode = semverToCode(versionName!!)
         multiDexEnabled = true
 
         val serverBaseUrl = providers.gradleProperty("MEDIA_SERVER_URL")
@@ -63,6 +66,27 @@ android {
 
     buildToolsVersion = "37.0.0"
     compileSdkMinor = 0
+}
+
+/**
+ * 把语义化版本号(major.minor.patch)换算成单调递增的 versionCode 整数。
+ *
+ * 容量规则:patch 段 0..999(1000 个值),minor 段 0..99(100 个值)。
+ * 派生公式: major*100000 + minor*1000 + patch。
+ *   - patch 满 1000 进位到 minor,minor 满 100 进位到 major,保证单调递增;
+ *   - 整数比较永远可靠,无字符串 "1.10.0" < "1.9.0" 的字典序陷阱。
+ * 只需维护 versionName,versionCode 自动正确递增。
+ */
+fun semverToCode(versionName: String): Int {
+    val parts = versionName.split(".")
+    require(parts.size == 3 && parts.all { it.toIntOrNull() != null }) {
+        "versionName 必须是 major.minor.patch 格式,当前: $versionName"
+    }
+    val (major, minor, patch) = parts.map { it.toInt() }
+    require(major in 0..99 && minor in 0..99 && patch in 0..999) {
+        "版本段超限: major 0..99, minor 0..99, patch 0..999,当前: $versionName"
+    }
+    return major * 100000 + minor * 1000 + patch
 }
 
 // AGP 9.0+ 内置 Kotlin 后,android.kotlinOptions{} 已废弃,
