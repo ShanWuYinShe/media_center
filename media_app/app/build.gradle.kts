@@ -14,14 +14,13 @@ android {
         applicationId = "com.example.mediacenter"
         minSdk = 19
         targetSdk = 34
-        // 版本规范:只维护 versionName(语义化版本 major.minor.patch),versionCode 由
-        // 它自动派生(major*10000 + minor*100 + patch + 基数)。这样:
-        //  - 比较仍用 versionCode 整数(永远可靠,无字符串比较的 1.10<1.9 陷阱);
-        //  - versionCode 与 SemVer 一一对应、单调递增;
-        //  - 基数 20000000 保证 > 历史日期值(20260704),兼容已部署旧版设备收得到更新。
-        // 发版时只需改 versionName 一个值。
-        versionName = "1.1.0"
-        versionCode = semverToCode(versionName!!)
+        // 版本号由 git tag 驱动:versionName 从最近的 v* tag 读取(如 v1.1.0 → 1.1.0),
+        // tag 之后若有新 commit 则带 -dev.N 后缀(如 1.1.0-dev.3)标识未发布。
+        // versionCode 从 SemVer 部分派生(major*100000+minor*1000+patch),整数比较可靠。
+        // 发版只需:git tag v1.x.y && git push --tags,无需手改 build.gradle。
+        val resolvedVersion = gitVersionName()
+        versionName = resolvedVersion
+        versionCode = semverToCode(resolvedVersion)
         multiDexEnabled = true
 
         val serverBaseUrl = providers.gradleProperty("MEDIA_SERVER_URL")
@@ -69,16 +68,47 @@ android {
 }
 
 /**
- * 把语义化版本号(major.minor.patch)换算成单调递增的 versionCode 整数。
+ * 从 git 读取版本号。优先用最近的 v* tag(如 v1.1.0);tag 之后有新 commit 则带
+ * -dev.N 后缀(如 1.1.0-dev.3)标识未发布构建。无 tag 或不在 git 仓库时返回
+ * 安全默认值 0.1.0-dev(不阻断构建,便于克隆后直接跑)。
+ *
+ * 发版流程:git tag v1.x.y && git push --tags,然后构建即得到干净的 versionName。
+ *
+ * 用 ValueSource 执行 git(而非直接 ProcessBuilder),兼容 Gradle 配置缓存
+ * (配置阶段不允许启动外部进程,ValueSource 是官方支持的例外)。
+ */
+abstract class GitDescribeValueSource : ValueSource<String, ValueSourceParameters.None> {
+    override fun obtain(): String = try {
+        val proc = ProcessBuilder(
+            "git", "describe", "--tags", "--match", "v[0-9]*", "--long", "--always",
+        ).redirectError(ProcessBuilder.Redirect.DISCARD).start()
+        proc.inputStream.bufferedReader().readText().trim().ifEmpty { "0.1.0-dev-0" }
+    } catch (_: Exception) {
+        "0.1.0-dev-0"
+    }
+}
+
+fun gitVersionName(): String {
+    val described = providers.of(GitDescribeValueSource::class.java) {}.get()
+    // describe 产出:v1.1.0-0-gabc(正好在 tag,count=0) 或 v1.1.0-3-gabc(tag 后 3 个 commit)
+    val match = Regex("""^v(\d+\.\d+\.\d+)-(\d+)-g[0-9a-f]+$""").find(described) ?: return "0.1.0-dev"
+    val semver = match.groupValues[1]
+    val commitCount = match.groupValues[2].toIntOrNull() ?: 0
+    return if (commitCount == 0) semver else "$semver-dev.$commitCount"
+}
+
+/**
+ * 把语义化版本号换算成单调递增的 versionCode 整数。
  *
  * 容量规则:patch 段 0..999(1000 个值),minor 段 0..99(100 个值)。
  * 派生公式: major*100000 + minor*1000 + patch。
  *   - patch 满 1000 进位到 minor,minor 满 100 进位到 major,保证单调递增;
  *   - 整数比较永远可靠,无字符串 "1.10.0" < "1.9.0" 的字典序陷阱。
- * 只需维护 versionName,versionCode 自动正确递增。
+ * 只取 SemVer 部分(忽略 -dev.N 后缀),保证同一 tag 的开发构建和正式发布 versionCode 一致。
  */
 fun semverToCode(versionName: String): Int {
-    val parts = versionName.split(".")
+    val semver = versionName.substringBefore("-") // 剥离 -dev.N 后缀
+    val parts = semver.split(".")
     require(parts.size == 3 && parts.all { it.toIntOrNull() != null }) {
         "versionName 必须是 major.minor.patch 格式,当前: $versionName"
     }
