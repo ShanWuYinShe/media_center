@@ -21,7 +21,7 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 ```
 
 - **部署 APK**：部署时如 `media_app/` 有变更，编译 APK 并上传到服务器的 `.wework/generated/media_center/media-center-app.apk`，同时生成 manifest JSON。
-  - **版本号规范**：只维护 `versionName`（语义化版本 `major.minor.patch`，如 `1.1.0`），`versionCode` 由它自动派生（`major*100000 + minor*1000 + patch`，见 `build.gradle.kts` 的 `semverToCode`）。容量规则：patch 0..999、minor 0..99。比较用 versionCode 整数（永远可靠，无字符串 `1.10<1.9` 陷阱），versionName 纯展示。发版时只改 versionName 一个值；破坏性改动升 major、新功能升 minor、bug 修复升 patch。
+  - **版本号规范（git tag 驱动）**：`versionName` 和 `versionCode` 都从 git tag 自动读取，无需手改 `build.gradle`。**发版流程**：在子模块 `services/media_center` 打 tag `git tag vX.Y.Z && git push origin vX.Y.Z`（tag 必须在要发布的 commit 上），然后构建即得干净版本号。`versionName` 取 tag（`v1.1.0` → `1.1.0`）；tag 后若有新 commit 则带 `-dev.N` 后缀（如 `1.1.0-dev.3`）标识未发布构建。`versionCode` 从 SemVer 部分派生（`major*100000 + minor*1000 + patch`，见 `build.gradle.kts` 的 `semverToCode`，忽略 dev 后缀），整数比较可靠。容量：patch 0..999、minor 0..99。破坏性改动升 major、新功能升 minor、bug 修复升 patch。无 tag 时 fallback 到 `0.1.0-dev`（不阻断构建）。
   - SHA256 校验和自动计算
   - 命令：`ssh workwork-server "cd service && cat > .wework/generated/media_center/app-update.json << 'EOF' { ... } EOF"`
 - **技术栈**：Compose + TV Material + Media3 ExoPlayer；网络：OkHttp；序列化：kotlinx-serialization；图片：Coil。
