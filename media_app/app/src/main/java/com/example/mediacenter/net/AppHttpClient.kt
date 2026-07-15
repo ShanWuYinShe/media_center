@@ -111,6 +111,7 @@ object AppHttpClient {
      * (非 OCSP 路径),不会被场景 1 兜住。这里额外检测证书叶子的时间窗口:如果证书在
      * 容差窗口(±30 天)内就会生效,或刚刚过期,则判定为时钟漂移而非真正的安全攻击。
      */
+    @Suppress("CustomX509TrustManager")
     private class OcspSoftFailTrustManager(
         private val delegate: X509TrustManager,
     ) : X509TrustManager {

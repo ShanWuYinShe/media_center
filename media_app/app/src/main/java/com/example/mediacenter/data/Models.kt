@@ -5,42 +5,42 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class ProviderInfo(
     val id: String,
-    val name: String = "",
+    val name: String? = null,
 )
 
 @Serializable
 data class ProvidersResponse(
-    val items: List<ProviderInfo> = emptyList(),
+    val items: List<ProviderInfo>? = null,
 )
 
 @Serializable
 data class ProviderCredential(
     val provider: String,
-    val fields: Map<String, String> = emptyMap(),
+    val fields: Map<String, String>? = null,
 )
 
 @Serializable
 data class CredentialsResponse(
-    val credentials: List<ProviderCredential> = emptyList(),
+    val credentials: List<ProviderCredential>? = null,
 )
 
 @Serializable
 data class ContentCategory(
     val id: String,
     val title: String,
-    val description: String = "",
+    val description: String? = null,
 )
 
 @Serializable
 data class CategoriesResponse(
-    val items: List<ContentCategory> = emptyList(),
+    val items: List<ContentCategory>? = null,
 )
 
 @Serializable
 data class VideoSummary(
     val id: String,
     val title: String,
-    val description: String = "",
+    val description: String? = null,
     val thumbnailUrl: String? = null,
     val durationSeconds: Long? = null,
 )
@@ -51,7 +51,7 @@ data class VideosResponse(
     val page: Int = 1,
     val pageSize: Int = 20,
     val total: Int = 0,
-    val items: List<VideoSummary> = emptyList(),
+    val items: List<VideoSummary>? = null,
 )
 
 // SearchResponse 是 Repository 兼容包装:新 server API 没有 search endpoint,
@@ -71,7 +71,7 @@ data class SearchResponse(
 data class VideoDetails(
     val id: String,
     val title: String,
-    val description: String = "",
+    val description: String? = null,
     val thumbnailUrl: String? = null,
     val durationSeconds: Long? = null,
     val playbackOptions: List<PlaybackOption> = emptyList(),
@@ -113,6 +113,6 @@ data class AppUpdateInfo(
     val apkUrl: String,
     val sizeBytes: Long,
     val sha256: String,
-    val releaseNotes: String = "",
-    val publishedAt: String = "",
+    val releaseNotes: String? = null,
+    val publishedAt: String? = null,
 )

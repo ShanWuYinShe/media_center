@@ -12,7 +12,7 @@ class MediaRepository(
 
     suspend fun providers(): List<ProviderInfo> {
         refreshCredentials()
-        val items = api.providers().items
+        val items = api.providers().items.orEmpty()
         if (items.isNotEmpty()) {
             currentProvider = items.first().id
         }
@@ -24,9 +24,9 @@ class MediaRepository(
     suspend fun refreshCredentials() {
         try {
             val response = api.credentials()
-            for (cred in response.credentials) {
-                if (cred.provider == "bilibili" && cred.fields.isNotEmpty()) {
-                    bilibiliApi.updateCredentials(cred.fields)
+            for (cred in response.credentials.orEmpty()) {
+                if (cred.provider == "bilibili" && cred.fields?.isNotEmpty() == true) {
+                    bilibiliApi.updateCredentials(cred.fields.orEmpty())
                 }
             }
         } catch (e: Exception) {
@@ -35,9 +35,9 @@ class MediaRepository(
     }
 
     // 兼容包装:ViewModel 仍调 categories() 无参版本。
-    suspend fun categories(): List<ContentCategory> = api.categories(currentProvider).items
+    suspend fun categories(): List<ContentCategory> = api.categories(currentProvider).items.orEmpty()
 
-    suspend fun categories(provider: String): List<ContentCategory> = api.categories(provider).items
+    suspend fun categories(provider: String): List<ContentCategory> = api.categories(provider).items.orEmpty()
 
     // 兼容包装:ViewModel 的 search/loadMore 仍调此方法,Repository 内部用
     // categoryVideos 替代旧的 search endpoint(新 API 没有 search)。
@@ -56,13 +56,13 @@ class MediaRepository(
             page = resp.page,
             pageSize = resp.pageSize,
             total = resp.total,
-            items = resp.items,
+            items = resp.items.orEmpty(),
         )
     }
 
     // 兼容包装:不再调 server details 接口,本地从 VideoSummary 构造 VideoDetails。
     // server 只提供目录数据(id/title/desc/thumb),播放地址由 playbackOptions 按需解析。
-    suspend fun details(video: VideoSummary): VideoDetails {
+    fun details(video: VideoSummary): VideoDetails {
         return VideoDetails(
             id = video.id,
             title = video.title,

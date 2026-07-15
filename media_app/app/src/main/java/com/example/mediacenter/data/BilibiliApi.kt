@@ -9,12 +9,12 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.util.concurrent.TimeUnit
+import java.time.Duration
 
-class BilibiliApiException(message: String) : Exception(message)
+class BilibiliApiException(override val message: String) : Exception(message)
 
 /**
  * B 站官方 API 客户端:让 App 端拿到 catalog 的 bvid 后**自己**解析播放地址,
@@ -31,12 +31,11 @@ class BilibiliApiException(message: String) : Exception(message)
  */
 class BilibiliApi(
     private val client: OkHttpClient = AppHttpClient.newBuilder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(Duration.ofSeconds(15))
+        .readTimeout(Duration.ofSeconds(15))
         .build(),
     private val json: Json = Json {
         ignoreUnknownKeys = true
-        explicitNulls = false
     },
 ) {
     private val keysMutex = Mutex()
@@ -72,7 +71,7 @@ class BilibiliApi(
             else listOf(viewPayload.data?.cid ?: throw BilibiliApiException("无 cid"))
         val totalPages = allCids.size
         val targetCid = if (pageIndex in allCids.indices) allCids[pageIndex] else allCids.first()
-        val pageTitles = pages.map { it.part }
+        val pageTitles = pages.map { it.part ?: "" }
         if (totalPages > 1) {
             AppLog.i("Bili", "multi-page video: $bvid has $totalPages pages, requesting cid=$targetCid (page=$pageIndex) quality=$qn")
         }
@@ -121,12 +120,13 @@ class BilibiliApi(
      * 播放统一使用 durl(完整 MP4，已混流音视频)。
      */
     private fun buildPlaybackOptions(bvid: String, pageIndex: Int, payload: BiliPlayUrlResponse): List<PlaybackOption> {
-        val data = payload.data
-        val durlUrl = data.durl.firstOrNull()?.url
-        // 用 accept_quality/accept_description 构建多清晰度标签
+        val data = payload.data ?: return emptyList()
+        val durlUrl = data.durl?.firstOrNull()?.url
         val acceptQn = data.acceptQuality
         val acceptDesc = data.acceptDescription
-        if (durlUrl != null && acceptQn.isNotEmpty() && acceptQn.size == acceptDesc.size) {
+        if (durlUrl != null && acceptQn != null && acceptDesc != null &&
+            acceptQn.isNotEmpty() && acceptQn.size == acceptDesc.size
+        ) {
             val zipped = acceptQn.zip(acceptDesc).sortedByDescending { it.first }
             return zipped.map { (qn, desc) ->
                 val label = desc.ifBlank { qualityLabel(qn) }
@@ -155,13 +155,13 @@ class BilibiliApi(
             ))
         }
         val durlList = data.durl
-        if (durlList.isEmpty()) return emptyList()
+        if (durlList.isNullOrEmpty()) return emptyList()
         val first = durlList.first()
         return listOf(PlaybackOption(
             id = "bili-$bvid-p$pageIndex-q${data.quality}",
             kind = "vod",
             label = qualityLabel(data.quality),
-            url = first.url,
+            url = first.url ?: "",
             mimeType = "video/mp4",
             headers = DIRECT_HEADERS,
             qn = data.quality,
@@ -174,10 +174,11 @@ class BilibiliApi(
         val signed = signWbiParams(mapOf("bvid" to bvid), keys.first, keys.second)
         val url = buildUrl("https://api.bilibili.com/x/web-interface/wbi/view", signed)
         val payload = getJson<BiliViewResponse>(url)
-        if (payload.code != 0 || payload.data == null || payload.data.bvid.isEmpty()) {
+        val data = payload.data ?: throw BilibiliApiException("view 接口返回 code=${payload.code} 找不到 bvid=$bvid")
+        if (data.bvid.isNullOrEmpty()) {
             throw BilibiliApiException("view 接口返回 code=${payload.code} 找不到 bvid=$bvid")
         }
-        if (payload.data.cid == 0L) {
+        if ((data.cid ?: 0) == 0L) {
             throw BilibiliApiException("view 接口未返回 cid(可能视频被删/审核)")
         }
         return payload
@@ -240,7 +241,7 @@ class BilibiliApi(
     }
 
     private fun buildUrl(base: String, params: Map<String, String>): String {
-        val parsed = HttpUrl.parse(base) ?: throw BilibiliApiException("invalid url: $base")
+        val parsed = base.toHttpUrlOrNull() ?: throw BilibiliApiException("invalid url: $base")
         val builder = parsed.newBuilder()
         params.forEach { (k, v) -> builder.addQueryParameter(k, v) }
         return builder.build().toString()
@@ -266,12 +267,14 @@ class BilibiliApi(
             }
             .get()
             .build()
-        client.newCall(request).execute().use { response ->
-            val body = response.body()?.string() ?: throw BilibiliApiException("B 站响应体为空")
-            if (!response.isSuccessful) {
-                throw BilibiliApiException("B 站 API ${response.code()}: ${body.take(200)}")
+        return withContext(Dispatchers.IO) {
+            client.newCall(request).execute().use { response ->
+                val body = response.body.string()
+                if (!response.isSuccessful) {
+                    throw BilibiliApiException("B 站 API ${response.code}: ${body.take(200)}")
+                }
+                json.decodeFromString<T>(body)
             }
-            return json.decodeFromString<T>(body)
         }
     }
 
@@ -320,9 +323,9 @@ private data class BiliNavResponse(
         @Serializable
         data class WbiImg(
             @SerialName("img_url")
-            val imgUrl: String = "",
+            val imgUrl: String? = null,
             @SerialName("sub_url")
-            val subUrl: String = "",
+            val subUrl: String? = null,
         )
     }
 }
@@ -334,14 +337,14 @@ private data class BiliViewResponse(
 ) {
     @Serializable
     data class ViewData(
-        val bvid: String = "",
-        val cid: Long = 0,
-        val pages: List<PageData> = emptyList(),
+        val bvid: String? = null,
+        val cid: Long? = null,
+        val pages: List<PageData>? = null,
     ) {
         @Serializable
         data class PageData(
             val cid: Long = 0,
-            val part: String = "",
+            val part: String? = null,
             val duration: Long = 0,
         )
     }
@@ -350,20 +353,20 @@ private data class BiliViewResponse(
 @Serializable
 private data class BiliPlayUrlResponse(
     val code: Int = 0,
-    val data: PlayUrlData = PlayUrlData(),
+    val data: PlayUrlData? = null,
 ) {
     @Serializable
     data class PlayUrlData(
         val quality: Int = 0,
-        val durl: List<Durl> = emptyList(),
+        val durl: List<Durl>? = null,
         @SerialName("accept_quality")
-        val acceptQuality: List<Int> = emptyList(),
+        val acceptQuality: List<Int>? = null,
         @SerialName("accept_description")
-        val acceptDescription: List<String> = emptyList(),
+        val acceptDescription: List<String>? = null,
     ) {
         @Serializable
         data class Durl(
-            val url: String = "",
+            val url: String? = null,
             val size: Long = 0,
         )
     }

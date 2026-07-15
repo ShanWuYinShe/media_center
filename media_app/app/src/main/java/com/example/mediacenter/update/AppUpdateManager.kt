@@ -6,9 +6,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageInstaller
-import android.net.Uri
 import android.os.Build
-import android.provider.Settings
+import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.example.mediacenter.BuildConfig
 import com.example.mediacenter.data.AppUpdateInfo
@@ -66,9 +66,9 @@ class AppUpdateManager(
             .build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
-                throw IllegalStateException("download returned ${response.code()}")
+                throw IllegalStateException("download returned ${response.code}")
             }
-            val body = response.body() ?: throw IllegalStateException("empty apk response")
+            val body = response.body
             FileOutputStream(target).use { out ->
                 body.byteStream().use { input -> input.copyTo(out) }
             }
@@ -82,33 +82,6 @@ class AppUpdateManager(
             throw IllegalStateException("apk checksum mismatch")
         }
         target
-    }
-
-    fun canInstallPackages(): Boolean {
-        return Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
-            context.packageManager.canRequestPackageInstalls()
-    }
-
-    fun launchInstallPermissionSettings() {
-        // 国产 TV 可能不支持 ACTION_MANAGE_UNKNOWN_APP_SOURCES，降级到应用详情页。
-        val primaryIntent = Intent(
-            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-            Uri.parse("package:${context.packageName}"),
-        ).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        runCatching {
-            context.startActivity(primaryIntent)
-        }.onFailure {
-            AppLog.w("Update", "launchInstallPermissionSettings: redirect to app details", it)
-            val fallbackIntent = Intent(
-                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.parse("package:${context.packageName}"),
-            ).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(fallbackIntent)
-        }
     }
 
     fun launchInstaller(apk: File): InstallLaunchResult {
@@ -126,6 +99,7 @@ class AppUpdateManager(
         return tryInstallWithIntent(apk)
     }
 
+    @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
     private fun tryInstallWithSession(apk: File): InstallLaunchResult {
         return try {
             val packageInstaller = context.packageManager.packageInstaller
@@ -152,18 +126,17 @@ class AppUpdateManager(
             installReceiver?.let { context.unregisterReceiver(it) }
             installReceiver = object : BroadcastReceiver() {
                 override fun onReceive(ctx: Context, intent: Intent) {
+                    @Suppress("InlinedApi")
                     val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
                     AppLog.i("Update", "install result: status=$status")
                     ctx.unregisterReceiver(this)
                     installReceiver = null
                 }
             }
-            val registerFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                Context.RECEIVER_NOT_EXPORTED
-            } else {
-                0
-            }
-            context.registerReceiver(installReceiver, IntentFilter(installAction), registerFlags)
+            ContextCompat.registerReceiver(
+                context, installReceiver, IntentFilter(installAction),
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
             session.commit(pendingIntent.intentSender)
             session.close()
             InstallLaunchResult.Started
@@ -184,6 +157,7 @@ class AppUpdateManager(
                 "${context.packageName}.fileprovider",
                 apk,
             )
+            @Suppress("DEPRECATION")
             val intent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
                 data = uri
                 putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
@@ -200,11 +174,6 @@ class AppUpdateManager(
     }
 
     private fun tryInstallWithIntent(apk: File): InstallLaunchResult {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            !context.packageManager.canRequestPackageInstalls()
-        ) {
-            return InstallLaunchResult.NeedsPermission
-        }
         return try {
             val uri = FileProvider.getUriForFile(
                 context,
@@ -246,6 +215,5 @@ sealed class AppUpdateResult {
 
 sealed class InstallLaunchResult {
     object Started : InstallLaunchResult()
-    object NeedsPermission : InstallLaunchResult()
     data class Failed(val message: String) : InstallLaunchResult()
 }

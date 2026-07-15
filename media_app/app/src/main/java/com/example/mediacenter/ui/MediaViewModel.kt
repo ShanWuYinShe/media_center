@@ -490,8 +490,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                         } else {
                             state.copy(
                                 loading = false,
-                                selected = state.selected?.copy(playbackOptions = options)
-                                    ?: selected.copy(playbackOptions = options),
+                                selected = state.selected.copy(playbackOptions = options),
                                 playing = freshStream,
                                 playingVideo = video ?: state.playingVideo,
                             )

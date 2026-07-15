@@ -21,6 +21,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Parcelable
 import android.text.TextUtils
+import android.util.AttributeSet
 import android.util.Log
 import android.util.LruCache
 import android.util.TypedValue
@@ -28,6 +29,7 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import androidx.core.view.isNotEmpty
 import android.view.Window
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
@@ -39,6 +41,7 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.core.content.edit
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.viewModels
 import androidx.annotation.OptIn
@@ -67,10 +70,8 @@ import com.example.mediacenter.data.MediaApi
 import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.PlaybackOption
 import com.example.mediacenter.data.PlaybackPages
-import com.example.mediacenter.data.VideoDetails
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.player.CappedLoadErrorHandlingPolicy
-import com.example.mediacenter.player.TolerantDashManifestParser
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.net.AppHttpClient
 import com.example.mediacenter.ui.MediaUiState
@@ -84,7 +85,7 @@ import java.io.File
 import java.io.IOException
 import java.util.Locale
 import java.util.WeakHashMap
-import java.util.concurrent.TimeUnit
+import java.time.Duration
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.max
@@ -219,9 +220,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         val apk = pendingUpdateApk ?: return
-        if (appUpdateManager.canInstallPackages()) {
-            handleInstallLaunch(appUpdateManager.launchInstaller(apk), apk)
-        }
+        handleInstallLaunch(appUpdateManager.launchInstaller(apk), apk)
     }
 
     override fun onStop() {
@@ -428,17 +427,17 @@ class MainActivity : ComponentActivity() {
                 if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
                 when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        currentState.items.firstOrNull()?.id
-                            ?.let(HomeFocusTarget::Video)
-                            ?.let { target ->
-                                homeFocusArea = HomeFocusArea.Video
-                                requestHomeFocus(target)
-                            } ?: false
+                        currentState.items.firstOrNull()?.let { video ->
+                            homeFocusArea = HomeFocusArea.Video
+                            requestHomeFocus(HomeFocusTarget.Video(video.id))
+                            true
+                        } ?: false
                     }
                     KeyEvent.KEYCODE_DPAD_LEFT -> {
                         categories.lastOrNull()?.id?.let { id ->
                             homeFocusArea = HomeFocusArea.Category
                             requestHomeFocus(HomeFocusTarget.Category(id))
+                            true
                         } ?: false
                     }
                     KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_RIGHT -> true
@@ -493,6 +492,7 @@ class MainActivity : ComponentActivity() {
                             if (target != null) {
                                 homeFocusArea = HomeFocusArea.Video
                                 requestHomeFocus(target)
+                                true
                             } else {
                                 false
                             }
@@ -520,6 +520,7 @@ class MainActivity : ComponentActivity() {
                                 cancelPendingCategorySelect()
                                 homeFocusArea = HomeFocusArea.Search
                                 requestHomeFocus(HomeFocusTarget.Search)
+                                true
                             } else {
                                 false
                             }
@@ -557,7 +558,7 @@ class MainActivity : ComponentActivity() {
         val queryButton = glassText(
             "搜索：$query",
             17f,
-            Colors.TextPrimary,
+            Colors.TEXT_PRIMARY,
             onFocusChange = { focused ->
                 if (focused) homeFocusArea = HomeFocusArea.Search
             },
@@ -569,12 +570,11 @@ class MainActivity : ComponentActivity() {
             }
             setOnKeyListener { _, keyCode, event ->
                 if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                    currentState.items.firstOrNull()?.id
-                        ?.let(HomeFocusTarget::Video)
-                        ?.let { target ->
-                            homeFocusArea = HomeFocusArea.Video
-                            requestHomeFocus(target)
-                        } ?: false
+                    currentState.items.firstOrNull()?.let { video ->
+                        homeFocusArea = HomeFocusArea.Video
+                        requestHomeFocus(HomeFocusTarget.Video(video.id))
+                        true
+                    } ?: false
                 } else {
                     false
                 }
@@ -598,12 +598,11 @@ class MainActivity : ComponentActivity() {
         )
         row.getChildAt(1)?.setOnKeyListener { _, keyCode, event ->
             if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                currentState.items.firstOrNull()?.id
-                    ?.let(HomeFocusTarget::Video)
-                    ?.let { target ->
-                        homeFocusArea = HomeFocusArea.Video
-                        requestHomeFocus(target)
-                    } ?: false
+                currentState.items.firstOrNull()?.let { video ->
+                    homeFocusArea = HomeFocusArea.Video
+                    requestHomeFocus(HomeFocusTarget.Video(video.id))
+                    true
+                } ?: false
             } else {
                 false
             }
@@ -631,15 +630,15 @@ class MainActivity : ComponentActivity() {
             isClickable = true
         }
         val inputIcon = PillIconView(this, PillIcon.Search).apply {
-            setIconColor(Colors.TextTertiary)
+            setIconColor(Colors.TEXT_TERTIARY)
         }
         inputWrap.addView(inputIcon, LinearLayout.LayoutParams(dp(22), dp(22)).withEndMargin(dp(14)))
         val input = EditText(this).apply {
             setText(state.query)
             hint = "输入关键词"
             setSingleLine(true)
-            setTextColor(Colors.TextPrimary)
-            setHintTextColor(Colors.TextTertiary)
+            setTextColor(Colors.TEXT_PRIMARY)
+            setHintTextColor(Colors.TEXT_TERTIARY)
             setTextSize(TypedValue.COMPLEX_UNIT_PX, 22f * tvDensity)
             setPadding(0, 0, 0, 0)
             background = null
@@ -650,9 +649,9 @@ class MainActivity : ComponentActivity() {
                     if (focused) Colors.GlassFillStrong else Colors.GlassFill,
                     999,
                     if (focused) 2 else 1,
-                    if (focused) Colors.AppleBlue else Colors.GlassBorder,
+                    if (focused) Colors.APPLE_BLUE else Colors.GlassBorder,
                 )
-                inputIcon.setIconColor(if (focused) Colors.TextPrimary else Colors.TextTertiary)
+                inputIcon.setIconColor(if (focused) Colors.TEXT_PRIMARY else Colors.TEXT_TERTIARY)
             }
         }
         fun submitSearch(rawKeyword: String): Boolean {
@@ -730,7 +729,7 @@ class MainActivity : ComponentActivity() {
         }
         panel.addView(row, linearMatch())
 
-        panel.addView(label("热门关键词", 13f, Colors.TextTertiary, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(28)))
+        panel.addView(label("热门关键词", 13f, Colors.TEXT_TERTIARY, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(28)))
         val keywordRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, dp(12), 0, 0)
@@ -918,10 +917,10 @@ class MainActivity : ComponentActivity() {
         }
         if (loadingMore) {
             row.addView(ProgressBar(this), LinearLayout.LayoutParams(dp(22), dp(22)))
-            row.addView(label("正在加载更多…", 14f, Colors.TextSecondary, bold = true, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(12)))
+            row.addView(label("正在加载更多…", 14f, Colors.TEXT_SECONDARY, bold = true, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(12)))
         } else {
             row.addView(ChevronDownView(this), LinearLayout.LayoutParams(dp(16), dp(16)))
-            row.addView(label("下滑加载更多", 14f, Colors.TextTertiary, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(8)))
+            row.addView(label("下滑加载更多", 14f, Colors.TEXT_TERTIARY, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(8)))
         }
         return row
     }
@@ -939,8 +938,8 @@ class MainActivity : ComponentActivity() {
                 if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
                 keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
             }
-            addView(label(message, 14f, Colors.TextSecondary, bold = true, maxLines = 1), LinearLayout.LayoutParams(0, wrap(), 1f))
-            addView(label("重试", 14f, Colors.AppleBlue, bold = true, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(12)))
+            addView(label(message, 14f, Colors.TEXT_SECONDARY, bold = true, maxLines = 1), LinearLayout.LayoutParams(0, wrap(), 1f))
+            addView(label("重试", 14f, Colors.APPLE_BLUE, bold = true, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(12)))
         }
     }
 
@@ -986,7 +985,13 @@ class MainActivity : ComponentActivity() {
             val samePrefix = oldItems.size <= newItems.size &&
                 oldItems.indices.all { index -> oldItems[index] == newItems[index] }
             if (!samePrefix) {
-                notifyDataSetChanged()
+                val common = minOf(oldItems.size, newItems.size)
+                if (common > 0) notifyItemRangeChanged(0, common)
+                if (newItems.size > oldItems.size) {
+                    notifyItemRangeInserted(common, newItems.size - common)
+                } else if (oldItems.size > newItems.size) {
+                    notifyItemRangeRemoved(common, oldItems.size - common)
+                }
                 return
             }
             val insertedCount = newItems.size - oldItems.size
@@ -1046,7 +1051,7 @@ class MainActivity : ComponentActivity() {
             if (holder is LoadMoreHolder) {
                 holder.bind(loadingMore, loadMoreError)
             } else if (holder is VideoHolder) {
-                holder.bind(items[position], position, items.size)
+                holder.bind(items[position], position)
             }
         }
 
@@ -1089,16 +1094,16 @@ class MainActivity : ComponentActivity() {
                 )
             }
             private val image = ThumbnailImageView(this@MainActivity)
-            private val initials = label("", 42f, Colors.TextTertiary, bold = true, maxLines = 1).apply {
+            private val initials = label("", 42f, Colors.TEXT_TERTIARY, bold = true, maxLines = 1).apply {
                 gravity = Gravity.CENTER
                 alpha = 1f
             }
-            private val title = label("", 14f, Colors.TextPrimary, bold = true, maxLines = 1).apply {
+            private val title = label("", 14f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
                 gravity = Gravity.BOTTOM or Gravity.START
             }
             private val meta = label("", 11f, Color.argb(170, 255, 255, 255), maxLines = 1)
             private val focusIndicator = View(this@MainActivity).apply {
-                background = rounded(Colors.AppleBlue, 999)
+                background = rounded(Colors.APPLE_BLUE, 999)
                 alpha = 0f
             }
             private var boundVideo: VideoSummary? = null
@@ -1146,11 +1151,11 @@ class MainActivity : ComponentActivity() {
 
                 applyCardFocus(card) { focused ->
                     imageWrap.background = roundedGradient(
-                        if (focused) Colors.SurfaceFocused else Colors.PlaceholderTop,
-                        if (focused) Colors.SurfaceFocused else Colors.PlaceholderBottom,
+                        if (focused) Colors.SURFACE_FOCUSED else Colors.PlaceholderTop,
+                        if (focused) Colors.SURFACE_FOCUSED else Colors.PlaceholderBottom,
                         16,
                         if (focused) 2 else 1,
-                        if (focused) Colors.GlassBorderFocused else Colors.GlassBorder,
+                        if (focused) Colors.GLASS_BORDER_FOCUSED else Colors.GlassBorder,
                     )
                     imageWrap.elevationCompat(if (focused) dp(14).toFloat() else 0f)
                     val video = boundVideo
@@ -1163,7 +1168,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            fun bind(video: VideoSummary, index: Int, itemCount: Int) {
+            fun bind(video: VideoSummary, index: Int) {
                 boundVideo = video
                 card.tag = HomeFocusTarget.Video(video.id).viewTag()
                 title.text = video.title
@@ -1195,6 +1200,7 @@ class MainActivity : ComponentActivity() {
                                 // 保存滚动位置防止 RecyclerView 因焦点离开而重置到第一列
                                 savedGridState = homeVideoRecycler?.layoutManager?.onSaveInstanceState()
                                 requestHomeFocus(target)
+                                true
                             } ?: false
                         }
                         KeyEvent.KEYCODE_DPAD_LEFT -> pos % columns == 0
@@ -1311,7 +1317,6 @@ class MainActivity : ComponentActivity() {
         val chipH = 48
         val playHPad = 34
         val chipHPad = 22
-        val gapTitle = 10
         val gapDesc = 14
         val gapDisclosure = 10
         val gapPlay = 22
@@ -1342,7 +1347,7 @@ class MainActivity : ComponentActivity() {
             elevationCompat(dp(22).toFloat())
         }
         val heroImage = ThumbnailImageView(this)
-        val heroInitials = label(details.title.take(2).ifBlank { "影" }, 64f, Colors.TextTertiary, bold = true, maxLines = 1).apply {
+        val heroInitials = label(details.title.take(2).ifBlank { "影" }, 64f, Colors.TEXT_TERTIARY, bold = true, maxLines = 1).apply {
             gravity = Gravity.CENTER
             alpha = 1f
         }
@@ -1389,22 +1394,23 @@ class MainActivity : ComponentActivity() {
         } else null
 
         info.addView(
-            label(details.title, titleSize, Colors.TextPrimary, bold = true, maxLines = 2).apply {
+            label(details.title, titleSize, Colors.TEXT_PRIMARY, bold = true, maxLines = 2).apply {
                 letterSpacingCompat(-0.01f)
             },
             linearMatch(),
         )
         info.addView(
-            label(details.description.ifBlank { "暂无简介" }, descSize, Colors.TextSecondary, maxLines = descLines).apply {
+            label(details.description?.takeIf { it.isNotBlank() } ?: "暂无简介", descSize, Colors.TEXT_SECONDARY, maxLines = descLines).apply {
                 setLineSpacing(dp(4).toFloat(), 1f)
             },
             LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapDesc)),
         )
 
-        if (details.description.length > 96) {
+        val descriptionText = details.description ?: ""
+        if (descriptionText.length > 96) {
             info.addView(
                 pill("查看完整简介", selected = false, heightDp = chipH, horizontalPaddingDp = chipHPad) {
-                    showDescriptionDialog(details.title, details.description)
+                    showDescriptionDialog(details.title, descriptionText)
                 },
                 LinearLayout.LayoutParams(wrap(), dp(chipH)).withTopMargin(dp(gapDisclosure)),
             )
@@ -1412,7 +1418,7 @@ class MainActivity : ComponentActivity() {
 
         var detailErrorRetry: () -> Unit = viewModel::refreshSelectedPlayback
         if (options.isEmpty()) {
-            info.addView(label("暂无可播放视频", 15f, Colors.TextTertiary, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapPlay)))
+            info.addView(label("暂无可播放视频", 15f, Colors.TEXT_TERTIARY, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapPlay)))
             if (detailFocusTarget == DetailFocusTarget.Play) {
                 detailFocusTarget = DetailFocusTarget.Refresh
             }
@@ -1432,15 +1438,16 @@ class MainActivity : ComponentActivity() {
             registerDetailFocus(DetailFocusTarget.Refresh, refresh)
             info.addView(refresh, LinearLayout.LayoutParams(wrap(), dp(chipH)).withTopMargin(dp(12)))
         } else {
-            selectedPlaybackOptionId = selectedOption!!.id
-            detailErrorRetry = { viewModel.play(selectedOption) }
+            val option = selectedOption!!
+            selectedPlaybackOptionId = option.id
+            detailErrorRetry = { viewModel.play(option) }
             val currentDuration = state.currentPages?.currentPageDurationSeconds ?: details.durationSeconds
             val durationText = currentDuration?.let { formatDurationSeconds(it) }
             val playButton = primaryPill(
                 text = buildString {
                     append("播放")
                     durationText?.let { append(" $it") }
-                    selectedOption.label.takeIf { it.isNotBlank() }?.let { append(" · $it") }
+                    option.label.takeIf { it.isNotBlank() }?.let { append(" · $it") }
                 },
                 heightDp = playH,
                 horizontalPaddingDp = playHPad,
@@ -1449,13 +1456,13 @@ class MainActivity : ComponentActivity() {
                 onFocusChange = { focused ->
                     if (focused) detailFocusTarget = DetailFocusTarget.Play
                 },
-                onClick = { viewModel.play(selectedOption) },
+                onClick = { viewModel.play(option) },
             )
             registerDetailFocus(DetailFocusTarget.Play, playButton)
             info.addView(playButton, LinearLayout.LayoutParams(wrap(), dp(playH)).withTopMargin(dp(gapPlay)))
 
             if (options.size > 1) {
-                info.addView(label("清晰度", metaSize, Colors.TextTertiary, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapQuality)))
+                info.addView(label("清晰度", metaSize, Colors.TEXT_TERTIARY, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapQuality)))
                 val optionRow = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     clipChildren = false
@@ -1489,7 +1496,7 @@ class MainActivity : ComponentActivity() {
             // 多P选集:分P数量多时用导航+弹窗替代水平一排按钮
             state.currentPages?.let { pages ->
                 if (pages.totalPages > 1) {
-                    info.addView(label("选集 · 第${pages.currentPage + 1}/${pages.totalPages}集", metaSize, Colors.TextTertiary, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapQuality)))
+                    info.addView(label("选集 · 第${pages.currentPage + 1}/${pages.totalPages}集", metaSize, Colors.TEXT_TERTIARY, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapQuality)))
                     val pageRow = LinearLayout(this).apply {
                         orientation = LinearLayout.HORIZONTAL
                         clipChildren = false
@@ -1513,10 +1520,10 @@ class MainActivity : ComponentActivity() {
                         pageRow.addView(chip, LinearLayout.LayoutParams(wrap(), dp(chipH)).withEndMargin(dp(12)))
                     }
                     val allChip = pill("查看全部", selected = false, heightDp = chipH, horizontalPaddingDp = chipHPad) {
-                        showAllPagesDialog(pages, details.id)
+                        showAllPagesDialog(pages)
                     }
                     pageRow.addView(allChip, LinearLayout.LayoutParams(wrap(), dp(chipH)))
-                    if (pageRow.childCount > 0) {
+                    if (pageRow.isNotEmpty()) {
                         info.addView(pageRow, linearMatch())
                     }
                 }
@@ -1538,7 +1545,7 @@ class MainActivity : ComponentActivity() {
         val stream = state.playing ?: return
         // 恢复流程会先保持旧 stream 并显示 loading,延迟后再刷新播放地址。
         // 这段期间不要因播放器已进入 IDLE 而立刻重建同一个失败 URL。
-        if (currentPlayerUrl == stream.url && root.childCount > 0) {
+        if (currentPlayerUrl == stream.url && root.isNotEmpty()) {
             if (state.loading || state.error != null || player?.playbackState != Player.STATE_IDLE) {
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 return
@@ -1599,7 +1606,7 @@ class MainActivity : ComponentActivity() {
                 .setSeekBackIncrementMs(10_000)
                 .setSeekForwardIncrementMs(10_000)
                 .build()
-            builtPlayer!!.apply {
+            builtPlayer.apply {
                 val seekPos = initialSeekPos.coerceAtLeast(0L)
                 val mediaItem = MediaItem.Builder()
                     .setUri(playbackUrl)
@@ -1624,7 +1631,7 @@ class MainActivity : ComponentActivity() {
                                 cancelPlaybackStabilityReset()
                                 // 播放完成，清除保存的位置。
                                 val key = playbackPosKey()
-                                if (key.isNotEmpty()) prefs().edit().remove(key).apply()
+                                if (key.isNotEmpty()) prefs().edit { remove(key) }
                                 viewModel.playNext()
                             }
                             Player.STATE_BUFFERING -> {
@@ -1838,7 +1845,7 @@ class MainActivity : ComponentActivity() {
             isIndeterminate = true
             // indeterminateTintList 是 API 21+,API 19 上调用会 NoSuchMethodError。
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                indeterminateTintList = ColorStateList.valueOf(Colors.AppleBlue)
+                indeterminateTintList = ColorStateList.valueOf(Colors.APPLE_BLUE)
             }
             visibility = if (nextPlayer.playbackState == Player.STATE_BUFFERING) View.VISIBLE else View.GONE
         }
@@ -1891,7 +1898,7 @@ class MainActivity : ComponentActivity() {
             )
         }
         top.addView(
-            label(videoTitle, 26f, Colors.TextPrimary, bold = true, maxLines = 2).apply {
+            label(videoTitle, 26f, Colors.TEXT_PRIMARY, bold = true, maxLines = 2).apply {
                 letterSpacingCompat(-0.01f)
             },
             linearMatch(),
@@ -1901,13 +1908,13 @@ class MainActivity : ComponentActivity() {
                 val pageTitle = pages.pageTitles.getOrNull(pages.currentPage)?.takeIf { it.isNotBlank() }
                 val pageLabel = pageTitle ?: "第${pages.currentPage + 1}集"
                 top.addView(
-                    label("$pageLabel · ${pages.currentPage + 1}/${pages.totalPages}", 16f, Colors.TextSecondary, maxLines = 1),
+                    label("$pageLabel · ${pages.currentPage + 1}/${pages.totalPages}", 16f, Colors.TEXT_SECONDARY, maxLines = 1),
                     LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(8)),
                 )
             }
         }
-        val statusDot = View(this).apply { background = rounded(Colors.AppleBlue, 999) }
-        val statusText = label("", 15f, Colors.TextSecondary, bold = true, maxLines = 1)
+        val statusDot = View(this).apply { background = rounded(Colors.APPLE_BLUE, 999) }
+        val statusText = label("", 15f, Colors.TEXT_SECONDARY, bold = true, maxLines = 1)
         val statusRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1933,7 +1940,7 @@ class MainActivity : ComponentActivity() {
         // 进度条与画面比例指示等只读信息。`transportIcon` 仅用于画面比例指示的小图标。
         fun transportIcon(icon: TransportIcon, enabled: Boolean): TransportIconView =
             TransportIconView(this, icon).apply {
-                setIconColor(Colors.TextPrimary)
+                setIconColor(Colors.TEXT_PRIMARY)
                 alpha = if (enabled) 1f else 0.3f
                 isFocusable = false
                 isClickable = false
@@ -1948,7 +1955,7 @@ class MainActivity : ComponentActivity() {
                 LinearLayout.LayoutParams(dp(18), dp(18)).withEndMargin(dp(8)),
             )
             addView(
-                label("画面 · ${videoRotationLabel()}", 13f, Colors.TextTertiary, maxLines = 1)
+                label("画面 · ${videoRotationLabel()}", 13f, Colors.TEXT_TERTIARY, maxLines = 1)
                     .apply { gravity = Gravity.CENTER }
                     .also { orientationIndicator = it },
                 linearWrap(),
@@ -1966,7 +1973,7 @@ class MainActivity : ComponentActivity() {
             scaleX = 0f
         }
         val progressFill = View(this).apply {
-            background = rounded(Colors.AppleBlue, 999)
+            background = rounded(Colors.APPLE_BLUE, 999)
             pivotX = 0f
             scaleX = 0f
         }
@@ -1981,8 +1988,8 @@ class MainActivity : ComponentActivity() {
             addView(progressFill, FrameLayout.LayoutParams(match(), dp(6), Gravity.START or Gravity.CENTER_VERTICAL))
             addView(progressKnob, FrameLayout.LayoutParams(dp(14), dp(14), Gravity.START or Gravity.CENTER_VERTICAL))
         }
-        val timeCurrent = label("0:00", 14f, Colors.TextSecondary, bold = true, maxLines = 1)
-        val timeTotal = label("0:00", 14f, Colors.TextTertiary, maxLines = 1)
+        val timeCurrent = label("0:00", 14f, Colors.TEXT_SECONDARY, bold = true, maxLines = 1)
+        val timeTotal = label("0:00", 14f, Colors.TEXT_TERTIARY, maxLines = 1)
         val scrubberRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -2001,7 +2008,7 @@ class MainActivity : ComponentActivity() {
         val hint = label(
             hintText,
             13f,
-            Colors.TextTertiary,
+            Colors.TEXT_TERTIARY,
             maxLines = 1,
         ).apply { gravity = Gravity.CENTER }
         bottom.addView(hint, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(16)))
@@ -2040,9 +2047,9 @@ class MainActivity : ComponentActivity() {
                 else -> "已暂停 · ${stream.label.ifBlank { "默认" }}"
             })
             val dotColor = when {
-                player.playbackState == Player.STATE_BUFFERING -> Colors.TextTertiary
-                isPlaying -> Colors.AppleBlue
-                else -> Colors.TextSecondary
+                player.playbackState == Player.STATE_BUFFERING -> Colors.TEXT_TERTIARY
+                isPlaying -> Colors.APPLE_BLUE
+                else -> Colors.TEXT_SECONDARY
             }
             statusDot.background = rounded(dotColor, 999)
         }
@@ -2080,17 +2087,17 @@ class MainActivity : ComponentActivity() {
             val card = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(28), dp(24), dp(28), dp(24))
-                background = rounded(Colors.SurfaceElevated, 24, 1, Colors.GlassBorder)
+                background = rounded(Colors.SURFACE_ELEVATED, 24, 1, Colors.GlassBorder)
             }
             card.addView(
-                label(title, 24f, Colors.TextPrimary, bold = true, maxLines = 2).apply {
+                label(title, 24f, Colors.TEXT_PRIMARY, bold = true, maxLines = 2).apply {
                     letterSpacingCompat(-0.01f)
                 },
                 linearMatch(),
             )
             val scroll = ScrollView(this@MainActivity)
             scroll.addView(
-                label(description, 17f, Colors.TextSecondary, maxLines = Int.MAX_VALUE).apply {
+                label(description, 17f, Colors.TEXT_SECONDARY, maxLines = Int.MAX_VALUE).apply {
                     setLineSpacing(dp(6).toFloat(), 1f)
                 },
                 frameMatch(),
@@ -2121,7 +2128,8 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 系统诊断信息弹窗(科乐美秘技触发)。展示电视真实系统环境——用于戳穿国产盒子
+     * 系统诊断信息弹窗(最左分类连续按左键 5 次触发)。
+     * 展示电视真实系统环境——用于戳穿国产盒子
      * "显示 4.4.2 但内核实为 5.0+"的魔改、定位网络/TLS/内存等问题的根因。
      * 视觉与布局完全复用 [showDescriptionDialog] 的模式。
      */
@@ -2131,16 +2139,16 @@ class MainActivity : ComponentActivity() {
             val card = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(28), dp(24), dp(28), dp(24))
-                background = rounded(Colors.SurfaceElevated, 24, 1, Colors.GlassBorder)
+                background = rounded(Colors.SURFACE_ELEVATED, 24, 1, Colors.GlassBorder)
             }
             card.addView(
-                label("系统诊断信息", 24f, Colors.TextPrimary, bold = true, maxLines = 1).apply {
+                label("系统诊断信息", 24f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
                     letterSpacingCompat(-0.01f)
                 },
                 linearMatch(),
             )
             card.addView(
-                label("输入 上上下下左右左右 触发 · 仅用于排查", 13f, Colors.TextTertiary, maxLines = 1),
+                label("焦点在最左分类时连续按左键 5 次触发 · 仅用于排查", 13f, Colors.TEXT_TERTIARY, maxLines = 1),
                 LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(4)),
             )
 
@@ -2162,10 +2170,10 @@ class MainActivity : ComponentActivity() {
                     orientation = LinearLayout.HORIZONTAL
                 }
                 rowLayout.addView(
-                    label("$title：", 16f, Colors.TextTertiary, maxLines = 1),
+                    label("$title：", 16f, Colors.TEXT_TERTIARY, maxLines = 1),
                     LinearLayout.LayoutParams(0, wrap(), 0.42f),
                 )
-                val valueColor = if (highlight) Colors.AppleBlue else Colors.TextPrimary
+                val valueColor = if (highlight) Colors.APPLE_BLUE else Colors.TEXT_PRIMARY
                 rowLayout.addView(
                     label(value, 16f, valueColor, maxLines = 2),
                     LinearLayout.LayoutParams(0, wrap(), 0.58f),
@@ -2174,6 +2182,7 @@ class MainActivity : ComponentActivity() {
             }
 
             // CPU 架构:Build.SUPPORTED_ABIS 是 API 21+,API 19 用废弃的 CPU_ABI/CPU_ABI2。
+            @Suppress("DEPRECATION")
             val cpuAbi = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 Build.SUPPORTED_ABIS.joinToString(", ")
             } else {
@@ -2198,16 +2207,16 @@ class MainActivity : ComponentActivity() {
         }.show()
     }
 
-    private fun showAllPagesDialog(pages: PlaybackPages, bvid: String) {
+    private fun showAllPagesDialog(pages: PlaybackPages) {
         Dialog(this).apply {
             requestWindowFeature(Window.FEATURE_NO_TITLE)
             val card = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(28), dp(24), dp(28), dp(24))
-                background = rounded(Colors.SurfaceElevated, 24, 1, Colors.GlassBorder)
+                background = rounded(Colors.SURFACE_ELEVATED, 24, 1, Colors.GlassBorder)
             }
             card.addView(
-                label("选集 · 共${pages.totalPages}集", 22f, Colors.TextPrimary, bold = true, maxLines = 1),
+                label("选集 · 共${pages.totalPages}集", 22f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1),
                 linearMatch(),
             )
             val scroll = ScrollView(this@MainActivity)
@@ -2228,13 +2237,13 @@ class MainActivity : ComponentActivity() {
                         dismiss()
                         viewModel.selectPage(i)
                     }
-                    background = rounded(if (isCurrent) ColorUtils.setAlphaComponent(Colors.AppleBlue, 38) else Color.TRANSPARENT, 12, 0, Color.TRANSPARENT)
-                    val idxLabel = label("${i + 1}", 13f, Colors.TextTertiary, bold = true, maxLines = 1).apply {
+                    background = rounded(if (isCurrent) ColorUtils.setAlphaComponent(Colors.APPLE_BLUE, 38) else Color.TRANSPARENT, 12, 0, Color.TRANSPARENT)
+                    val idxLabel = label("${i + 1}", 13f, Colors.TEXT_TERTIARY, bold = true, maxLines = 1).apply {
                         gravity = Gravity.CENTER
                         minWidth = dp(36)
                     }
                     addView(idxLabel, LinearLayout.LayoutParams(dp(36), wrap()))
-                    val titleLabel = label(title, 15f, if (isCurrent) Colors.AppleBlue else Colors.TextPrimary, bold = isCurrent, maxLines = 1).apply {
+                    val titleLabel = label(title, 15f, if (isCurrent) Colors.APPLE_BLUE else Colors.TEXT_PRIMARY, bold = isCurrent, maxLines = 1).apply {
                         layoutParams = LinearLayout.LayoutParams(0, wrap(), 1f).withStartMargin(dp(8))
                     }
                     addView(titleLabel)
@@ -2242,16 +2251,16 @@ class MainActivity : ComponentActivity() {
                     setOnFocusChangeListener { _, focused ->
                         background = rounded(
                             when {
-                                focused -> Colors.AppleBlue
-                                isCurrent -> ColorUtils.setAlphaComponent(Colors.AppleBlue, 38)
+                                focused -> Colors.APPLE_BLUE
+                                isCurrent -> ColorUtils.setAlphaComponent(Colors.APPLE_BLUE, 38)
                                 else -> Color.TRANSPARENT
                             }, 12,
                             if (focused) 2 else 0,
-                            if (focused) Colors.GlassBorderFocused else Color.TRANSPARENT,
+                            if (focused) Colors.GLASS_BORDER_FOCUSED else Color.TRANSPARENT,
                         )
                         elevationCompat(if (focused) dp(6).toFloat() else 0f)
-                        idxLabel.setTextColor(if (focused) Colors.TextPrimary else Colors.TextTertiary)
-                        titleLabel.setTextColor(if (focused) Colors.TextPrimary else if (isCurrent) Colors.AppleBlue else Colors.TextPrimary)
+                        idxLabel.setTextColor(if (focused) Colors.TEXT_PRIMARY else Colors.TEXT_TERTIARY)
+                        titleLabel.setTextColor(if (focused) Colors.TEXT_PRIMARY else if (isCurrent) Colors.APPLE_BLUE else Colors.TEXT_PRIMARY)
                         animate().cancel()
                         animate().scaleX(if (focused) 1.04f else 1f).scaleY(if (focused) 1.04f else 1f).setDuration(140).start()
                     }
@@ -2278,15 +2287,15 @@ class MainActivity : ComponentActivity() {
             val card = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(28), dp(24), dp(28), dp(24))
-                background = rounded(Colors.SurfaceElevated, 24, 1, Colors.GlassBorder)
+                background = rounded(Colors.SURFACE_ELEVATED, 24, 1, Colors.GlassBorder)
             }
             card.addView(
-                label("发现新版本 ${result.update.versionName}", 22f, Colors.TextPrimary, bold = true, maxLines = 2),
+                label("发现新版本 ${result.update.versionName}", 22f, Colors.TEXT_PRIMARY, bold = true, maxLines = 2),
                 linearMatch(),
             )
-            val notes = result.update.releaseNotes.ifBlank { "已下载更新包，安装后可继续使用最新版本。" }
+            val notes = result.update.releaseNotes?.takeIf { it.isNotBlank() } ?: "已下载更新包，安装后可继续使用最新版本。"
             card.addView(
-                label(notes, 16f, Colors.TextSecondary, maxLines = 5).apply {
+                label(notes, 16f, Colors.TEXT_SECONDARY, maxLines = 5).apply {
                     setLineSpacing(dp(4).toFloat(), 1f)
                 },
                 LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(12)),
@@ -2320,43 +2329,8 @@ class MainActivity : ComponentActivity() {
             InstallLaunchResult.Started -> {
                 pendingUpdateApk = null
             }
-            InstallLaunchResult.NeedsPermission -> {
-                pendingUpdateApk = apk
-                showUpdatePermissionDialog()
-            }
             is InstallLaunchResult.Failed -> showUpdateMessage(result.message)
         }
-    }
-
-    private fun showUpdatePermissionDialog() {
-        Dialog(this).apply {
-            requestWindowFeature(Window.FEATURE_NO_TITLE)
-            val card = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(28), dp(24), dp(28), dp(24))
-                background = rounded(Colors.SurfaceElevated, 24, 1, Colors.GlassBorder)
-            }
-            card.addView(
-                label("需要允许安装未知应用", 22f, Colors.TextPrimary, bold = true, maxLines = 2),
-                linearMatch(),
-            )
-            card.addView(
-                label("请在系统设置 → 安全 → 允许安装未知应用 中找到本应用并开启权限。" +
-                       "如果找不到该选项，请检查系统设置中是否有「纯净模式」或「应用锁」并关闭。",
-                    16f, Colors.TextSecondary, maxLines = 5),
-                LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(12)),
-            )
-            val open = primaryPill("打开设置", heightDp = 48, horizontalPaddingDp = 28) {
-                dismiss()
-                runCatching { appUpdateManager.launchInstallPermissionSettings() }
-                    .onFailure { showUpdateMessage("无法打开安装权限设置，请在系统设置中手动允许") }
-            }
-            card.addView(open, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(18)))
-            setContentView(card)
-            window?.setBackgroundDrawableResource(android.R.color.transparent)
-            window?.setLayout((resources.displayMetrics.widthPixels * 0.48f).toInt(), wrap())
-            open.post { open.requestFocus() }
-        }.show()
     }
 
     private fun showUpdateMessage(message: String) {
@@ -2365,9 +2339,9 @@ class MainActivity : ComponentActivity() {
             val card = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(24), dp(22), dp(24), dp(22))
-                background = rounded(Colors.SurfaceElevated, 22, 1, Colors.GlassBorder)
+                background = rounded(Colors.SURFACE_ELEVATED, 22, 1, Colors.GlassBorder)
             }
-            card.addView(label(message, 17f, Colors.TextSecondary, maxLines = 3), linearMatch())
+            card.addView(label(message, 17f, Colors.TEXT_SECONDARY, maxLines = 3), linearMatch())
             val close = pill("知道了", selected = true, heightDp = 44, horizontalPaddingDp = 24) { dismiss() }
             card.addView(close, LinearLayout.LayoutParams(wrap(), dp(44)).withTopMargin(dp(16)))
             setContentView(card)
@@ -2419,7 +2393,7 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.CENTER_HORIZONTAL
             orientation = LinearLayout.VERTICAL
             setPadding(dp(44), dp(40), dp(44), dp(36))
-            background = roundedGradient(Colors.SurfaceFocused, Colors.SurfaceElevated, 30, 1, Colors.GlassBorder)
+            background = roundedGradient(Colors.SURFACE_FOCUSED, Colors.SURFACE_ELEVATED, 30, 1, Colors.GlassBorder)
             minimumWidth = dp(360)
             elevationCompat(dp(18).toFloat())
         }
@@ -2429,13 +2403,13 @@ class MainActivity : ComponentActivity() {
         iconWrap.addView(WarningGlyphView(this), FrameLayout.LayoutParams(dp(30), dp(30), Gravity.CENTER))
         card.addView(iconWrap, LinearLayout.LayoutParams(dp(64), dp(64)))
         card.addView(
-            label("播放失败", 20f, Colors.TextPrimary, bold = true, maxLines = 1).apply {
+            label("播放失败", 20f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
                 gravity = Gravity.CENTER
             },
             LinearLayout.LayoutParams(wrap(), wrap()).withTopMargin(dp(16)),
         )
         card.addView(
-            label(error, 15f, Colors.TextSecondary, maxLines = 3).apply {
+            label(error, 15f, Colors.TEXT_SECONDARY, maxLines = 3).apply {
                 gravity = Gravity.CENTER
                 maxWidth = dp(320)
                 setLineSpacing(dp(3).toFloat(), 1f)
@@ -2478,7 +2452,7 @@ class MainActivity : ComponentActivity() {
     private fun savePlaybackPosition(pos: Long) {
         val key = playbackPosKey()
         if (key.isEmpty()) return
-        prefs().edit().putLong(key, pos).apply()
+        prefs().edit { putLong(key, pos) }
         AppLog.i("Player", "saved position $pos for $key")
     }
 
@@ -2527,6 +2501,7 @@ class MainActivity : ComponentActivity() {
     // 若流本身带有未应用的旋转元数据,优先使用元数据角度。用户手动选择过则不覆盖。
     private fun autoDetectPlayerVideoRotation(videoSize: VideoSize) {
         if (playerVideoRotationUserSet) return
+        @Suppress("DEPRECATION")
         val metadataRotation = normalizeVideoRotation(videoSize.unappliedRotationDegrees)
         val displayWidth = videoSize.width * videoSize.pixelWidthHeightRatio
         val detectedRotation = if (metadataRotation != 0) {
@@ -2614,7 +2589,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun requestHomeFocus(target: HomeFocusTarget): Boolean {
+    private fun requestHomeFocus(target: HomeFocusTarget) {
         pendingHomeFocus = target
         if (target is HomeFocusTarget.Video) {
             val adapter = homeVideoAdapter
@@ -2628,17 +2603,16 @@ class MainActivity : ComponentActivity() {
                         if (view.requestFocus()) pendingHomeFocus = null
                     }
                 }
-                return true
+                return
             }
         }
         val view = root.findViewWithTag<View>(target.viewTag())
         if (view != null) {
             view.requestFocus()
             pendingHomeFocus = null
-            return true
+            return
         }
         invalidateUi()
-        return true
     }
 
     private fun homeFocusTargetFor(state: MediaUiState): HomeFocusTarget? {
@@ -2678,7 +2652,7 @@ class MainActivity : ComponentActivity() {
             background = rounded(Colors.GlassFillStrong, 28, 1, Colors.GlassBorder)
         }
         card.addView(ProgressBar(this), LinearLayout.LayoutParams(dp(42), dp(42)))
-        card.addView(label(text, 16f, Colors.TextSecondary, bold = true, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(14)))
+        card.addView(label(text, 16f, Colors.TEXT_SECONDARY, bold = true, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(14)))
         return centeredCard(card)
     }
 
@@ -2690,7 +2664,7 @@ class MainActivity : ComponentActivity() {
             background = rounded(Color.argb(184, 0, 0, 0), 999, 1, Colors.GlassBorder)
         }
         box.addView(ProgressBar(this), LinearLayout.LayoutParams(dp(28), dp(28)))
-        box.addView(label("正在加载…", 15f, Colors.TextPrimary, bold = true, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(12)))
+        box.addView(label("正在加载…", 15f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(12)))
         return box
     }
 
@@ -2699,7 +2673,7 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.CENTER_HORIZONTAL
             orientation = LinearLayout.VERTICAL
             setPadding(dp(44), dp(40), dp(44), dp(36))
-            background = roundedGradient(Colors.SurfaceFocused, Colors.SurfaceElevated, 30, 1, Colors.GlassBorder)
+            background = roundedGradient(Colors.SURFACE_FOCUSED, Colors.SURFACE_ELEVATED, 30, 1, Colors.GlassBorder)
             minimumWidth = dp(360)
             elevationCompat(dp(18).toFloat())
         }
@@ -2709,13 +2683,13 @@ class MainActivity : ComponentActivity() {
         iconWrap.addView(WarningGlyphView(this), FrameLayout.LayoutParams(dp(30), dp(30), Gravity.CENTER))
         card.addView(iconWrap, LinearLayout.LayoutParams(dp(64), dp(64)))
         card.addView(
-            label("加载失败", 20f, Colors.TextPrimary, bold = true, maxLines = 1).apply {
+            label("加载失败", 20f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
                 gravity = Gravity.CENTER
             },
             LinearLayout.LayoutParams(wrap(), wrap()).withTopMargin(dp(16)),
         )
         card.addView(
-            label(message, 15f, Colors.TextSecondary, maxLines = 3).apply {
+            label(message, 15f, Colors.TEXT_SECONDARY, maxLines = 3).apply {
                 gravity = Gravity.CENTER
                 maxWidth = dp(320)
                 setLineSpacing(dp(3).toFloat(), 1f)
@@ -2734,7 +2708,7 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(12), 0, 0)
         }
-        row.addView(label(message, 14f, Colors.TextDanger, maxLines = 2), LinearLayout.LayoutParams(0, wrap(), 1f))
+        row.addView(label(message, 14f, Colors.TEXT_DANGER, maxLines = 2), LinearLayout.LayoutParams(0, wrap(), 1f))
         row.addView(pill("重试", selected = false, heightDp = 38, horizontalPaddingDp = 18, onClick = onRetry), LinearLayout.LayoutParams(wrap(), dp(38)).withStartMargin(dp(12)))
         return row
     }
@@ -2744,7 +2718,7 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.CENTER
             setPadding(dp(20), dp(12), dp(20), dp(12))
             background = rounded(Color.argb(210, 14, 16, 20), 22, 1, Colors.GlassBorder)
-            addView(label(message, 14f, Colors.TextPrimary, bold = true, maxLines = 2), LinearLayout.LayoutParams(match(), wrap()))
+            addView(label(message, 14f, Colors.TEXT_PRIMARY, bold = true, maxLines = 2), LinearLayout.LayoutParams(match(), wrap()))
         }
     }
 
@@ -2755,8 +2729,8 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(34), dp(26), dp(34), dp(26))
             background = rounded(Colors.GlassFill, 28, 1, Colors.GlassBorder)
         }
-        card.addView(label(message, 18f, Colors.TextTertiary, bold = true, maxLines = 1), linearWrap())
-        card.addView(label("换个分类或关键词试试", 13f, Colors.TextTertiary, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withTopMargin(dp(8)))
+        card.addView(label(message, 18f, Colors.TEXT_TERTIARY, bold = true, maxLines = 1), linearWrap())
+        card.addView(label("换个分类或关键词试试", 13f, Colors.TEXT_TERTIARY, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withTopMargin(dp(8)))
         return centeredCard(card)
     }
 
@@ -2821,9 +2795,9 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { onClick() }
         }
         val iconView = PillIconView(this, icon).apply {
-            setIconColor(Colors.TextPrimary)
+            setIconColor(Colors.TEXT_PRIMARY)
         }
-        val textView = label(text, 15f, Colors.TextPrimary, bold = true, maxLines = 1).apply {
+        val textView = label(text, 15f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
             gravity = Gravity.CENTER
         }
         row.addView(iconView, LinearLayout.LayoutParams(dp(18), dp(18)))
@@ -2848,15 +2822,15 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { onClick() }
         }
         val iconView = PillIconView(this, icon).apply {
-            setIconColor(Colors.TextPrimary)
+            setIconColor(Colors.TEXT_PRIMARY)
         }
         button.addView(iconView, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
         fun update(focused: Boolean) {
             button.background = rounded(
-                if (focused) Colors.AppleBlue else Colors.GlassFill,
+                if (focused) Colors.APPLE_BLUE else Colors.GlassFill,
                 999,
                 if (focused) 3 else 1,
-                if (focused) Colors.GlassBorderFocused else Colors.GlassBorder,
+                if (focused) Colors.GLASS_BORDER_FOCUSED else Colors.GlassBorder,
             )
             button.elevationCompat(if (focused) dp(8).toFloat() else 0f)
             button.animate().cancel()
@@ -2889,12 +2863,12 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { onClick() }
         }
         val iconView = icon?.let {
-            PillIconView(this, it).apply { setIconColor(Colors.DeepSpace) }
+            PillIconView(this, it).apply { setIconColor(Colors.DEEP_SPACE) }
         }
         if (iconView != null) {
             row.addView(iconView, LinearLayout.LayoutParams(dp(18), dp(18)))
         }
-        val textView = label(text, textSizeSp, Colors.DeepSpace, bold = true, maxLines = 1).apply {
+        val textView = label(text, textSizeSp, Colors.DEEP_SPACE, bold = true, maxLines = 1).apply {
             gravity = Gravity.CENTER
         }
         row.addView(
@@ -2905,13 +2879,13 @@ class MainActivity : ComponentActivity() {
         )
         fun update(focused: Boolean) {
             row.background = rounded(
-                if (focused) Colors.AppleBlue else Colors.TextPrimary,
+                if (focused) Colors.APPLE_BLUE else Colors.TEXT_PRIMARY,
                 999,
                 if (focused) 3 else 0,
-                if (focused) Colors.GlassBorderFocused else Color.TRANSPARENT,
+                if (focused) Colors.GLASS_BORDER_FOCUSED else Color.TRANSPARENT,
             )
             row.elevationCompat(if (focused) dp(10).toFloat() else dp(2).toFloat())
-            val contentColor = if (focused) Colors.TextPrimary else Colors.DeepSpace
+            val contentColor = if (focused) Colors.TEXT_PRIMARY else Colors.DEEP_SPACE
             textView.setTextColor(contentColor)
             iconView?.setIconColor(contentColor)
             row.animate().cancel()
@@ -2933,7 +2907,7 @@ class MainActivity : ComponentActivity() {
         onFocusChange: ((Boolean) -> Unit)? = null,
         onClick: () -> Unit,
     ): TextView {
-        return label(text, 15f, Colors.TextPrimary, bold = true, maxLines = 1).apply {
+        return label(text, 15f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
             gravity = Gravity.CENTER
             minHeight = dp(heightDp)
             setPadding(dp(horizontalPaddingDp), 0, dp(horizontalPaddingDp), 0)
@@ -2962,16 +2936,16 @@ class MainActivity : ComponentActivity() {
     ) {
         fun update(focused: Boolean) {
             view.background = when {
-                focused -> rounded(Colors.AppleBlue, 999, 3, Colors.GlassBorderFocused)
-                selected -> rounded(Colors.GlassFillStrong, 999, 2, Colors.AppleBlue)
+                focused -> rounded(Colors.APPLE_BLUE, 999, 3, Colors.GLASS_BORDER_FOCUSED)
+                selected -> rounded(Colors.GlassFillStrong, 999, 2, Colors.APPLE_BLUE)
                 else -> rounded(Colors.GlassFill, 999, 1, Colors.GlassBorder)
             }
             view.elevationCompat(if (focused) dp(8).toFloat() else 0f)
             setContentColor(
                 when {
-                    focused -> Colors.TextPrimary
-                    selected -> Colors.AppleBlue
-                    else -> Colors.TextSecondary
+                    focused -> Colors.TEXT_PRIMARY
+                    selected -> Colors.APPLE_BLUE
+                    else -> Colors.TEXT_SECONDARY
                 },
             )
             view.animate().cancel()
@@ -3020,9 +2994,9 @@ class MainActivity : ComponentActivity() {
             return
         }
         val detachListener = object : View.OnAttachStateChangeListener {
-            override fun onViewAttachedToWindow(view: View) = Unit
+            override fun onViewAttachedToWindow(@Suppress("UNUSED_PARAMETER") view: View) = Unit
 
-            override fun onViewDetachedFromWindow(view: View) {
+            override fun onViewDetachedFromWindow(@Suppress("UNUSED_PARAMETER") view: View) {
                 image.cancelThumbnailLoad()
             }
         }
@@ -3068,9 +3042,9 @@ class MainActivity : ComponentActivity() {
             return
         }
         val detachListener = object : View.OnAttachStateChangeListener {
-            override fun onViewAttachedToWindow(view: View) = Unit
+            override fun onViewAttachedToWindow(@Suppress("UNUSED_PARAMETER") view: View) = Unit
 
-            override fun onViewDetachedFromWindow(view: View) {
+            override fun onViewDetachedFromWindow(@Suppress("UNUSED_PARAMETER") view: View) {
                 target.cancelThumbnailLoad()
             }
         }
@@ -3176,9 +3150,9 @@ class MainActivity : ComponentActivity() {
         val call = ThumbnailHttpClient.newCall(request)
         continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
-            override fun onFailure(call: Call, error: IOException) {
+            override fun onFailure(call: Call, e: IOException) {
                 if (continuation.isActive) {
-                    continuation.resumeWithException(error)
+                    continuation.resumeWithException(e)
                 }
             }
 
@@ -3204,9 +3178,9 @@ class MainActivity : ComponentActivity() {
     private fun Response.readBoundedThumbnailBytes(): ByteArray {
         return use { response ->
             if (!response.isSuccessful) {
-                throw ThumbnailHttpException(response.code())
+                throw ThumbnailHttpException(response.code)
             }
-            val body = response.body() ?: throw IOException("Thumbnail response body is empty")
+            val body = response.body
             val contentLength = body.contentLength()
             if (contentLength > MaxThumbnailBytes) {
                 throw IOException("Thumbnail exceeds $MaxThumbnailBytes bytes")
@@ -3256,7 +3230,7 @@ class MainActivity : ComponentActivity() {
     private fun appBackground(): Drawable {
         val base = GradientDrawable(
             GradientDrawable.Orientation.TOP_BOTTOM,
-            intArrayOf(Colors.BackgroundTop, Colors.BackgroundMid, Colors.DeepSpace),
+            intArrayOf(Colors.BACKGROUND_TOP, Colors.BACKGROUND_MID, Colors.DEEP_SPACE),
         )
         // 顶部中央叠一层极淡的 Apple-Blue 径向柔光,增加纵深而不引入新色相。
         val glow = GradientDrawable(
@@ -3440,17 +3414,17 @@ class MainActivity : ComponentActivity() {
 }
 
 private object Colors {
-    const val DeepSpace: Int = 0xFF000000.toInt()
-    const val BackgroundTop: Int = 0xFF15182B.toInt()
-    const val BackgroundMid: Int = 0xFF0A0B12.toInt()
-    const val SurfaceElevated: Int = 0xFF0E1014.toInt()
-    const val SurfaceFocused: Int = 0xFF181C26.toInt()
-    const val GlassBorderFocused: Int = 0xFFE5E5E7.toInt()
-    const val TextPrimary: Int = 0xFFF5F5F7.toInt()
-    const val TextSecondary: Int = 0xFFB0B3B8.toInt()
-    const val TextTertiary: Int = 0xFF86868B.toInt()
-    const val TextDanger: Int = 0xFFFF453A.toInt()
-    const val AppleBlue: Int = 0xFF0A84FF.toInt()
+    const val DEEP_SPACE: Int = 0xFF000000.toInt()
+    const val BACKGROUND_TOP: Int = 0xFF15182B.toInt()
+    const val BACKGROUND_MID: Int = 0xFF0A0B12.toInt()
+    const val SURFACE_ELEVATED: Int = 0xFF0E1014.toInt()
+    const val SURFACE_FOCUSED: Int = 0xFF181C26.toInt()
+    const val GLASS_BORDER_FOCUSED: Int = 0xFFE5E5E7.toInt()
+    const val TEXT_PRIMARY: Int = 0xFFF5F5F7.toInt()
+    const val TEXT_SECONDARY: Int = 0xFFB0B3B8.toInt()
+    const val TEXT_TERTIARY: Int = 0xFF86868B.toInt()
+    const val TEXT_DANGER: Int = 0xFFFF453A.toInt()
+    const val APPLE_BLUE: Int = 0xFF0A84FF.toInt()
     val AccentGlow: Int = Color.argb(48, 10, 132, 255)
     val GlassFill: Int = Color.argb(20, 255, 255, 255)
     val GlassFillStrong: Int = Color.argb(31, 255, 255, 255)
@@ -3502,7 +3476,6 @@ private sealed class DetailFocusTarget {
     object Play : DetailFocusTarget()
     object Refresh : DetailFocusTarget()
     data class Option(val id: String) : DetailFocusTarget()
-    data class Page(val index: Int) : DetailFocusTarget()
 }
 
 private const val HomeFocusNoCategoryKey = "__no_category__"
@@ -3519,6 +3492,9 @@ private enum class PillIcon {
 }
 
 private class ThumbnailImageView(context: Context) : View(context) {
+    constructor(context: Context, attrs: AttributeSet?) : this(context)
+    constructor(context: Context, attrs: AttributeSet?, defStyleAttr: Int) : this(context)
+
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val src = Rect()
     private val dst = RectF()
@@ -3585,6 +3561,9 @@ private class PillIconView(
     context: Context,
     private val icon: PillIcon,
 ) : View(context) {
+    constructor(context: Context, attrs: AttributeSet?) : this(context, PillIcon.Search)
+    constructor(context: Context, attrs: AttributeSet?, defStyleAttr: Int) : this(context, PillIcon.Search)
+
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
@@ -3594,7 +3573,7 @@ private class PillIconView(
         style = Paint.Style.FILL
     }
     private val path = Path()
-    private var iconColor: Int = Colors.TextPrimary
+    private var iconColor: Int = Colors.TEXT_PRIMARY
 
     fun setIconColor(color: Int) {
         if (iconColor == color) return
@@ -3654,6 +3633,9 @@ private class TransportIconView(
     context: Context,
     private val icon: TransportIcon,
 ) : View(context) {
+    constructor(context: Context, attrs: AttributeSet?) : this(context, TransportIcon.Previous)
+    constructor(context: Context, attrs: AttributeSet?, defStyleAttr: Int) : this(context, TransportIcon.Previous)
+
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -3662,7 +3644,7 @@ private class TransportIconView(
     }
     private val path = Path()
     private val bar = RectF()
-    private var iconColor: Int = Colors.TextPrimary
+    private var iconColor: Int = Colors.TEXT_PRIMARY
 
     fun setIconColor(color: Int) {
         if (iconColor == color) return
@@ -3736,8 +3718,11 @@ private class TransportIconView(
 }
 
 private class ChevronDownView(context: Context) : View(context) {
+    constructor(context: Context, attrs: AttributeSet?) : this(context)
+    constructor(context: Context, attrs: AttributeSet?, defStyleAttr: Int) : this(context)
+
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Colors.TextTertiary
+        color = Colors.TEXT_TERTIARY
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
@@ -3754,13 +3739,16 @@ private class ChevronDownView(context: Context) : View(context) {
 }
 
 private class WarningGlyphView(context: Context) : View(context) {
+    constructor(context: Context, attrs: AttributeSet?) : this(context)
+    constructor(context: Context, attrs: AttributeSet?, defStyleAttr: Int) : this(context)
+
     private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Colors.TextSecondary
+        color = Colors.TEXT_SECONDARY
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
     }
     private val markPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Colors.TextSecondary
+        color = Colors.TEXT_SECONDARY
         style = Paint.Style.FILL
     }
     private val stem = RectF()
@@ -3808,8 +3796,8 @@ private const val CategorySelectDebounceMs = 280L
 private const val DIAGNOSTIC_LEFT_PRESS_COUNT = 5
 private val ThumbnailFetchSemaphore = Semaphore(4)
 private val ThumbnailHttpClient = AppHttpClient.newBuilder()
-    .connectTimeout(8, TimeUnit.SECONDS)
-    .readTimeout(15, TimeUnit.SECONDS)
+    .connectTimeout(Duration.ofSeconds(8))
+    .readTimeout(Duration.ofSeconds(15))
     .followRedirects(true)
     .build()
 private val PlaybackRequestHeaderDefaults = mapOf(
@@ -3873,10 +3861,6 @@ private fun isRecoverablePlaybackError(error: PlaybackException): Boolean {
             else -> error.findCause<HttpDataSource.HttpDataSourceException>() != null
         }
     return responseCode == 401 || responseCode == 403 || responseCode.isTransientHttpStatusCode()
-}
-
-private fun shouldUseProxyPlaybackFallback(error: PlaybackException, stream: PlaybackOption): Boolean {
-    return isRecoverablePlaybackError(error)
 }
 
 private fun playbackMimeType(mimeType: String?): String {

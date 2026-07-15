@@ -10,9 +10,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
+
+var variantRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 type AppUpdateManifest struct {
 	VersionCode  int    `json:"versionCode"`
@@ -38,8 +41,8 @@ func (m *AppUpdateManifest) UnmarshalJSON(data []byte) error {
 	// 回退:标准字段未填时尝试历史字段名
 	if m.SizeBytes == 0 {
 		var legacy struct {
-			Size         int64  `json:"size"`
-			ReleaseDate  string `json:"releaseDate"`
+			Size        int64  `json:"size"`
+			ReleaseDate string `json:"releaseDate"`
 		}
 		if json.Unmarshal(data, &legacy) == nil {
 			if m.SizeBytes == 0 {
@@ -53,8 +56,23 @@ func (m *AppUpdateManifest) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func sanitizeVariant(v string) string {
+	if v == "" || v == "normal" {
+		return ""
+	}
+	if !variantRe.MatchString(v) {
+		return ""
+	}
+	return v
+}
+
+func appUpdateVariant(r *http.Request) string {
+	return sanitizeVariant(strings.TrimSpace(r.URL.Query().Get("variant")))
+}
+
 func (s *mediaServer) handleAppUpdate(w http.ResponseWriter, r *http.Request) {
-	manifest, err := s.readAppUpdateManifest(r)
+	variant := appUpdateVariant(r)
+	manifest, err := s.readAppUpdateManifest(r, variant)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			w.WriteHeader(http.StatusNoContent)
@@ -81,7 +99,8 @@ func (s *mediaServer) handleAppUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *mediaServer) handleAppDownload(w http.ResponseWriter, r *http.Request) {
-	manifest, err := s.readAppUpdateManifest(r)
+	variant := appUpdateVariant(r)
+	manifest, err := s.readAppUpdateManifest(r, variant)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			s.writeError(w, &apiError{
@@ -99,23 +118,23 @@ func (s *mediaServer) handleAppDownload(w http.ResponseWriter, r *http.Request) 
 		})
 		return
 	}
-	apkPath := s.appUpdateAPKPath(manifest)
+	apkPath := s.appUpdateAPKPath(manifest, variant)
 	info, err := os.Stat(apkPath)
 	if err != nil {
-		status := http.StatusNotFound
-		code := "NOT_FOUND"
-		message := "暂无可下载的 App 更新。"
 		if errors.Is(err, os.ErrNotExist) {
-			status = http.StatusNotFound
-			code = "NOT_FOUND"
-			message = "暂无可下载的 App 更新。"
-		} else {
-			log.Printf("app download apk stat error: %v", err)
-			status = http.StatusInternalServerError
-			code = "INTERNAL_ERROR"
-			message = "读取 App 安装包失败。"
+			s.writeError(w, &apiError{
+				Status:  http.StatusNotFound,
+				Code:    "NOT_FOUND",
+				Message: "暂无可下载的 App 更新。",
+			})
+			return
 		}
-		s.writeError(w, &apiError{Status: status, Code: code, Message: message})
+		log.Printf("app download apk stat error: %v", err)
+		s.writeError(w, &apiError{
+			Status:  http.StatusInternalServerError,
+			Code:    "INTERNAL_ERROR",
+			Message: "读取 App 安装包失败。",
+		})
 		return
 	}
 	if info.Size() != manifest.SizeBytes {
@@ -134,8 +153,31 @@ func (s *mediaServer) handleAppDownload(w http.ResponseWriter, r *http.Request) 
 	http.ServeFile(w, r, apkPath)
 }
 
-func (s *mediaServer) readAppUpdateManifest(r *http.Request) (AppUpdateManifest, error) {
-	data, err := os.ReadFile(s.config.AppUpdateManifestPath)
+func (s *mediaServer) appUpdateManifestPath(variant string) string {
+	dir := filepath.Dir(s.config.AppUpdateManifestPath)
+	base := filepath.Base(s.config.AppUpdateManifestPath)
+	ext := filepath.Ext(base)
+	name := strings.TrimSuffix(base, ext)
+	if variant == "" {
+		return filepath.Join(dir, name+ext)
+	}
+	return filepath.Join(dir, name+"-"+variant+ext)
+}
+
+func (s *mediaServer) appUpdateAPKManifestPath(variant string) string {
+	dir := filepath.Dir(s.config.AppUpdateAPKPath)
+	base := filepath.Base(s.config.AppUpdateAPKPath)
+	ext := filepath.Ext(base)
+	name := strings.TrimSuffix(base, ext)
+	if variant == "" {
+		return filepath.Join(dir, name+ext)
+	}
+	return filepath.Join(dir, name+"-"+variant+ext)
+}
+
+func (s *mediaServer) readAppUpdateManifest(r *http.Request, variant string) (AppUpdateManifest, error) {
+	manifestPath := s.appUpdateManifestPath(variant)
+	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return AppUpdateManifest{}, err
 	}
@@ -146,7 +188,7 @@ func (s *mediaServer) readAppUpdateManifest(r *http.Request) (AppUpdateManifest,
 	if err := validateAppUpdateManifest(manifest); err != nil {
 		return AppUpdateManifest{}, err
 	}
-	info, err := os.Stat(s.appUpdateAPKPath(manifest))
+	info, err := os.Stat(s.appUpdateAPKPath(manifest, variant))
 	if err != nil {
 		return AppUpdateManifest{}, err
 	}
@@ -155,14 +197,14 @@ func (s *mediaServer) readAppUpdateManifest(r *http.Request) (AppUpdateManifest,
 	// 重新打包而不准)。此前用 info.Size() != manifest.SizeBytes 强校验会直接报错,
 	// 导致「检查更新」也被阻塞——尺寸校验应由客户端下载后按 sha256 做,这里不拦。
 	manifest.SizeBytes = info.Size()
-	manifest.APKURL = s.appDownloadURL(r)
+	manifest.APKURL = s.appDownloadURL(r, variant)
 	return manifest, nil
 }
 
-func (s *mediaServer) appUpdateAPKPath(manifest AppUpdateManifest) string {
+func (s *mediaServer) appUpdateAPKPath(manifest AppUpdateManifest, variant string) string {
 	name := filepath.Base(strings.TrimSpace(manifest.APKFilename))
 	if name == "." || name == string(filepath.Separator) || name == "" {
-		return s.config.AppUpdateAPKPath
+		return s.appUpdateAPKManifestPath(variant)
 	}
 	return filepath.Join(filepath.Dir(s.config.AppUpdateAPKPath), name)
 }
@@ -183,9 +225,10 @@ func validateAppUpdateManifest(manifest AppUpdateManifest) error {
 	return nil
 }
 
-func (s *mediaServer) appDownloadURL(r *http.Request) string {
-	if base := strings.TrimRight(s.config.PublicBaseURL, "/"); base != "" {
-		return base + "/app/download"
+func (s *mediaServer) appDownloadURL(r *http.Request, variant string) string {
+	baseURL := s.config.PublicBaseURL
+	if base := strings.TrimRight(baseURL, "/"); base != "" {
+		return base + "/app/download?variant=" + variant
 	}
 	scheme := "https"
 	if r.TLS != nil {
@@ -203,5 +246,5 @@ func (s *mediaServer) appDownloadURL(r *http.Request) string {
 	if prefix == "" {
 		prefix = "/api"
 	}
-	return scheme + "://" + host + prefix + "/app/download"
+	return scheme + "://" + host + prefix + "/app/download?variant=" + variant
 }

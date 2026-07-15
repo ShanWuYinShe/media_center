@@ -1,5 +1,6 @@
 package com.example.mediacenter.data
 
+import com.example.mediacenter.BuildConfig
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.net.AppHttpClient
 import kotlin.coroutines.resume
@@ -11,7 +12,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.Call
 import okhttp3.Callback
-import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -19,23 +20,22 @@ import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
-import java.util.concurrent.TimeUnit
+import java.time.Duration
 import javax.net.ssl.SSLException
 
 class MediaApi(
     private val baseUrl: String,
     private val client: OkHttpClient = AppHttpClient.newBuilder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(Duration.ofSeconds(15))
+        .readTimeout(Duration.ofSeconds(15))
         .build(),
     private val json: Json = Json {
         ignoreUnknownKeys = true
-        explicitNulls = false
     },
 ) {
-    private val apiRoot = HttpUrl.parse(baseUrl)
+    private val apiRoot = baseUrl.toHttpUrlOrNull()
         ?: throw IllegalArgumentException("MEDIA_SERVER_URL must be a valid URL")
-    private val baseUrlIncludesApiPrefix = apiRoot.pathSegments().any { it.isNotEmpty() }
+    private val baseUrlIncludesApiPrefix = apiRoot.pathSegments.any { it.isNotEmpty() }
 
     suspend fun providers(): ProvidersResponse = get(listOf("providers"))
 
@@ -60,20 +60,14 @@ class MediaApi(
     suspend fun appUpdate(currentVersionCode: Int): AppUpdateInfo? {
         val body = getOptionalBody(
             pathSegments = listOf("app", "update"),
-            query = mapOf("versionCode" to currentVersionCode.toString()),
+            query = mapOf(
+                "versionCode" to currentVersionCode.toString(),
+                "variant" to BuildConfig.APP_VARIANT,
+            ),
         ) ?: return null
         return withContext(Dispatchers.Default) {
             json.decodeFromString<AppUpdateInfo>(body)
         }
-    }
-
-    fun resolveApiUrl(pathSegments: List<String>): String {
-        val builder = apiRoot.newBuilder()
-        if (!baseUrlIncludesApiPrefix) {
-            builder.addPathSegment("api")
-        }
-        pathSegments.forEach(builder::addPathSegment)
-        return builder.build().toString()
     }
 
     private suspend inline fun <reified T> get(
@@ -85,7 +79,7 @@ class MediaApi(
         val startedAt = System.currentTimeMillis()
 
         var attempt = 0
-        var lastError: Throwable? = null
+        var lastError: Throwable?
         AppLog.d("Api", "GET $label query=${query.keys}")
         while (true) {
             try {
@@ -117,7 +111,7 @@ class MediaApi(
             }
         }
         val category = classifyNetworkError(lastError)
-        AppLog.w("Api", "GET $label failed after ${attempt} retries in ${System.currentTimeMillis() - startedAt}ms ($category)", lastError)
+        AppLog.w("Api", "GET $label failed after $attempt retries in ${System.currentTimeMillis() - startedAt}ms ($category)", lastError)
         throw IOException(friendlyNetworkMessage(category), lastError)
     }
 
@@ -135,18 +129,18 @@ class MediaApi(
         val call = client.newCall(request)
         continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
-            override fun onFailure(call: Call, error: IOException) {
+            override fun onFailure(call: Call, e: IOException) {
                 if (continuation.isActive) {
-                    continuation.resumeWithException(error)
+                    continuation.resumeWithException(e)
                 }
             }
 
             override fun onResponse(call: Call, response: Response) {
                 try {
                     response.use {
-                        val body = it.body()?.string() ?: throw IOException("响应体为空")
+                        val body = it.body.string()
                         if (!it.isSuccessful) {
-                            throw apiException(it.code(), body)
+                            throw apiException(it.code, body)
                         }
                         if (continuation.isActive) {
                             continuation.resume(body)
@@ -170,20 +164,20 @@ class MediaApi(
             val call = client.newCall(request)
             continuation.invokeOnCancellation { call.cancel() }
             call.enqueue(object : Callback {
-                override fun onFailure(call: Call, error: IOException) {
-                    if (continuation.isActive) continuation.resumeWithException(error)
+                override fun onFailure(call: Call, e: IOException) {
+                    if (continuation.isActive) continuation.resumeWithException(e)
                 }
 
                 override fun onResponse(call: Call, response: Response) {
                     try {
                         response.use {
-                            if (it.code() == 204) {
+                            if (it.code == 204) {
                                 if (continuation.isActive) continuation.resume(null)
                                 return
                             }
-                            val body = it.body()?.string() ?: throw IOException("响应体为空")
+                            val body = it.body.string()
                             if (!it.isSuccessful) {
-                                throw apiException(it.code(), body)
+                                throw apiException(it.code, body)
                             }
                             if (continuation.isActive) continuation.resume(body)
                         }
@@ -202,7 +196,7 @@ class MediaApi(
         return ApiException(
             statusCode = statusCode,
             errorCode = apiError?.code,
-            errorMessage = apiError?.message ?: statusCode.toFriendlyHttpMessage(),
+            message = apiError?.message ?: statusCode.toFriendlyHttpMessage(),
         )
     }
 
@@ -285,14 +279,11 @@ private fun friendlyNetworkMessage(category: NetworkErrorCategory): String = whe
 class ApiException(
     val statusCode: Int,
     val errorCode: String?,
-    errorMessage: String,
-) : Exception(errorMessage) {
+    override val message: String,
+) : Exception(message) {
     val isTransient: Boolean
         get() = statusCode.isTransientHttpStatusCode()
 }
-
-internal val Throwable.isNoPlayableStream: Boolean
-    get() = this is ApiException && errorCode == "NO_PLAYABLE_STREAM"
 
 @Serializable
 private data class ApiErrorEnvelope(

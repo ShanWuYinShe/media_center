@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!-- Android TV apps only require xhdpi assets; lower/higher densities
+         are not needed for the TV form factor. -->
+    <issue id="IconDensities" severity="informational" />
+</lint>
