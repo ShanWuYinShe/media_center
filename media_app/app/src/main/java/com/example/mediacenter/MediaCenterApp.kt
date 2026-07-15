@@ -1,7 +1,7 @@
 package com.example.mediacenter
 
+import android.app.Application
 import android.os.Build
-import androidx.multidex.MultiDexApplication
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.net.AppHttpClient
 
@@ -10,7 +10,7 @@ import com.example.mediacenter.net.AppHttpClient
  * 把崩溃栈同步落盘后再交还系统默认处理器(保留正常的崩溃/重启行为)。
  * 这样「播放异常导致进程被杀、重启回首页」这类问题能在重启后从日志文件里查到根因。
  */
-class MediaCenterApp : MultiDexApplication() {
+class MediaCenterApp : Application() {
     override fun onCreate() {
         super.onCreate()
         AppLog.init(this)
