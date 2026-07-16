@@ -139,8 +139,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
-    implementation("androidx.media3:media3-ui:$media3Version") // TODO: UI 全量迁移 Compose 后移除
-    implementation("androidx.recyclerview:recyclerview:1.4.0") // TODO: UI 全量迁移 Compose 后移除
+    implementation("androidx.media3:media3-ui:$media3Version")
     implementation("com.squareup.okhttp3:okhttp:5.4.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
