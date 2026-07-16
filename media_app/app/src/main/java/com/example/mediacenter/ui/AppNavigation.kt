@@ -5,6 +5,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.mediacenter.ui.home.HomeScreen
+import com.example.mediacenter.ui.player.PlayerScreen
 
 object Routes {
     const val HOME = "home"
@@ -25,6 +26,10 @@ fun AppNavigation() {
                 onVideoClick = { navController.navigate(Routes.player(it)) },
                 onSearchClick = { navController.navigate(Routes.SEARCH) },
             )
+        }
+        composable(Routes.PLAYER) { backStackEntry ->
+            val videoId = backStackEntry.arguments?.getString("videoId") ?: return@composable
+            PlayerScreen(videoId = videoId, onBack = { navController.popBackStack() })
         }
     }
 }
