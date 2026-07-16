@@ -19,7 +19,7 @@ import com.example.mediacenter.ui.theme.TextPrimary
 fun CategoryRow(
     categoryName: String,
     videos: List<VideoSummary>,
-    onVideoClick: (String) -> Unit,
+    onVideoClick: (VideoSummary) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.padding(vertical = 12.dp)) {
@@ -36,7 +36,7 @@ fun CategoryRow(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             items(videos, key = { it.id }) { video ->
-                VideoCard(video = video, onClick = { onVideoClick(video.id) })
+                VideoCard(video = video, onClick = { onVideoClick(video) })
             }
         }
     }

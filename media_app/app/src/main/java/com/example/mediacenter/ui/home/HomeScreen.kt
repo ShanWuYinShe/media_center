@@ -8,13 +8,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.components.TopBar
 
 @Composable
 fun HomeScreen(
-    onVideoClick: (String) -> Unit,
+    onVideoClick: (VideoSummary) -> Unit,
     onSearchClick: () -> Unit,
     viewModel: HomeViewModel = viewModel(),
 ) {
