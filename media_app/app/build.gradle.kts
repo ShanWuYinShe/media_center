@@ -12,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.mediacenter"
-        minSdk = 21
+        minSdk = 23
         targetSdk = 37
         // 版本号由 git tag 驱动:versionName 从最近的 v* tag 读取(如 v1.1.0 → 1.1.0),
         // tag 之后若有新 commit 则带 -dev.N 后缀(如 1.1.0-dev.3)标识未发布。
