@@ -61,13 +61,18 @@ fun SearchScreen(
             else -> {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(state.results, key = { it.id }) { video ->
-                        Text(
-                            video.title,
-                            color = TextPrimary,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(8.dp),
-                        )
+                        androidx.tv.material3.Card(
+                            onClick = { onVideoClick(video) },
+                            modifier = Modifier.fillMaxWidth().requiredHeight(48.dp),
+                        ) {
+                            Text(
+                                video.title,
+                                color = TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            )
+                        }
                     }
                 }
             }
