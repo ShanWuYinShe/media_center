@@ -50,8 +50,8 @@ func requestLogMiddleware(next http.Handler) http.Handler {
 // statusRecorder 包裹 http.ResponseWriter 以捕获状态码与已写字节数。
 type statusRecorder struct {
 	http.ResponseWriter
-	status     int
-	bytes      int
+	status      int
+	bytes       int
 	wroteHeader bool
 }
 

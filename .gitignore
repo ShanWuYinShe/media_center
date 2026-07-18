@@ -53,3 +53,6 @@ media_server/media_server
 
 # ----- Claude Code Worktree 元数据 -----
 .claude/worktrees/
+
+# ----- AI 会话临时工作文件 -----
+.superpowers/
