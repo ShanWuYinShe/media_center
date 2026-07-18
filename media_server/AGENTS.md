@@ -1,5 +1,7 @@
 # Media Center Media Server
 
+> ⚠️ 本仓库以 git submodule 形式引入 `workwork`。修改本文件后，需同步更新 `workwork/services/media_center/media_server/` 下同名文件。
+
 `media_center` 的合规公开视频聚合后端：Go HTTP 服务，对外只提供目录服务。
 
 API 契约见 @API.md。

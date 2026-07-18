@@ -1,5 +1,7 @@
 # Media Center VOD Extractor
 
+> ⚠️ 本仓库以 git submodule 形式引入 `workwork`。修改本文件后，需同步更新 `workwork/services/media_center/vod_extractor/` 下同名文件。
+
 内部点播解析服务：Python stdlib HTTP server + yt-dlp。只在 Docker `internal_docker` 网络中供 `media_server` 调用。
 
 ## 约束
