@@ -2,7 +2,9 @@
 
 合规公开视频媒体中心：Android TV 客户端（`media_app`）+ Go 聚合后端（`media_server`）+ 内部点播解析服务（`vod_extractor`）。
 
-> 通用约束（Git 规范、Commit 格式、验证流程、工具链偏好、JDK 配置、Docker 等）以全局 `~/.claude/AGENTS.md` 为准，本文件只做项目特有补充，不得放宽或违背全局约束。
+> 通用约束（Git 规范、Commit 格式、验证流程、工具链偏好、JDK 配置、Docker 等）以全局 `~/AGENTS.md` 为准，本文件只做项目特有补充，不得放宽或违背全局约束。
+>
+> ⚠️ 本仓库以 git submodule 形式引入 `workwork`。修改本文件内容后，需同步更新 `workwork/services/media_center/` 下同名文件，否则内外版本会漂移。
 
 ## 仓库结构
 
@@ -35,7 +37,6 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
   - 命令：`ssh workwork-server "cd service && cat > .wework/generated/media_center/app-update.json << 'EOF' { ... } EOF"`
 - **技术栈**：Compose + TV Material + Media3 ExoPlayer；网络：OkHttp；序列化：kotlinx-serialization；图片：Coil。
 - **服务端地址**：默认 `https://yinghuoren.com/api/media`；如需覆盖，设置 `MEDIA_SERVER_URL`。
-- **JDK**：本机无独立 JDK，需用 Android Studio 自带 JBR（全局 `~/.claude/AGENTS.md` 有详细说明）。
 
 ## media_server
 
