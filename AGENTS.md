@@ -5,6 +5,8 @@
 > 通用约束（Git 规范、Commit 格式、验证流程、工具链偏好、JDK 配置、Docker 等）以全局 `~/.config/opencode/AGENTS.md` 为准，本文件只做项目特有补充，不得放宽或违背全局约束。
 >
 > ⚠️ 本目录是 `media_center` 仓库的 git submodule。修改本文件后，需同步更新 `media_center` 仓库根目录的同名文件，否则内外版本会漂移。
+>
+> **AI Agent 工作目录**：所有 AI agent 工作期间产生的中间文件写入项目根 `.workwork/`（已 `.gitignore`）。
 
 ## 仓库结构
 

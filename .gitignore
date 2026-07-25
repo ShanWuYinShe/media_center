@@ -51,6 +51,9 @@ media_server/data/
 # ----- media_server 编译产物(go build 在包目录生成的同名二进制) -----
 media_server/media_server
 
+# ----- AI Agent 工作目录 -----
+.workwork/
+
 # ----- Claude Code Worktree 元数据 -----
 .claude/worktrees/
 
