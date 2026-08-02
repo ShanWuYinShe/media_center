@@ -1,6 +1,6 @@
 # Media Center Media Server
 
-> ⚠️ 本目录是 `media_center` 仓库的 git submodule。修改本文件后，需同步更新 `media_center` 仓库 `media_server/` 下的同名文件。
+ 本目录是 `media_center` 仓库的 git submodule。修改本文件后，需同步更新 `media_center` 仓库 `media_server/` 下的同名文件。
 
 `media_center` 的合规公开视频聚合后端：Go HTTP 服务，对外只提供目录服务。
 
@@ -15,7 +15,7 @@ gofmt -l .            # 格式检查（列出不合规文件）
 go test ./...         # 单元测试
 ```
 
-> HTTP 服务监听 `PORT`（容器内默认 8787）。
+HTTP 服务监听 `PORT`（容器内默认 8787）。
 
 ## 架构
 
