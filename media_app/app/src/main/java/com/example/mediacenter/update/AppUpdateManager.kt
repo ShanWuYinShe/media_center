@@ -24,6 +24,10 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
+/**
+ * App 内更新:检查(查版本)→ 用户确认 → 下载(带进度)→ 校验 SHA256 → 启动系统安装器。
+ * 下载前不弹窗确认;版本检查与下载分离,由调用方(UI)控制流程。
+ */
 class AppUpdateManager(
     private val context: Context,
     private val api: MediaApi,
@@ -31,33 +35,46 @@ class AppUpdateManager(
 ) {
     private var installReceiver: BroadcastReceiver? = null
     private val installAction = "${context.packageName}.INSTALL_RESULT"
-    suspend fun checkAndDownload(): AppUpdateResult {
+
+    /** 第一步:检查是否有新版本,只发网络请求,不下载。 */
+    suspend fun check(): UpdateCheckResult {
         val update = try {
             api.appUpdate(BuildConfig.VERSION_CODE)
         } catch (error: Throwable) {
             AppLog.w("Update", "check failed: ${error.message}", error)
-            return AppUpdateResult.Failed("检查更新失败，请稍后重试")
-        } ?: return AppUpdateResult.NoUpdate
-
-        if (update.versionCode <= BuildConfig.VERSION_CODE) return AppUpdateResult.NoUpdate
-        AppLog.i("Update", "new version ${update.versionName} (${update.versionCode}) found")
-        val apk = try {
-            downloadAndVerify(update)
-        } catch (error: Throwable) {
-            AppLog.w("Update", "download failed: ${error.message}", error)
-            return AppUpdateResult.Failed("下载更新失败，请稍后重试")
+            return UpdateCheckResult.Failed("检查更新失败，请稍后重试")
         }
-        return AppUpdateResult.ReadyToInstall(update, apk)
+        return if (update == null || update.versionCode <= BuildConfig.VERSION_CODE) {
+            UpdateCheckResult.NoUpdate
+        } else {
+            AppLog.i("Update", "new version ${update.versionName} (${update.versionCode}) found")
+            UpdateCheckResult.UpdateAvailable(update)
+        }
     }
 
-    private suspend fun downloadAndVerify(update: AppUpdateInfo): File = withContext(Dispatchers.IO) {
+    /** 第二步:下载并校验更新包,onProgress 回调 0f..1f 进度。 */
+    suspend fun download(
+        update: AppUpdateInfo,
+        onProgress: (Float) -> Unit = {},
+    ): UpdateDownloadResult = withContext(Dispatchers.IO) {
+        try {
+            val apk = downloadAndVerify(update, onProgress)
+            UpdateDownloadResult.Ready(update, apk)
+        } catch (error: Throwable) {
+            AppLog.w("Update", "download failed: ${error.message}", error)
+            UpdateDownloadResult.Failed("下载更新失败，请稍后重试")
+        }
+    }
+
+    private suspend fun downloadAndVerify(update: AppUpdateInfo, onProgress: (Float) -> Unit): File {
         val dir = File(context.cacheDir, "app-updates").apply { mkdirs() }
         val target = File(dir, "media-center-${update.versionCode}.apk")
         if (target.isFile &&
             target.length() == update.sizeBytes &&
             target.sha256().equals(update.sha256, ignoreCase = true)
         ) {
-            return@withContext target
+            onProgress(1f)
+            return target
         }
 
         val request = Request.Builder()
@@ -69,8 +86,19 @@ class AppUpdateManager(
                 throw IllegalStateException("download returned ${response.code}")
             }
             val body = response.body
+            val totalBytes = body.contentLength()
             FileOutputStream(target).use { out ->
-                body.byteStream().use { input -> input.copyTo(out) }
+                body.byteStream().use { input ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var copied = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        out.write(buffer, 0, read)
+                        copied += read
+                        if (totalBytes > 0) onProgress((copied.toFloat() / totalBytes).coerceIn(0f, 1f))
+                    }
+                }
             }
         }
         if (target.length() != update.sizeBytes) {
@@ -81,7 +109,7 @@ class AppUpdateManager(
             target.delete()
             throw IllegalStateException("apk checksum mismatch")
         }
-        target
+        return target
     }
 
     fun launchInstaller(apk: File): InstallLaunchResult {
@@ -207,10 +235,15 @@ class AppUpdateManager(
     }
 }
 
-sealed class AppUpdateResult {
-    object NoUpdate : AppUpdateResult()
-    data class ReadyToInstall(val update: AppUpdateInfo, val apk: File) : AppUpdateResult()
-    data class Failed(val message: String) : AppUpdateResult()
+sealed class UpdateCheckResult {
+    object NoUpdate : UpdateCheckResult()
+    data class UpdateAvailable(val update: AppUpdateInfo) : UpdateCheckResult()
+    data class Failed(val message: String) : UpdateCheckResult()
+}
+
+sealed class UpdateDownloadResult {
+    data class Ready(val update: AppUpdateInfo, val apk: File) : UpdateDownloadResult()
+    data class Failed(val message: String) : UpdateDownloadResult()
 }
 
 sealed class InstallLaunchResult {

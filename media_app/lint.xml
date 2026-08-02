@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- 项目全局接受 Media3 的 @UnstableApi(PlayerScreen/CappedLoadErrorHandlingPolicy 均已用 @OptIn 显式标注),
+         lint 的 UnsafeOptInUsageError 检查无法解析 Kotlin @OptIn 引用, 通过官方项目级 opt-in 选项声明。 -->
+    <issue id="UnsafeOptInUsageError">
+        <option name="opt-in" value="androidx.media3.common.util.UnstableApi" />
+    </issue>
+</lint>

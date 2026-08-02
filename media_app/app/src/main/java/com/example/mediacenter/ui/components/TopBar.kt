@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -14,13 +15,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.mediacenter.ui.theme.TextPrimary
 
 @Composable
 fun TopBar(
     onSearchClick: () -> Unit,
+    onSettingsClick: () -> Unit,
     modifier: Modifier = Modifier,
+    providerLabel: String? = null,
+    onProviderClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
@@ -28,11 +33,33 @@ fun TopBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text("Media Center", color = TextPrimary, style = MaterialTheme.typography.headlineMedium)
-        IconButton(
-            onClick = onSearchClick,
-            modifier = Modifier.requiredSize(48.dp),
-        ) {
-            Icon(Icons.Default.Search, contentDescription = "\u641C\u7D22", tint = TextPrimary)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // 视频源入口:仅当存在多个 provider 时显示
+            if (providerLabel != null && onProviderClick != null) {
+                IconButton(
+                    onClick = onProviderClick,
+                    modifier = Modifier.requiredSize(48.dp),
+                ) {
+                    Text(
+                        text = providerLabel,
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            IconButton(
+                onClick = onSettingsClick,
+                modifier = Modifier.requiredSize(48.dp),
+            ) {
+                Icon(Icons.Default.Settings, contentDescription = "设置", tint = TextPrimary)
+            }
+            IconButton(
+                onClick = onSearchClick,
+                modifier = Modifier.requiredSize(48.dp),
+            ) {
+                Icon(Icons.Default.Search, contentDescription = "搜索", tint = TextPrimary)
+            }
         }
     }
 }

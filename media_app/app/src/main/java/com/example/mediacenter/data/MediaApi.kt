@@ -13,8 +13,10 @@ import kotlinx.serialization.json.Json
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
 import java.net.ConnectException
@@ -67,6 +69,28 @@ class MediaApi(
         ) ?: return null
         return withContext(Dispatchers.Default) {
             json.decodeFromString<AppUpdateInfo>(body)
+        }
+    }
+
+    /** 崩溃上报:发一次,无论成败都不重试(避免启动时卡网络)。成功返回 true。 */
+    suspend fun reportCrash(jsonBody: String): Boolean {
+        val request = buildRequest(listOf("crash", "report"), query = emptyMap())
+            .newBuilder()
+            .post(jsonBody.toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .build()
+        return suspendCancellableCoroutine { continuation ->
+            val call = client.newCall(request)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    continuation.resume(false)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    response.close()
+                    continuation.resume(response.isSuccessful)
+                }
+            })
         }
     }
 

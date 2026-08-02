@@ -54,29 +54,8 @@ data class VideosResponse(
     val items: List<VideoSummary>? = null,
 )
 
-// SearchResponse 是 Repository 兼容包装:新 server API 没有 search endpoint,
-// Repository 用 categoryVideos 构造兼容结构,让 ViewModel 的分页逻辑不改。
-@Serializable
-data class SearchResponse(
-    val query: String = "",
-    val page: Int = 1,
-    val pageSize: Int = 20,
-    val total: Int = 0,
-    val items: List<VideoSummary> = emptyList(),
-)
-
-// VideoDetails 是 VideoSummary 的 UI 扩展:加上播放选项(BilibiliApi 解析后填入)。
-// 不再从 server 拿——server 只提供目录数据,播放地址由 App 端按 provider 自己解析。
-@Serializable
-data class VideoDetails(
-    val id: String,
-    val title: String,
-    val description: String? = null,
-    val thumbnailUrl: String? = null,
-    val durationSeconds: Long? = null,
-    val playbackOptions: List<PlaybackOption> = emptyList(),
-)
-
+// PlaybackOption 表示一条真实可播放的流(BilibiliApi 按指定 qn 解析后产出)。
+// 每个选项的 url 都是对应 qn 的实际流地址;切清晰度需按新 qn 重新解析,而非复用旧 url。
 @Serializable
 data class PlaybackOption(
     val id: String,
@@ -100,10 +79,17 @@ data class PlaybackPages(
     val currentPageDurationSeconds: Long? get() = pageDurations.getOrNull(currentPage)
 }
 
-// PlaybackResult 是解析播放地址的完整结果:播放选项列表 + 多P信息。
+// 视频可切换的清晰度列表(标签 + qn 编码),由 playurl 响应的 accept_quality 派生。
+data class QualityOption(
+    val qn: Int,
+    val label: String,
+)
+
+// PlaybackResult 是解析播放地址的完整结果:当前清晰度的真实流 + 多P信息 + 可切换清晰度列表。
 data class PlaybackResult(
     val options: List<PlaybackOption>,
     val pages: PlaybackPages = PlaybackPages(),
+    val availableQualities: List<QualityOption> = emptyList(),
 )
 
 @Serializable

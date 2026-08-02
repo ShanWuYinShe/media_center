@@ -58,6 +58,20 @@ fun SearchScreen(
         when {
             state.isSearching -> LoadingIndicator()
             state.error != null -> ErrorView(state.error!!, modifier = Modifier.fillMaxSize())
+            state.query.length < 2 -> {
+                Text(
+                    "\u8F93\u5165\u81F3\u5C11 2 \u4E2A\u5B57\u7B26\u641C\u7D22\u89C6\u9891",
+                    color = TextTertiary,
+                    modifier = Modifier.padding(vertical = 24.dp),
+                )
+            }
+            state.results.isEmpty() -> {
+                Text(
+                    "\u672A\u627E\u5230\u76F8\u5173\u89C6\u9891",
+                    color = TextTertiary,
+                    modifier = Modifier.padding(vertical = 24.dp),
+                )
+            }
             else -> {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(state.results, key = { it.id }) { video ->

@@ -2,15 +2,24 @@ package com.example.mediacenter
 
 import android.app.Application
 import android.os.Build
+import com.example.mediacenter.crash.CrashReporter
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.net.AppHttpClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * 自定义 Application:尽早初始化文件日志并安装全局未捕获异常处理器,
  * 把崩溃栈同步落盘后再交还系统默认处理器(保留正常的崩溃/重启行为)。
- * 这样「播放异常导致进程被杀、重启回首页」这类问题能在重启后从日志文件里查到根因。
+ * 同时把待上报的崩溃文件 POST 到 server(/api/crash/report)。
+ * 这样「播放异常导致进程被杀、重启回首页」这类问题能在重启后从日志文件里查到根因,
+ * 并汇总到服务端便于远程诊断。
  */
 class MediaCenterApp : Application() {
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override fun onCreate() {
         super.onCreate()
         AppLog.init(this)
@@ -28,6 +37,7 @@ class MediaCenterApp : Application() {
         // HttpsURLConnection)的播放链路,避免时钟不准的设备在播放时握手失败。须在任何网络请求前。
         AppHttpClient.installHttpsUrlConnectionDefault()
         installCrashHandler()
+        uploadPendingCrashReport()
     }
 
     private fun installCrashHandler() {
@@ -35,8 +45,14 @@ class MediaCenterApp : Application() {
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             runCatching {
                 AppLog.logFatalBlocking("Crash", "Uncaught exception on thread ${thread.name}", throwable)
+                CrashReporter.write(this, throwable)
             }
             previous?.uncaughtException(thread, throwable)
         }
+    }
+
+    /** 启动时异步上报上次崩溃(失败保留,下次启动再试),不阻塞启动流程。 */
+    private fun uploadPendingCrashReport() {
+        appScope.launch { CrashReporter.uploadPending(applicationContext) }
     }
 }

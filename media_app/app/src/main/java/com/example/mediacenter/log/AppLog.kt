@@ -119,4 +119,24 @@ object AppLog {
             }
         }
     }
+
+    /** 清除全部日志文件(设置页"清除数据")。 */
+    fun clear() {
+        runCatching {
+            fileExecutor.execute {
+                synchronized(fileLock) {
+                    logFile?.delete()
+                    rotatedFile?.delete()
+                }
+            }
+        }
+    }
+
+    /** 读取日志尾部若干行(设置页查看日志,便于远程诊断崩溃)。 */
+    fun tail(maxLines: Int = 200): String {
+        val target = logFile ?: return ""
+        return runCatching {
+            target.readLines().takeLast(maxLines).joinToString("\n")
+        }.getOrDefault("")
+    }
 }

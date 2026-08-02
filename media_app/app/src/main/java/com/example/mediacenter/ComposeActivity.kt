@@ -1,5 +1,8 @@
 package com.example.mediacenter
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -15,6 +18,12 @@ class ComposeActivity : ComponentActivity() {
             MediaCenterTheme {
                 AppNavigation()
             }
+        }
+        // Android 13+ 需运行时授予通知权限,系统媒体栏/播放通知才可见
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
         }
     }
 }
