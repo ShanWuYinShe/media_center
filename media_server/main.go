@@ -21,6 +21,7 @@ type mediaServer struct {
 	categoriesByID map[string]ContentCategory
 	catalog        *Catalog
 	credentials    []ProviderCredential
+	crashLimiter   *crashRateLimiter
 }
 
 func main() {
@@ -124,6 +125,8 @@ func (s *mediaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleAppUpdate(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/app/download":
 		s.handleAppDownload(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/crash/report":
+		s.handleCrashReport(w, r)
 	default:
 		s.writeError(w, &apiError{
 			Status:  http.StatusNotFound,

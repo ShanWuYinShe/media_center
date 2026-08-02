@@ -96,6 +96,24 @@ type VideoSummary = {
 
 下载 admin 发布并审查过的 Android TV App APK。
 
+### `POST /crash/report`
+
+接收 App 端崩溃上报，落盘到 `MEDIA_SERVER_CRASH_DIR`（默认 `data/crash-reports/crash.log`，JSONL，超 8MB 滚动）。请求体（JSON，≤512KB）：
+
+```json
+{
+  "packageName": "com.example.mediacenter",
+  "appVersionName": "1.2.0",
+  "appVersionCode": 1002000,
+  "osVersion": "Android 13",
+  "device": "Xiaomi/小米电视",
+  "stackTrace": "java.lang.NullPointerException: ...",
+  "occurredAt": "2026-08-01T04:00:00Z"
+}
+```
+
+成功返回 `{"status":"ok"}`；`stackTrace` 为空或 JSON 非法返回 400；同一 IP 每分钟超过 10 条返回 429。
+
 ## 部署相关
 
 - `MEDIA_SERVER_PUBLIC_URL`（可选）：对外可见的 API 基址（如 `https://yinghuoren.com/api/media`）。位于反代后面时必须设置。
@@ -104,5 +122,5 @@ type VideoSummary = {
 ## App 侧必须遵守
 
 1. `VideoSummary.id` 是 catalog 的 nativeId（如 BV1xxx），不是 server 加密 ID。App 直接用它调用本地解析器。
-2. 当前仅 `provider=bilibili` 被支持。App 端实现 `BilibiliApi`（WBI 签名 + view + playurl）拿真实播放直链。
+2. App 端支持 provider 切换 UI（首页顶栏，`/api/providers` 返回多个时显示）。播放解析按 provider 分发：目前仅 `bilibili` 有实现（`BilibiliApi`：WBI 签名 + view + playurl 拿真实播放直链）；其他 provider 在 App 端返回"暂不支持在线播放"的明确错误，等对应解析器接入后再放开。
 3. 缩略图 URL 是上游原始地址（如 B 站 CDN 链接），App 直连时需带 `Referer: https://www.bilibili.com` 请求头。

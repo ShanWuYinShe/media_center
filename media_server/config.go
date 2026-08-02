@@ -22,6 +22,8 @@ type AppConfig struct {
 	InternalToken         string
 	AppUpdateManifestPath string
 	AppUpdateAPKPath      string
+	// 崩溃上报落盘目录(JSONL)。为空时默认 data/crash-reports。
+	CrashReportDir string
 }
 
 // contentCategories.json 的原始结构。sources 字段保留解析(向后兼容旧配置),
@@ -62,6 +64,7 @@ func loadAppConfig() (AppConfig, error) {
 		InternalToken:         strings.TrimSpace(os.Getenv("MEDIA_SERVER_INTERNAL_TOKEN")),
 		AppUpdateManifestPath: getenv("MEDIA_SERVER_APP_UPDATE_MANIFEST", "/config/app-update.json"),
 		AppUpdateAPKPath:      getenv("MEDIA_SERVER_APP_UPDATE_APK", "/config/media-center-app.apk"),
+		CrashReportDir:        getenv("MEDIA_SERVER_CRASH_DIR", "data/crash-reports"),
 	}
 	return cfg, nil
 }
