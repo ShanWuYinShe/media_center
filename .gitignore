@@ -54,8 +54,8 @@ media_server/media_server
 # ----- AI Agent 工作目录 -----
 .workwork/
 
-# ----- Claude Code Worktree 元数据 -----
-.claude/worktrees/
+# ----- AI Worktree -----
+.worktrees/
 
 # ----- AI 会话临时工作文件 -----
 .superpowers/
