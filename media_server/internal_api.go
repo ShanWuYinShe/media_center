@@ -83,6 +83,8 @@ type internalImportItem struct {
 	ThumbnailURL    string   `json:"thumbnailUrl,omitempty"`
 	SourceURL       string   `json:"sourceUrl,omitempty"`
 	Score           int      `json:"score,omitempty"`
+	// Reason 是候选备注/AI 分析理由(可空),写入 category_members.reason 供人工审校参考。
+	Reason string `json:"reason,omitempty"`
 	// Status 是目标审校状态:空或 "pending" 记为待审,"approved" 直接收录上线(用于"已审核
 	// 视频集一步上线")。只对新成员生效,已存在的成员状态不会被覆盖。
 	Status string `json:"status,omitempty"`
@@ -151,6 +153,7 @@ func (s *mediaServer) handleInternalImport(w http.ResponseWriter, r *http.Reques
 				SourceURL:    item.SourceURL,
 			},
 			Score:  item.Score,
+			Reason: item.Reason,
 			Status: status,
 			Pinned: item.Pinned,
 			Rank:   item.Rank,
@@ -218,10 +221,12 @@ type internalReviewItem struct {
 	ThumbnailURL    string   `json:"thumbnailUrl,omitempty"`
 	SourceURL       string   `json:"sourceUrl,omitempty"`
 	Score           int      `json:"score"`
-	Pinned          bool     `json:"pinned"`
-	Rank            *int64   `json:"rank,omitempty"`
-	Reviewer        string   `json:"reviewer,omitempty"`
-	ReviewedAt      string   `json:"reviewedAt,omitempty"`
+	// Reason 是候选备注/AI 分析理由，供人工审校参考。
+	Reason     string `json:"reason,omitempty"`
+	Pinned     bool   `json:"pinned"`
+	Rank       *int64 `json:"rank,omitempty"`
+	Reviewer   string `json:"reviewer,omitempty"`
+	ReviewedAt string `json:"reviewedAt,omitempty"`
 }
 
 func toInternalReviewItem(it PendingReviewItem) internalReviewItem {
@@ -229,7 +234,7 @@ func toInternalReviewItem(it PendingReviewItem) internalReviewItem {
 		Provider: it.Provider, NativeID: it.NativeID, CategoryID: it.CategoryID, Status: it.Status,
 		Title: it.Title, Description: it.Description, Creators: it.Creators,
 		DurationSeconds: it.DurationSec, Year: it.Year, ThumbnailURL: it.ThumbnailURL, SourceURL: it.SourceURL,
-		Score: it.Score, Pinned: it.Pinned, Reviewer: it.Reviewer, ReviewedAt: it.ReviewedAt,
+		Score: it.Score, Reason: it.Reason, Pinned: it.Pinned, Reviewer: it.Reviewer, ReviewedAt: it.ReviewedAt,
 	}
 	if it.Rank.Valid {
 		r := it.Rank.Int64

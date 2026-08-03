@@ -45,6 +45,9 @@ type CatalogImportItem struct {
 	Score      int
 	// Status 是导入时的目标审校状态:空或 "pending" 记为待审,"approved" 直接收录上线。
 	Status string
+	// Reason 是该候选的审校备注/AI 分析理由(如 "AI: 标题与内容不符")。
+	// 写入 category_members.reason 列，供人工审核时参考；不参与任何自动筛选。
+	Reason string
 	// Pinned/Rank 为可选的展示次序控制,主要用于 export→import 的忠实回放(把另一处导出的
 	// 置顶/人工序原样带过来)。nil 表示不设置(置顶=false,序=NULL)。只对新成员生效。
 	Pinned *bool
@@ -322,11 +325,13 @@ ON CONFLICT(provider, native_id) DO UPDATE SET
 		if item.Rank != nil {
 			rankVal = *item.Rank
 		}
+		// reason 透传候选备注/AI 分析理由(可空),写入 category_members.reason 供审校参考。
+		reasonVal := strings.TrimSpace(item.Reason)
 		res, execErr := tx.Exec(`
-INSERT INTO category_members (category_id, provider, native_id, status, score, pinned, rank, reviewer, reviewed_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO category_members (category_id, provider, native_id, status, score, pinned, rank, reviewer, reviewed_at, reason)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(category_id, provider, native_id) DO NOTHING`,
-			categoryID, provider, nativeID, status, item.Score, pinnedVal, rankVal, reviewerVal, reviewedAt,
+			categoryID, provider, nativeID, status, item.Score, pinnedVal, rankVal, reviewerVal, reviewedAt, reasonVal,
 		)
 		if execErr != nil {
 			err = fmt.Errorf("import member %d: %w", i, execErr)
