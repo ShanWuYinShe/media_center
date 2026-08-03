@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,11 +45,15 @@ import com.example.mediacenter.ui.theme.CardGray
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.TextSecondary
 import com.example.mediacenter.ui.theme.TextTertiary
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     BackHandler(onBack = onBack)
 
     var feedback by remember { mutableStateOf<String?>(null) }
@@ -173,8 +178,11 @@ fun SettingsScreen(onBack: () -> Unit) {
                 ActionRow(
                     label = "查看日志",
                     onClick = {
-                        logs = AppLog.tail(300)
-                        showLogs = true
+                        // 读日志是磁盘 I/O，移出主线程避免卡顿。
+                        scope.launch {
+                            logs = withContext(Dispatchers.IO) { AppLog.tail(300) }
+                            showLogs = true
+                        }
                     },
                 )
             }

@@ -3,9 +3,8 @@ package com.example.mediacenter.ui.home
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredHeight
-import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,9 +30,12 @@ fun VideoCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // 不用 requiredWidth/requiredHeight 钉死尺寸——会让卡片在 CategoryVideosScreen
+    // 的 GridCells.Adaptive(280.dp) 里无法 fillMaxWidth，4K/平板上也会偏小。
+    // 改用 aspectRatio 让卡片宽高比固定(16:10)，宽度交给父网格分配。
     Card(
         onClick = onClick,
-        modifier = modifier.requiredWidth(260.dp).requiredHeight(160.dp),
+        modifier = modifier.aspectRatio(16f / 10f),
         scale = CardDefaults.scale(focusedScale = 1.05f),
         colors = CardDefaults.colors(containerColor = CardGray),
     ) {

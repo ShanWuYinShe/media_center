@@ -238,14 +238,21 @@ private fun PlayerContent(
         if (overlayError != null) controller?.pause()
     }
 
-    // 进度轮询;播放中每 5 秒持久化一次,崩溃/杀进程也能恢复
+    // 进度轮询;播放中每 5 秒持久化一次,崩溃/杀进程也能恢复。
+    // 暂停时停止轮询(每帧读 currentPosition + 写状态是无效开销)，恢复播放即重启本 effect。
     LaunchedEffect(isPlaying) {
+        if (!isPlaying) {
+            // 暂停瞬间刷一次位置 + 时长用于覆盖层显示，之后不再轮询。
+            positionMs = controller?.currentPosition?.coerceAtLeast(0L) ?: 0L
+            durationMs = controller?.duration?.coerceAtLeast(0L) ?: 0L
+            return@LaunchedEffect
+        }
         var tick = 0
         while (true) {
             positionMs = controller?.currentPosition?.coerceAtLeast(0L) ?: 0L
             durationMs = controller?.duration?.coerceAtLeast(0L) ?: 0L
             tick++
-            if (isPlaying && tick % 10 == 0) {
+            if (tick % 10 == 0) {
                 PlaybackPositionStore.save(context, videoId, positionMs)
             }
             delay(500)
@@ -548,7 +555,7 @@ private fun friendlyPlaybackError(error: PlaybackException): String = when {
         error.errorCode == PlaybackException.ERROR_CODE_IO_NO_PERMISSION ||
         error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
         error.errorCode == PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE ->
-        "播放地址失效或网络异常，正在重新解析"
+        "播放地址失效或网络异常，请重试"
     error.errorCode in 6001..6010 -> "播放受保护内容失败"
     else -> "播放失败（${error.errorCodeName}）"
 }

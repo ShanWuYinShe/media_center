@@ -3,6 +3,7 @@ package com.example.mediacenter.ui.detail
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -56,8 +57,10 @@ fun DetailScreen(
     ) {
         AsyncImage(
             model = video.thumbnailUrl,
-            contentDescription = null,
-            modifier = Modifier.fillMaxWidth().requiredHeight(300.dp),
+            contentDescription = video.title,
+            // 用 aspectRatio 而非 requiredHeight(300.dp)：在窄屏/横屏/4K 上自适应，
+            // 同时给 TalkBack 一个可读的图片标签(视频标题)。
+            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
             contentScale = ContentScale.Crop,
             // 图片加载中/失败时以玻璃灰占位
             placeholder = ColorPainter(CardGray),

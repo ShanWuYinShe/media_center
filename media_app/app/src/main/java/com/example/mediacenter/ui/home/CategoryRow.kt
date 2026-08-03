@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.TextPrimary
+import com.example.mediacenter.ui.theme.TextTertiary
 
 @Composable
 fun CategoryRow(
@@ -50,12 +51,22 @@ fun CategoryRow(
                 )
             }
         }
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            items(videos, key = { it.id }) { video ->
-                VideoCard(video = video, onClick = { onVideoClick(video) })
+        if (videos.isEmpty()) {
+            // 加载中/无内容时给一行说明，而不是裸标题+空 LazyRow（用户会以为坏了）。
+            Text(
+                text = "\u672C\u5206\u7C7B\u6682\u65E0\u5185\u5BB9",
+                color = TextTertiary,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+        } else {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                items(videos, key = { it.id }) { video ->
+                    VideoCard(video = video, onClick = { onVideoClick(video) })
+                }
             }
         }
     }
