@@ -9,6 +9,8 @@ import android.content.pm.PackageInstaller
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.example.mediacenter.BuildConfig
 import com.example.mediacenter.data.AppUpdateInfo
@@ -126,6 +128,7 @@ class AppUpdateManager(
         return tryInstallWithIntent(apk)
     }
 
+    @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
     private fun tryInstallWithSession(apk: File): InstallLaunchResult {
         return try {
             val packageInstaller = context.packageManager.packageInstaller
@@ -158,12 +161,11 @@ class AppUpdateManager(
                     installReceiver = null
                 }
             }
-            val registerFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                Context.RECEIVER_NOT_EXPORTED
-            } else {
-                0
-            }
-            context.registerReceiver(installReceiver, IntentFilter(installAction), registerFlags)
+            // ContextCompat 统一处理 Android 13+ 的 RECEIVER_NOT_EXPORTED 要求(兼容 minSdk 19)。
+            ContextCompat.registerReceiver(
+                context, installReceiver, IntentFilter(installAction),
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
             session.commit(pendingIntent.intentSender)
             session.close()
             InstallLaunchResult.Started

@@ -6,7 +6,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageInstaller
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -112,6 +114,37 @@ class AppUpdateManager(
         return target
     }
 
+    /** Android 8+ 需要"安装未知应用"权限才能用 ACTION_VIEW 装 APK。 */
+    fun canInstallPackages(): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+            context.packageManager.canRequestPackageInstalls()
+    }
+
+    /**
+     * 引导用户开启"安装未知应用"权限。国产 TV 可能不支持
+     * ACTION_MANAGE_UNKNOWN_APP_SOURCES,此时降级到应用详情页。
+     */
+    fun launchInstallPermissionSettings() {
+        val primaryIntent = Intent(
+            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+            Uri.parse("package:${context.packageName}"),
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching {
+            context.startActivity(primaryIntent)
+        }.onFailure {
+            AppLog.w("Update", "launchInstallPermissionSettings: redirect to app details", it)
+            val fallbackIntent = Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:${context.packageName}"),
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(fallbackIntent)
+        }
+    }
+
     fun launchInstaller(apk: File): InstallLaunchResult {
         // 第1优先：PackageInstaller API（API 21+），session-based 安装。
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -202,6 +235,12 @@ class AppUpdateManager(
     }
 
     private fun tryInstallWithIntent(apk: File): InstallLaunchResult {
+        // Android 8+ 无"安装未知应用"权限时 ACTION_VIEW 会静默失败,先引导开权限。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !context.packageManager.canRequestPackageInstalls()
+        ) {
+            return InstallLaunchResult.NeedsPermission
+        }
         return try {
             val uri = FileProvider.getUriForFile(
                 context,
@@ -248,5 +287,7 @@ sealed class UpdateDownloadResult {
 
 sealed class InstallLaunchResult {
     object Started : InstallLaunchResult()
+    /** 需要用户先去系统设置开启"安装未知应用"权限,用 launchInstallPermissionSettings 引导。 */
+    object NeedsPermission : InstallLaunchResult()
     data class Failed(val message: String) : InstallLaunchResult()
 }

@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 应用内更新安装 APK 所需:声明后 API 26+ 系统设置才显示"安装未知应用"开关,
+         canRequestPackageInstalls() 才可能返回 true(见 AppUpdateManager)。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-feature
         android:name="android.software.leanback"
         android:required="true" />

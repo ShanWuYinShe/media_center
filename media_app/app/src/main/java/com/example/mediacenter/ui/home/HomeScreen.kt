@@ -28,6 +28,7 @@ import com.example.mediacenter.ui.components.TopBar
 import com.example.mediacenter.ui.update.UpdateDialog
 import com.example.mediacenter.ui.update.UpdateDialogState
 import com.example.mediacenter.update.AppUpdateManager
+import com.example.mediacenter.update.InstallLaunchResult
 import com.example.mediacenter.update.UpdateCheckResult
 import com.example.mediacenter.update.UpdateDownloadResult
 import com.example.mediacenter.util.NetworkRestoreEffect
@@ -66,7 +67,20 @@ fun HomeScreen(
             }) {
                 is UpdateDownloadResult.Ready -> {
                     updateState = null
-                    updateManager.launchInstaller(result.apk)
+                    when (val install = updateManager.launchInstaller(result.apk)) {
+                        is InstallLaunchResult.NeedsPermission -> {
+                            // Android 8+ 未开"安装未知应用"权限:引导去系统设置,返回后提示重试。
+                            updateManager.launchInstallPermissionSettings()
+                            updateState = UpdateDialogState.Failed(
+                                result.update,
+                                "请先允许安装未知应用，然后重新下载安装",
+                            )
+                        }
+                        is InstallLaunchResult.Failed -> {
+                            updateState = UpdateDialogState.Failed(result.update, install.message)
+                        }
+                        is InstallLaunchResult.Started -> Unit
+                    }
                 }
                 is UpdateDownloadResult.Failed -> {
                     updateState = UpdateDialogState.Failed(info, result.message)

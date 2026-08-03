@@ -157,7 +157,9 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
 
     fun search(
         query: String,
-        categoryId: String? = if (query.isBlank()) mutableState.value.selectedCategoryId else null,
+        // 关键词搜索与分类浏览都限定在当前选中分类内——服务端无全局搜索接口,
+        // 客户端聚合过滤依赖 categoryId;传 null 会直接返回空结果。
+        categoryId: String? = mutableState.value.selectedCategoryId,
     ) {
         val current = mutableState.value
         val silentRefresh = current.isContentScreen

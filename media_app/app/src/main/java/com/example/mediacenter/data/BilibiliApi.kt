@@ -70,7 +70,12 @@ class BilibiliApi(
         val allCids = if (pages.isNotEmpty()) pages.map { it.cid }
             else listOf(viewPayload.data?.cid ?: throw BilibiliApiException("无 cid"))
         val totalPages = allCids.size
-        val targetCid = if (pageIndex in allCids.indices) allCids[pageIndex] else allCids.first()
+        // 目录里的 bvid_pN 可能过期(视频被删页):越界时报错,不静默播放第 1 页
+        // (与 legacy 变体行为一致,避免 UI 显示页码与实际播放内容不符)。
+        if (pageIndex !in allCids.indices) {
+            throw BilibiliApiException("页面越界:共 $totalPages 页,请求第 ${pageIndex + 1} 页")
+        }
+        val targetCid = allCids[pageIndex]
         val pageTitles = pages.map { it.part ?: "" }
         if (totalPages > 1) {
             AppLog.i("Bili", "multi-page video: $bvid has $totalPages pages, requesting cid=$targetCid (page=$pageIndex) quality=$qn")

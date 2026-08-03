@@ -2328,7 +2328,10 @@ class MainActivity : ComponentActivity() {
                 pendingUpdateApk = null
             }
             InstallLaunchResult.NeedsPermission -> {
-                // API 26+ needs install permission; keep pendingUpdateApk for onResume retry
+                // API 26+ 需"安装未知应用"权限:引导去系统设置开启,onResume 时自动重试。
+                // 保留 pendingUpdateApk,用户从设置页返回后 handleInstallLaunch 会再走一次。
+                showUpdateMessage("安装更新需要先允许“安装未知应用”权限")
+                appUpdateManager.launchInstallPermissionSettings()
             }
             is InstallLaunchResult.Failed -> showUpdateMessage(result.message)
         }
