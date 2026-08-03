@@ -2,9 +2,12 @@ package com.example.mediacenter
 
 import android.app.Application
 import android.os.Build
+import coil.ImageLoader
+import coil.ImageLoaderFactory
 import com.example.mediacenter.crash.CrashReporter
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.net.AppHttpClient
+import com.example.mediacenter.net.BilibiliImageLoaderFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -17,8 +20,12 @@ import kotlinx.coroutines.launch
  * 这样「播放异常导致进程被杀、重启回首页」这类问题能在重启后从日志文件里查到根因,
  * 并汇总到服务端便于远程诊断。
  */
-class MediaCenterApp : Application() {
+class MediaCenterApp : Application(), ImageLoaderFactory {
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // Coil 进程级 ImageLoader:为 B 站图床注入 Referer/UA,避免缩略图 403 空封面。
+    // 由 Coil 在首个 AsyncImage 请求前通过 SingletonImageLoader.get(context) 触发。
+    override fun newImageLoader(): ImageLoader = BilibiliImageLoaderFactory.build(this)
 
     override fun onCreate() {
         super.onCreate()

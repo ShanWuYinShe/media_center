@@ -250,11 +250,8 @@ class BilibiliApi(
         private const val WBI_KEY_TTL_MILLIS = 10L * 60 * 1000
 
         // B 站反爬要求:必须带 PC 端 User-Agent + Referer 才能拿到 playurl。
-        private val DIRECT_HEADERS = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer" to "https://www.bilibili.com",
-            "Origin" to "https://www.bilibili.com",
-        )
+        // 与 PlaybackService 的 BILI_CDN_HEADERS 同源(单一来源),播放流/playurl 共用。
+        private val DIRECT_HEADERS = com.example.mediacenter.player.BILI_CDN_HEADERS
     }
 }
 
