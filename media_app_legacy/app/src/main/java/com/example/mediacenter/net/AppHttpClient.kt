@@ -1,6 +1,8 @@
 package com.example.mediacenter.net
 
+import android.content.Context
 import com.example.mediacenter.log.AppLog
+import java.io.File
 import java.net.InetAddress
 import java.net.Socket
 import java.security.GeneralSecurityException
@@ -15,6 +17,7 @@ import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.TrustManager
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
+import okhttp3.Cache
 import okhttp3.OkHttpClient
 
 /**
@@ -47,6 +50,30 @@ object AppHttpClient {
 
     /** 共享的基础客户端(OkHttp 默认超时),用于无特殊超时需求的场景。 */
     val shared: OkHttpClient by lazy { newBuilder().build() }
+
+    /**
+     * 带磁盘缓存的共享客户端。用于缩略图等可重复利用的图片请求——legacy 之前只有内存 LruCache,
+     * 进程重启后所有缩略图重新下载,长列表冷滚动体验差。磁盘缓存 ~50MiB，限 API19 可用。
+     *
+     * 必须在 [initCache] 之后访问(初始化在 Application.onCreate)。
+     * 未初始化时回退到无缓存的 [shared]（功能不中断，只是没有磁盘缓存)。
+     */
+    @Volatile private var cache: Cache? = null
+    val cachedShared: OkHttpClient by lazy {
+        val b = newBuilder()
+        cache?.let { b.cache(it) }
+        b.build()
+    }
+
+    /** 初始化磁盘缓存。在 Application.onCreate 早期、任何图片请求之前调用一次。 */
+    fun initCache(context: Context) {
+        if (cache != null) return
+        val dir = File(context.cacheDir, "okhttp-cache")
+        // 50 MiB:缩略图平均 ~30KB,可缓存 ~1700 张;在低内存老盒子上也不至于吃满磁盘。
+        val c = Cache(dir, 50L * 1024 * 1024)
+        cache = c
+        AppLog.i("Http", "disk cache enabled: ${dir.absolutePath} (50 MiB)")
+    }
 
     /** 返回已套用 OCSP soft-fail TLS 的 Builder,调用方可继续追加超时、重定向等配置。 */
     fun newBuilder(): OkHttpClient.Builder {

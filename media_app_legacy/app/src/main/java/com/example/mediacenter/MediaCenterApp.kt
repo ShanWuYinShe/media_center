@@ -27,6 +27,8 @@ class MediaCenterApp : MultiDexApplication() {
         // 尽早安装 OCSP soft-fail 的 TLS 默认工厂:覆盖 Media3 DefaultHttpDataSource(走
         // HttpsURLConnection)的播放链路,避免时钟不准的设备在播放时握手失败。须在任何网络请求前。
         AppHttpClient.installHttpsUrlConnectionDefault()
+        // 启用 HTTP 磁盘缓存(缩略图复用):必须在任何图片请求前、Application 早期初始化。
+        AppHttpClient.initCache(this)
         installCrashHandler()
     }
 

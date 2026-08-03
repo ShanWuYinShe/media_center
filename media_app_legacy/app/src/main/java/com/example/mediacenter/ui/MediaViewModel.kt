@@ -13,11 +13,15 @@ import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.log.AppLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 data class MediaUiState(
     val query: String = "",
@@ -125,28 +129,40 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
 
     // 预取列表可见视频的播放地址:浏览时后台提前解析 B 站 API,
     // 用户点详情时直接可用,无需网络等待。按视频 id 去重避免重复请求。
+    //
+    // 限制:只预取前 [MAX_PREFETCH] 条(用户不会逐一点开全部可见项),并发用信号量
+    // 限到 [PREFETCH_CONCURRENCY](每条 playbackOptions 是 3 个串行网络调用,无限制并发
+    // 会在长列表上打满网络/内存)。
     private fun prefetchVisiblePlayback(videos: List<VideoSummary>) {
         playbackPrefetchJob?.cancel()
         val candidates = videos
             .asSequence()
             .distinctBy { it.id }
             .filter { it.id !in prefetchedPlaybackIds }
+            .take(MAX_PREFETCH)
             .toList()
         if (candidates.isEmpty()) return
         playbackPrefetchJob = viewModelScope.launch {
-            for (video in candidates) {
-                if (video.id in prefetchedPlaybackIds) continue
-                val details = VideoDetails(
-                    id = video.id, title = video.title,
-                    description = video.description,
-                    thumbnailUrl = video.thumbnailUrl,
-                    durationSeconds = video.durationSeconds,
-                )
-                runCatchingCancellable { repository.playbackOptions(details) }
-                    .onSuccess { result ->
-                        playbackCache[video.id] = result
-                        prefetchedPlaybackIds.add(video.id)
+            val sem = Semaphore(PREFETCH_CONCURRENCY)
+            coroutineScope {
+                candidates.map { video ->
+                    launch {
+                        if (video.id in prefetchedPlaybackIds) return@launch
+                        val details = VideoDetails(
+                            id = video.id, title = video.title,
+                            description = video.description,
+                            thumbnailUrl = video.thumbnailUrl,
+                            durationSeconds = video.durationSeconds,
+                        )
+                        sem.withPermit {
+                            runCatchingCancellable { repository.playbackOptions(details) }
+                                .onSuccess { result ->
+                                    playbackCache[video.id] = result
+                                    prefetchedPlaybackIds.add(video.id)
+                                }
+                        }
                     }
+                }.joinAll()
             }
         }
     }
@@ -1028,6 +1044,11 @@ private const val PageSize = 18
 // 分类缓存有效期:10 分钟内再次进入同一分类直接用缓存,不触发任何网络请求;
 // 超过则在后台静默刷新缓存(不阻塞、不改动当前界面)。
 private const val CategoryCacheTtlMs = 10 * 60 * 1000L
+
+// 播放地址预取:只预取前 N 条(用户不会逐一点开全部可见项),并发限到 M。
+// 每个 playbackOptions 是 3 个串行网络调用;无限制并发会在长列表上打满网络/内存。
+private const val MAX_PREFETCH = 4
+private const val PREFETCH_CONCURRENCY = 2
 
 class MediaViewModelFactory(
     private val repository: MediaRepository,

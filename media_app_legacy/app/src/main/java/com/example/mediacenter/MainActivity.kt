@@ -4,6 +4,8 @@ import android.app.ActivityManager
 import android.app.Dialog
 import android.content.Context
 import android.content.res.ColorStateList
+import android.net.ConnectivityManager
+import android.net.Network
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -118,7 +120,9 @@ class MainActivity : ComponentActivity() {
     private var searchVisible: Boolean = false
     private var player: ExoPlayer? = null
     private var currentPlayerUrl: String? = null
-    // 当前播放的 PlaybackOption.id，用于进度保存键。
+    // 网络恢复自动重试:legacy 目标是不稳定的旧 TV 盒子,断网→恢复后若停在错误页,
+    // 用户必须手动重试。注册 NetworkCallback,网络 onAvailable 且当前是错误态时自动 retry。
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
     // 与 currentState.playing?.id 不同：该字段在 renderPlayer 开始时就固定，
     // 不受后续 playNext 等高线状态变化影响，确保 releasePlayer 时存对键。
     private var currentPlayerOptionId: String? = null
@@ -214,6 +218,37 @@ class MainActivity : ComponentActivity() {
                 is AppUpdateResult.ReadyToInstall -> promptInstallUpdate(result)
             }
         }
+        registerNetworkRestore()
+    }
+
+    /**
+     * 注册网络恢复监听:网络从断开→恢复(onAvailable)且 ViewModel 当前处于错误态时,
+     * 自动触发 retry。legacy 目标是网络不稳定的旧 TV 盒子,这是最高价值体验缺口
+     * (断网恢复后无需用户手动重试)。
+     *
+     * 仅在 Build.VERSION.SDK_INT >= N (API 24) 使用 registerDefaultNetworkCallback;
+     * 更老设备降级为不自动重试(不影响功能)。
+     */
+    private fun registerNetworkRestore() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                runOnUiThread {
+                    val s = currentState
+                    if (s.error != null && s.items.isEmpty() && !s.loading) {
+                        AppLog.i("Net", "network restored, auto-retry on error state")
+                        viewModel.retry()
+                    }
+                }
+            }
+        }
+        try {
+            cm.registerDefaultNetworkCallback(cb)
+            networkCallback = cb
+        } catch (e: Exception) {
+            AppLog.w("Net", "registerDefaultNetworkCallback failed: ${e.message}", e)
+        }
     }
 
     override fun onResume() {
@@ -232,6 +267,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         AppLog.i("Activity", "onDestroy")
+        networkCallback?.let { cb ->
+            runCatching {
+                val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                cm?.unregisterNetworkCallback(cb)
+            }
+            networkCallback = null
+        }
         releasePlayer()
         super.onDestroy()
     }
@@ -3799,7 +3841,10 @@ private const val CategorySelectDebounceMs = 280L
 // 系统诊断弹窗触发阈值:焦点在最左分类后连续按左键的次数。
 private const val DIAGNOSTIC_LEFT_PRESS_COUNT = 5
 private val ThumbnailFetchSemaphore = Semaphore(4)
-private val ThumbnailHttpClient = AppHttpClient.newBuilder()
+// 缩略图客户端:复用 AppHttpClient.cachedShared(带磁盘缓存 + OCSP soft-fail TLS)。
+// 在它之上覆盖超时/重定向配置;cachedShared 的 Cache 仍生效(OkHttp Cache 属于 client 级)。
+// 注意:newBuilder() 会复制 Cache——参见 OkHttpClient.newBuilder() 文档(新 client 共享原 cache)。
+private val ThumbnailHttpClient = AppHttpClient.cachedShared.newBuilder()
     .connectTimeout(8, TimeUnit.SECONDS)
     .readTimeout(15, TimeUnit.SECONDS)
     .followRedirects(true)
