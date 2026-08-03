@@ -220,7 +220,8 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                         state.copy(
                             items = response.items,
                             loading = if (silentRefresh || state.isContentScreen) state.loading else false,
-                            canLoadMore = response.items.size >= PageSize,
+                            // 关键词搜索是一次性客户端聚合(已拉取多页),不分页;仅分类浏览才支持 loadMore。
+                            canLoadMore = query.isBlank() && response.items.size >= PageSize,
                             page = 1,
                             loadMoreError = null,
                         )

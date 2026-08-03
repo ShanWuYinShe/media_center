@@ -115,57 +115,35 @@ class BilibiliApi(
     }
 
     /**
-     * 解析 playurl 响应，构建多清晰度播放选项。
-     * 不使用 DASH(.m4s 分片不能直接作为 Progressive 流播放)，
-     * 而是用 API 返回的 accept_quality/accept_description 做质量标签，
-     * 播放统一使用 durl(完整 MP4，已混流音视频)。
+     * 解析 playurl 响应，构建播放选项。
+     *
+     * durl 是 B 站针对**所请求 qn** 返回的一条真实可播放流(完整 MP4，已混流音视频),
+     * 每个清晰度对应**不同的 durl URL**,不能复用同一条 url。因此这里恒返回**单个选项**,
+     * 用所请求 qn 对应的标签标注;accept_quality 列出的其它清晰度需通过 [resolvePagePlayback]
+     * 按新 qn 重新解析获取真实流，而不是把同一个 durl 贴上多个 qn 标签(此前实现即如此,
+     * 导致「切清晰度」实际播放的始终是同一条流,且每次切换都触发无意义的重新解析)。
      */
     private fun buildPlaybackOptions(bvid: String, pageIndex: Int, payload: BiliPlayUrlResponse): List<PlaybackOption> {
         val data = payload.data
-        val durlUrl = data.durl.firstOrNull()?.url
-        // 用 accept_quality/accept_description 构建多清晰度标签
-        val acceptQn = data.acceptQuality
-        val acceptDesc = data.acceptDescription
-        if (durlUrl != null && acceptQn.isNotEmpty() && acceptQn.size == acceptDesc.size) {
-            val zipped = acceptQn.zip(acceptDesc).sortedByDescending { it.first }
-            return zipped.map { (qn, desc) ->
-                val label = desc.ifBlank { qualityLabel(qn) }
-                AppLog.i("Bili", "option: $label qn=$qn")
-                PlaybackOption(
-                    id = "bili-$bvid-p$pageIndex-q$qn",
-                    kind = "vod",
-                    label = label,
-                    url = durlUrl,
-                    mimeType = "video/mp4",
-                    headers = DIRECT_HEADERS,
-                    qn = qn,
-                )
-            }
-        }
-        // 回退:使用 durl 单 MP4 流
-        if (durlUrl != null) {
-            return listOf(PlaybackOption(
-                id = "bili-$bvid-p$pageIndex-q${data.quality}",
+        val first = data.durl.firstOrNull()
+        if (first?.url.isNullOrBlank()) return emptyList()
+        val qn = data.quality
+        // 标签优先用 accept_description 中对应 qn 的描述,缺失时回退到 qualityLabel。
+        val label = data.acceptDescription.getOrNull(data.acceptQuality.indexOf(qn))
+            ?.takeIf { it.isNotBlank() }
+            ?: qualityLabel(qn)
+        AppLog.i("Bili", "option: $label qn=$qn")
+        return listOf(
+            PlaybackOption(
+                id = "bili-$bvid-p$pageIndex-q$qn",
                 kind = "vod",
-                label = qualityLabel(data.quality),
-                url = durlUrl,
+                label = label,
+                url = first.url,
                 mimeType = "video/mp4",
                 headers = DIRECT_HEADERS,
-                qn = data.quality,
-            ))
-        }
-        val durlList = data.durl
-        if (durlList.isEmpty()) return emptyList()
-        val first = durlList.first()
-        return listOf(PlaybackOption(
-            id = "bili-$bvid-p$pageIndex-q${data.quality}",
-            kind = "vod",
-            label = qualityLabel(data.quality),
-            url = first.url,
-            mimeType = "video/mp4",
-            headers = DIRECT_HEADERS,
-            qn = data.quality,
-        ))
+                qn = qn,
+            ),
+        )
     }
 
     // 调 B 站 view API 拿 bvid/cid/pages。

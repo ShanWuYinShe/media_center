@@ -10,6 +10,12 @@ class MediaRepository(
     @Volatile var currentProvider: String = "bilibili"
         private set
 
+    private companion object {
+        // 客户端关键词搜索时最多拉取的分类页数(每页 ≤ pageSize 条),用于扩大命中范围。
+        // 服务端单分类通常几百条,5 页 × 18 ≈ 90 条已足够覆盖常见搜索词。
+        const val SEARCH_MAX_PAGES = 5
+    }
+
     suspend fun providers(): List<ProviderInfo> {
         refreshCredentials()
         val items = api.providers().items.orEmpty()
@@ -39,8 +45,9 @@ class MediaRepository(
 
     suspend fun categories(provider: String): List<ContentCategory> = api.categories(provider).items.orEmpty()
 
-    // 兼容包装:ViewModel 的 search/loadMore 仍调此方法,Repository 内部用
-    // categoryVideos 替代旧的 search endpoint(新 API 没有 search)。
+    // 服务端无 search endpoint;分类浏览用 categoryVideos,关键词搜索在已加载的
+    // 分类数据上做客户端标题/简介过滤。query 非空时拉取多页(最多 SEARCH_MAX_PAGES)
+    // 以扩大命中范围,过滤后分页返回;query 为空则原样返回服务端分页。
     suspend fun search(
         query: String,
         categoryId: String?,
@@ -50,13 +57,43 @@ class MediaRepository(
         if (categoryId == null) {
             return SearchResponse(query = query, page = page, pageSize = pageSize)
         }
-        val resp = api.categoryVideos(currentProvider, categoryId, page, pageSize)
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) {
+            // 纯分类浏览:直接转发服务端分页
+            val resp = api.categoryVideos(currentProvider, categoryId, page, pageSize)
+            return SearchResponse(
+                query = query,
+                page = resp.page,
+                pageSize = resp.pageSize,
+                total = resp.total,
+                items = resp.items.orEmpty(),
+            )
+        }
+        // 关键词搜索:拉取多页后客户端过滤。只做一次(非分页拉取),命中数足够时截断。
+        val keywords = trimmed.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val accumulated = ArrayList<VideoSummary>(SEARCH_MAX_PAGES * pageSize)
+        for (p in 1..SEARCH_MAX_PAGES) {
+            val resp = api.categoryVideos(currentProvider, categoryId, p, pageSize)
+            val items = resp.items.orEmpty()
+            if (items.isEmpty()) break
+            accumulated.addAll(items)
+            if (accumulated.size >= resp.total) break
+        }
+        val filtered = accumulated.filter { v ->
+            val title = v.title
+            val desc = v.description.orEmpty()
+            // 所有关键词都命中(标题或简介,忽略大小写)才算匹配
+            keywords.all { kw ->
+                title.contains(kw, ignoreCase = true) || desc.contains(kw, ignoreCase = true)
+            }
+        }
         return SearchResponse(
             query = query,
-            page = resp.page,
-            pageSize = resp.pageSize,
-            total = resp.total,
-            items = resp.items.orEmpty(),
+            page = 1,
+            pageSize = filtered.size,
+            total = filtered.size,
+            // 一次性返回全部命中(已分页拉取过);UI 的 loadMore 会因 canLoadMore 判断禁用
+            items = filtered,
         )
     }
 
