@@ -30,12 +30,12 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
     - `versionName`：取 tag（`v1.1.0` → `1.1.0`）；tag 后有新 commit 则带 `-dev.N` 后缀（如 `1.1.0-dev.3`）标识未发布构建。
     - `versionCode`：从 SemVer 派生 `major*100000 + minor*1000 + patch`（见 `semverToCode`，忽略 dev 后缀），整数比较可靠。容量：patch 0..999、minor 0..99。
     - 升版规则：破坏性改动升 major、新功能升 minor、bug 修复升 patch。无 tag 时 fallback 到 `0.1.0-dev`（不阻断构建）。
-  - AI 更新版本流程（代码改完、发版前执行）：版本号只由 git tag 决定，打完 tag 即“自动更新版本”，无需改任何文件。
-    1. 在子模块根 `services/media_center` 提交代码变更（确保要发布的 commit 已就绪）。
+  - AI 更新版本流程（代码改完、发版前执行）：版本号只由 git tag 决定，打完 tag 即“自动更新版本”，无需改任何文件。本仓库所有 commit/tag/push 一律在 Worktree 内完成，禁止在主工作树直接操作（见全局 Git 准则）。
+    1. 在 Worktree 内提交代码变更（确保要发布的 commit 已就绪）。
     2. 按变更类型决定下一 SemVer：`major`（破坏性）/`minor`（新功能）/`patch`（bug 修复）。
-    3. 在当前 commit 打 tag 并推送：`git tag vX.Y.Z && git push origin vX.Y.Z`（tag 必须在要发布的 commit 上）。
+    3. 在 Worktree 内于当前 commit 打 tag 并推送：`git tag vX.Y.Z && git push origin vX.Y.Z`（tag 必须在要发布的 commit 上）。
     4. 随后构建（`./gradlew :app:assembleDebug` 或 `:app:assembleRelease`）即得到干净版本号（`git describe` 在 tag 上产出 `X.Y.Z`，无 `-dev.N`）。
-    注意：tag 要打在子模块 `services/media_center` 仓库，不是外层 `workwork` 仓库；版本号与外层仓库的提交/tag 无关。
+    注意：tag 要打在 media_center 仓库（非外层 `workwork` 仓库）；版本号与外层仓库的提交/tag 无关。
   - SHA256 校验和自动计算
   - 命令：`ssh workwork-server "cd service && cat > .wework/generated/media_center/app-update.json << 'EOF' { ... } EOF"`
 - 技术栈：Compose + TV Material + Media3 ExoPlayer；网络：OkHttp；序列化：kotlinx-serialization；图片：Coil。
