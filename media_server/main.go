@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -272,15 +273,17 @@ func paginationFromRequest(r *http.Request) (int, int, *apiError) {
 	page := 1
 	pageSize := 20
 	if raw := strings.TrimSpace(r.URL.Query().Get("page")); raw != "" {
-		var p int
-		if _, err := fmt.Sscanf(raw, "%d", &p); err != nil || p <= 0 || p > 200 {
+		// 严格解析:fmt.Sscanf 会宽容接受 "12abc"/"12.5" 之类的脏输入,
+		// 用 strconv.Atoi 保证 "12abc" 直接 400。
+		p, err := strconv.Atoi(raw)
+		if err != nil || p <= 0 || p > 200 {
 			return 0, 0, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "page 参数不合法。"}
 		}
 		page = p
 	}
 	if raw := strings.TrimSpace(r.URL.Query().Get("pageSize")); raw != "" {
-		var ps int
-		if _, err := fmt.Sscanf(raw, "%d", &ps); err != nil || ps <= 0 || ps > 40 {
+		ps, err := strconv.Atoi(raw)
+		if err != nil || ps <= 0 || ps > 40 {
 			return 0, 0, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "pageSize 参数不合法。"}
 		}
 		pageSize = ps
