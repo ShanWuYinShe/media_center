@@ -152,7 +152,14 @@ object AppHttpClient {
 
         /**
          * 当错误是泛化的"Chain validation failed"时,检查证书叶子的有效期:
-         * 如果叶子证书在 ±7 天内是合法区间,则说明是设备时钟漂移。
+         * 仅当叶子证书的生效/过期边界落在设备时钟的容差窗口内时判定为时钟漂移。
+         *
+         * 注意:这里不能直接对 `now ± 容差` 调 `checkValidity`——那只是问"证书在
+         * 未来/过去某刻是否有效",对有效期覆盖该时刻的**任意**证书(合法证书通常
+         * 90 天~1 年,自签名更长)必然通过,会把真实 MITM / 链校验失败也放行。
+         * 正确做法是比较叶子的 `notBefore`/`notAfter` 与当前设备时间的相对关系:
+         *  - 慢时钟:证书尚未生效(`notBefore` 在未来)且落在容差窗口内;
+         *  - 快时钟:证书刚过期(`notAfter` 在过去)且落在容差窗口内。
          */
         private fun isClockDriftChainValidation(
             error: CertificateException,
@@ -178,26 +185,26 @@ object AppHttpClient {
             // (此前为 ±7 天,实测仍有用户因断电数周而握手失败。)
             val toleranceMs = CLOCK_DRIFT_TOLERANCE_MS
 
-            // 时钟偏慢:证书尚未生效但在容差窗口内会生效
-            try {
-                leaf.checkValidity(Date(now + toleranceMs))
+            // 时钟偏慢:证书尚未生效(notBefore 在未来)且在容差窗口内
+            val notBeforeMs = leaf.notBefore.time
+            if (notBeforeMs > now && notBeforeMs <= now + toleranceMs) {
                 AppLog.w(
                     "Http",
                     "soft-fail chain validation (clock drift, slow clock): " +
-                        "cert valid ${leaf.notBefore}..${leaf.notAfter}, device now=${Date(now)}",
+                        "cert notBefore=${leaf.notBefore}, device now=${Date(now)}",
                 )
                 return true
-            } catch (_: CertificateException) { /* 继续 */ }
-            // 时钟偏快:证书刚刚过期在容差窗口内仍有效
-            try {
-                leaf.checkValidity(Date(now - toleranceMs))
+            }
+            // 时钟偏快:证书刚刚过期(notAfter 在过去)且在容差窗口内
+            val notAfterMs = leaf.notAfter.time
+            if (notAfterMs < now && notAfterMs >= now - toleranceMs) {
                 AppLog.w(
                     "Http",
                     "soft-fail chain validation (clock drift, fast clock): " +
-                        "cert valid ${leaf.notBefore}..${leaf.notAfter}, device now=${Date(now)}",
+                        "cert notAfter=${leaf.notAfter}, device now=${Date(now)}",
                 )
                 return true
-            } catch (_: CertificateException) { /* 继续 */ }
+            }
 
             return false
         }

@@ -26,7 +26,7 @@ import java.time.Duration
 import javax.net.ssl.SSLException
 
 class MediaApi(
-    private val baseUrl: String,
+    val baseUrl: String,
     private val client: OkHttpClient = AppHttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(15))
         .readTimeout(Duration.ofSeconds(15))
@@ -41,7 +41,10 @@ class MediaApi(
 
     suspend fun providers(): ProvidersResponse = get(listOf("providers"))
 
-    suspend fun credentials(): CredentialsResponse = get(listOf("providers", "credentials"))
+    // 凭证接口需要 X-App-Token(与服务端 MEDIA_SERVER_APP_API_TOKEN 一致):
+    // 凭证是共享账号会话 cookie,服务端只向持令牌的客户端下发。
+    suspend fun credentials(): CredentialsResponse =
+        get(listOf("providers", "credentials"), headers = appTokenHeaders())
 
     suspend fun categories(provider: String): CategoriesResponse =
         get(listOf("providers", provider, "categories"))
@@ -97,8 +100,9 @@ class MediaApi(
     private suspend inline fun <reified T> get(
         pathSegments: List<String>,
         query: Map<String, String> = emptyMap(),
+        headers: Map<String, String> = emptyMap(),
     ): T {
-        val request = buildRequest(pathSegments, query)
+        val request = buildRequest(pathSegments, query, headers)
         val label = "/" + pathSegments.joinToString("/")
         val startedAt = System.currentTimeMillis()
 
@@ -139,15 +143,28 @@ class MediaApi(
         throw IOException(friendlyNetworkMessage(category), lastError)
     }
 
-    private fun buildRequest(pathSegments: List<String>, query: Map<String, String>): Request {
+    private fun buildRequest(
+        pathSegments: List<String>,
+        query: Map<String, String>,
+        headers: Map<String, String> = emptyMap(),
+    ): Request {
         val builder = apiRoot.newBuilder()
         if (!baseUrlIncludesApiPrefix) {
             builder.addPathSegment("api")
         }
         pathSegments.forEach(builder::addPathSegment)
         query.forEach { (key, value) -> builder.addQueryParameter(key, value) }
-        return Request.Builder().url(builder.build()).get().build()
+        val requestBuilder = Request.Builder().url(builder.build()).get()
+        headers.forEach { (key, value) -> requestBuilder.header(key, value) }
+        return requestBuilder.build()
     }
+
+    private fun appTokenHeaders(): Map<String, String> =
+        if (BuildConfig.APP_API_TOKEN.isNotEmpty()) {
+            mapOf("X-App-Token" to BuildConfig.APP_API_TOKEN)
+        } else {
+            emptyMap()
+        }
 
     private suspend fun execute(request: Request): String = suspendCancellableCoroutine { continuation ->
         val call = client.newCall(request)

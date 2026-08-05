@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
@@ -65,7 +66,10 @@ fun CategoryRow(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(videos, key = { it.id }) { video ->
-                    VideoCard(video = video, onClick = { onVideoClick(video) })
+                    // LazyRow item 横/纵轴均无界:必须固定卡片宽度,aspectRatio 才能
+                    // 稳定推导高度——否则尺寸回退到 AsyncImage 固有尺寸,占位图与
+                    // 真实图片尺寸不同会引发加载前后布局跳变。
+                    VideoCard(video = video, onClick = { onVideoClick(video) }, modifier = Modifier.width(240.dp))
                 }
             }
         }

@@ -44,6 +44,16 @@ android {
             .replace("\"", "\\\"")
         buildConfigField("String", "MEDIA_SERVER_URL", "\"$escapedServerBaseUrl\"")
         buildConfigField("String", "APP_VARIANT", "\"normal\"")
+        // 凭证接口令牌:与部署端 MEDIA_SERVER_APP_API_TOKEN 一致。留空则 App 走
+        // 无凭证模式(免费清晰度),凭证接口请求不带 token,服务端 401。
+        val appApiToken = providers.gradleProperty("APP_API_TOKEN")
+            .orElse(providers.environmentVariable("APP_API_TOKEN"))
+            .orElse("")
+            .get()
+        val escapedAppApiToken = appApiToken
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        buildConfigField("String", "APP_API_TOKEN", "\"$escapedAppApiToken\"")
     }
 
     buildFeatures {

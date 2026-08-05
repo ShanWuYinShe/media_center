@@ -2,16 +2,23 @@ package com.example.mediacenter.data
 
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.net.AppHttpClient
+import java.io.IOException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.time.Duration
 
 class BilibiliApiException(override val message: String) : Exception(message)
@@ -236,13 +243,37 @@ class BilibiliApi(
             }
             .get()
             .build()
+        // 用 suspendCancellableCoroutine 包裹:协程取消(切换清晰度/分P/退出播放页)
+        // 时立即 call.cancel(),避免阻塞式 execute() 继续占用 IO 线程与连接。
         return withContext(Dispatchers.IO) {
-            client.newCall(request).execute().use { response ->
-                val body = response.body.string()
-                if (!response.isSuccessful) {
-                    throw BilibiliApiException("B 站 API ${response.code}: ${body.take(200)}")
-                }
-                json.decodeFromString<T>(body)
+            suspendCancellableCoroutine { continuation ->
+                val call = client.newCall(request)
+                continuation.invokeOnCancellation { call.cancel() }
+                call.enqueue(object : okhttp3.Callback {
+                    override fun onFailure(call: Call, e: IOException) {
+                        if (continuation.isActive) {
+                            continuation.resumeWithException(e)
+                        }
+                    }
+
+                    override fun onResponse(call: Call, response: Response) {
+                        try {
+                            response.use {
+                                val body = it.body.string()
+                                if (!it.isSuccessful) {
+                                    throw BilibiliApiException("B 站 API ${it.code}: ${body.take(200)}")
+                                }
+                                if (continuation.isActive) {
+                                    continuation.resume(json.decodeFromString<T>(body))
+                                }
+                            }
+                        } catch (error: Throwable) {
+                            if (continuation.isActive) {
+                                continuation.resumeWithException(error)
+                            }
+                        }
+                    }
+                })
             }
         }
     }
