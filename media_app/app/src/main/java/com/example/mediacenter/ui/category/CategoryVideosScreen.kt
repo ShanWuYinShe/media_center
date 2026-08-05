@@ -42,6 +42,7 @@ import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.home.VideoCard
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.TextPrimary
+import com.example.mediacenter.util.NetworkRestoreEffect
 import kotlinx.coroutines.flow.distinctUntilChanged
 
 @Composable
@@ -55,6 +56,11 @@ fun CategoryVideosScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
     BackHandler(onBack = onBack)
+
+    // 断网自动恢复:网络可用且当前处于错误态时自动重载(与首页/播放页一致)。
+    NetworkRestoreEffect(onRestored = {
+        if (state.error != null) viewModel.load(categoryId, title)
+    })
 
     // 导航到新分类时加载;同一 backStackEntry 重建不重复请求(load 内部有去重)
     LaunchedEffect(categoryId, title) { viewModel.load(categoryId, title) }

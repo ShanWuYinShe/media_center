@@ -17,6 +17,8 @@ class MediaRepository(
         private set
     private val providerInitialized = java.util.concurrent.atomic.AtomicBoolean(false)
     private val providerPrefs = prefs
+    // 凭证刷新 TTL:凭证变化低频,首页每次加载都拉一次纯属浪费一个请求。
+    private var lastCredentialsRefreshMs = 0L
 
     suspend fun providers(): List<ProviderInfo> {
         refreshCredentials()
@@ -42,11 +44,15 @@ class MediaRepository(
 
     companion object {
         private const val KEY_CURRENT_PROVIDER = "current_provider"
+        // 凭证刷新间隔:凭证只在管理端变更,5 分钟 TTL 足够;失败不刷新 TTL。
+        private const val CREDENTIALS_REFRESH_TTL_MS = 5L * 60 * 1000
     }
 
     // 从 server 拉取 provider 凭证并注入到对应的 API 客户端。
-    // 失败时静默降级为无凭证模式(不影响基本播放)。
+    // 失败时静默降级为无凭证模式(不影响基本播放);TTL 内不重复拉取。
     suspend fun refreshCredentials() {
+        val now = System.currentTimeMillis()
+        if (now - lastCredentialsRefreshMs < CREDENTIALS_REFRESH_TTL_MS) return
         try {
             val response = api.credentials()
             for (cred in response.credentials.orEmpty()) {
@@ -54,6 +60,8 @@ class MediaRepository(
                     bilibiliApi.updateCredentials(cred.fields.orEmpty())
                 }
             }
+            // 只有成功才刷新 TTL:失败时下次调用会重试,不会卡在过期缓存上。
+            lastCredentialsRefreshMs = now
         } catch (e: Exception) {
             AppLog.w("Repo", "failed to fetch provider credentials, using no-credential mode", e)
         }

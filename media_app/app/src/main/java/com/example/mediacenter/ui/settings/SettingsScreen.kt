@@ -62,14 +62,18 @@ fun SettingsScreen(onBack: () -> Unit) {
     var logs by remember { mutableStateOf("") }
 
     fun clearUpdateCache() {
-        val dir = File(context.cacheDir, "app-updates")
-        var deleted = 0
-        if (dir.isDirectory) {
-            dir.listFiles()?.forEach { file ->
-                if (file.delete()) deleted++
+        // 删文件是磁盘 IO,移出主线程避免卡顿(与"查看日志"一致)。
+        scope.launch {
+            val deleted = withContext(Dispatchers.IO) {
+                val dir = File(context.cacheDir, "app-updates")
+                var n = 0
+                if (dir.isDirectory) {
+                    dir.listFiles()?.forEach { file -> if (file.delete()) n++ }
+                }
+                n
             }
+            feedback = if (deleted > 0) "已清除 $deleted 个更新包" else "无更新缓存可清除"
         }
-        feedback = if (deleted > 0) "已清除 $deleted 个更新包" else "无更新缓存可清除"
     }
 
     confirmAction?.let { action ->

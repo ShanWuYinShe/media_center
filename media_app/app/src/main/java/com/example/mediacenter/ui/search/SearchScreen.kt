@@ -28,6 +28,7 @@ import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.TextTertiary
+import com.example.mediacenter.util.NetworkRestoreEffect
 
 @Composable
 fun SearchScreen(
@@ -38,6 +39,11 @@ fun SearchScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
     BackHandler(onBack = onBack)
+
+    // 断网自动恢复:网络恢复且上次搜索失败时自动重发(触发防抖搜索)。
+    NetworkRestoreEffect(onRestored = {
+        if (state.error != null && state.query.length >= 2) viewModel.search(state.query)
+    })
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         OutlinedTextField(
