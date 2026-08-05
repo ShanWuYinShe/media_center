@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -198,6 +199,11 @@ func (s *mediaServer) readAppUpdateManifest(r *http.Request, variant string) (Ap
 	// 导致「检查更新」也被阻塞——尺寸校验应由客户端下载后按 sha256 做,这里不拦。
 	manifest.SizeBytes = info.Size()
 	manifest.APKURL = s.appDownloadURL(r, variant)
+	if manifest.APKURL == "" {
+		// 推导失败(无 PUBLIC_URL 且 Host 不受信):不让客户端拿到空/被投毒的地址,
+		// 直接按内部错误处理,运维可从日志看到被拒绝的 Host。
+		return AppUpdateManifest{}, errors.New("app download URL cannot be derived from request host")
+	}
 	return manifest, nil
 }
 
@@ -230,6 +236,17 @@ func (s *mediaServer) appDownloadURL(r *http.Request, variant string) string {
 	if base := strings.TrimRight(baseURL, "/"); base != "" {
 		return base + "/app/download?variant=" + variant
 	}
+	// 未配置 MEDIA_SERVER_PUBLIC_URL 时的兜底推导:Host 必须可信(显式白名单
+	// 或本地开发网段),否则拒绝——防止 Host 头投毒把 apkUrl 指向攻击者域名,
+	// App 盲从 manifest 即下载被替换的 APK。
+	host := r.Host
+	if forwardedHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); forwardedHost != "" {
+		host = strings.Split(forwardedHost, ",")[0]
+	}
+	if !s.isAllowedDownloadHost(host) {
+		log.Printf("app update: rejecting download host %q (set MEDIA_SERVER_PUBLIC_URL or MEDIA_SERVER_ALLOWED_HOSTS)", host)
+		return ""
+	}
 	scheme := "https"
 	if r.TLS != nil {
 		scheme = "https"
@@ -238,13 +255,37 @@ func (s *mediaServer) appDownloadURL(r *http.Request, variant string) string {
 	} else if r.URL.Scheme != "" {
 		scheme = r.URL.Scheme
 	}
-	host := r.Host
-	if forwardedHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); forwardedHost != "" {
-		host = strings.Split(forwardedHost, ",")[0]
-	}
 	prefix := strings.TrimRight(strings.TrimSpace(r.Header.Get("X-Forwarded-Prefix")), "/")
 	if prefix == "" {
 		prefix = "/api"
 	}
 	return scheme + "://" + host + prefix + "/app/download?variant=" + variant
+}
+
+// isAllowedDownloadHost 判断 Host 是否可信:显式白名单(MEDIA_SERVER_ALLOWED_HOSTS)、
+// loopback 或私有网段(本地开发直连)放行;其余公网 Host 一律拒绝。
+func (s *mediaServer) isAllowedDownloadHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false
+	}
+	// 去端口:支持 "example.com:443" 与 "[::1]:8787" 两种形态
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	} else if strings.HasPrefix(host, "[") {
+		host = strings.Trim(host, "[]")
+	}
+	for _, allowed := range s.config.AllowedPublicHosts {
+		if strings.EqualFold(allowed, host) {
+			return true
+		}
+	}
+	// 本地开发:localhost 主机名、loopback 或私有网段直连
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate()
+	}
+	return false
 }

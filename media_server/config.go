@@ -24,6 +24,13 @@ type AppConfig struct {
 	AppUpdateAPKPath      string
 	// 崩溃上报落盘目录(JSONL)。为空时默认 data/crash-reports。
 	CrashReportDir string
+	// App 端凭证访问令牌:凭证端点(/api/providers/credentials)要求请求携带
+	// X-App-Token 并与之匹配(常量时间比较)。为空时凭证端点一律拒绝(安全默认),
+	// 避免共享会话凭证(如 bilibili SESSDATA)被公网匿名抓取。
+	AppAPIToken string
+	// 允许作为 App 更新下载 Host 的公网域名(逗号分隔)。仅当 PublicBaseURL 未配置
+	// 时用于校验 Host 头,防止 Host 头投毒把 apkUrl 指向攻击者域名。
+	AllowedPublicHosts []string
 }
 
 // contentCategories.json 的原始结构。sources 字段保留解析(向后兼容旧配置),
@@ -65,8 +72,21 @@ func loadAppConfig() (AppConfig, error) {
 		AppUpdateManifestPath: getenv("MEDIA_SERVER_APP_UPDATE_MANIFEST", "/config/app-update.json"),
 		AppUpdateAPKPath:      getenv("MEDIA_SERVER_APP_UPDATE_APK", "/config/media-center-app.apk"),
 		CrashReportDir:        getenv("MEDIA_SERVER_CRASH_DIR", "data/crash-reports"),
+		AppAPIToken:           strings.TrimSpace(os.Getenv("MEDIA_SERVER_APP_API_TOKEN")),
+		AllowedPublicHosts:    splitList(os.Getenv("MEDIA_SERVER_ALLOWED_HOSTS")),
 	}
 	return cfg, nil
+}
+
+// splitList 把逗号分隔的 env 值拆为去空格、去空的列表。
+func splitList(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func loadCategories(path string) ([]ContentCategory, error) {

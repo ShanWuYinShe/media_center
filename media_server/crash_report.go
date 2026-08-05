@@ -35,30 +35,30 @@ const crashReportPerMinuteLimit = 10
 // crashLogLock 串行化崩溃日志写入(多进程容器内同一路径追加)。
 var crashLogLock sync.Mutex
 
-// crashRateLimiter 是崩溃上报端点的 per-IP 固定窗口限流器。
-type crashRateLimiter struct {
+// ipWindowLimiter 是 per-IP 固定窗口限流器(崩溃上报/凭证端点共用)。
+type ipWindowLimiter struct {
 	mu      sync.Mutex
 	limit   int
 	window  time.Duration
-	entries map[string]*crashWindow
+	entries map[string]*ipWindow
 }
 
-type crashWindow struct {
+type ipWindow struct {
 	start time.Time
 	count int
 }
 
-func newCrashRateLimiter(limit int, window time.Duration) *crashRateLimiter {
-	return &crashRateLimiter{limit: limit, window: window, entries: make(map[string]*crashWindow)}
+func newIPWindowLimiter(limit int, window time.Duration) *ipWindowLimiter {
+	return &ipWindowLimiter{limit: limit, window: window, entries: make(map[string]*ipWindow)}
 }
 
-func (l *crashRateLimiter) allow(key string) bool {
+func (l *ipWindowLimiter) allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
 	w, ok := l.entries[key]
 	if !ok || now.Sub(w.start) >= l.window {
-		l.entries[key] = &crashWindow{start: now, count: 1}
+		l.entries[key] = &ipWindow{start: now, count: 1}
 		// 惰性清理过期条目,防止长期运行下 map 无限增长
 		if len(l.entries) > 1024 {
 			for k, e := range l.entries {
@@ -78,7 +78,7 @@ func (l *crashRateLimiter) allow(key string) bool {
 
 // defaultCrashLimiter 返回进程级默认限流器:mediaServer.crashLimiter 未显式
 // 初始化(如某些测试构造路径)时兜底使用。
-var defaultCrashLimiter = newCrashRateLimiter(crashReportPerMinuteLimit, time.Minute)
+var defaultCrashLimiter = newIPWindowLimiter(crashReportPerMinuteLimit, time.Minute)
 
 // handleCrashReport 接收 App 崩溃上报,按 JSONL 追加写入
 // {CrashReportDir}/crash.log,超过上限时滚动为 crash.log.1。

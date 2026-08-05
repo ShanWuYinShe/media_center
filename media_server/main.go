@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -21,8 +22,13 @@ type mediaServer struct {
 	categoriesByID map[string]ContentCategory
 	catalog        *Catalog
 	credentials    []ProviderCredential
-	crashLimiter   *crashRateLimiter
+	crashLimiter   *ipWindowLimiter
+	// 凭证端点 per-IP 限流(独立于崩溃上报限流器)。
+	credentialsLimiter *ipWindowLimiter
 }
+
+// 凭证端点 per-IP 限流:正常 App 每次启动只拉一次凭证,阈值宽松但可挡匿名批量抓取。
+const credentialsPerMinuteLimit = 30
 
 func main() {
 	catalogReview := flag.Bool("catalog-review", false, "审校分类维护数据库的 pending 候选(approve/reject)后退出")
@@ -41,9 +47,10 @@ func main() {
 		log.Fatalf("load categories: %v", err)
 	}
 	server := &mediaServer{
-		config:         config,
-		categories:     content.Categories,
-		categoriesByID: indexCategories(content.Categories),
+		config:             config,
+		categories:         content.Categories,
+		categoriesByID:     indexCategories(content.Categories),
+		credentialsLimiter: newIPWindowLimiter(credentialsPerMinuteLimit, time.Minute),
 	}
 
 	if config.CredentialsPath != "" {
@@ -118,7 +125,7 @@ func (s *mediaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/providers":
 		s.handleProviders(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/providers/credentials":
-		s.handleProviderCredentials(w)
+		s.handleProviderCredentials(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/providers/"):
 		s.handleProviderRoute(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/app/update":
@@ -155,14 +162,32 @@ func (s *mediaServer) handleProviders(w http.ResponseWriter) {
 	s.writeJSON(w, http.StatusOK, ProvidersResponse{Items: items})
 }
 
-// handleProviderCredentials 返回 admin 配置的 provider 凭证（如 bilibili SESSDATA）。
+// handleProviderCredentials 返回 admin 配置的 provider 凭证(如 bilibili SESSDATA)。
 // App 端拉取后用于请求高分辨率内容。无凭证时返回空数组。
-func (s *mediaServer) handleProviderCredentials(w http.ResponseWriter) {
+//
+// 安全:凭证是共享账号的会话 cookie,泄露即整体轮换。端点要求请求携带与
+// MEDIA_SERVER_APP_API_TOKEN 匹配的 X-App-Token(常量时间比较),并叠加 per-IP
+// 限流;未配置 token 时一律 401(安全默认,App 端降级为无凭证模式)。
+func (s *mediaServer) handleProviderCredentials(w http.ResponseWriter, r *http.Request) {
+	if !s.credentialsLimiter.allow(clientIPFromRequest(r)) {
+		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "请求过于频繁,请稍后再试。"})
+		return
+	}
+	expected := s.config.AppAPIToken
+	if expected == "" || !constantTimeEqual(r.Header.Get("X-App-Token"), expected) {
+		s.writeError(w, &apiError{Status: http.StatusUnauthorized, Code: "UNAUTHORIZED", Message: "凭证接口未授权。"})
+		return
+	}
 	creds := s.credentials
 	if creds == nil {
 		creds = []ProviderCredential{}
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"credentials": creds})
+}
+
+// constantTimeEqual 常量时间比较两个 token,避免时序侧信道。
+func constantTimeEqual(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 // handleProviderRoute 按 /api/providers/{provider}/... 后续路径分发。

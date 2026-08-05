@@ -15,7 +15,7 @@ import (
 func TestCrashReportHandler(t *testing.T) {
 	s := &mediaServer{
 		config:       AppConfig{CrashReportDir: t.TempDir()},
-		crashLimiter: newCrashRateLimiter(crashReportPerMinuteLimit, time.Minute),
+		crashLimiter: newIPWindowLimiter(crashReportPerMinuteLimit, time.Minute),
 	}
 
 	t.Run("accepts valid report", func(t *testing.T) {
@@ -59,7 +59,7 @@ func TestCrashReportHandler(t *testing.T) {
 func TestCrashReportRateLimit(t *testing.T) {
 	s := &mediaServer{
 		config:       AppConfig{CrashReportDir: t.TempDir()},
-		crashLimiter: newCrashRateLimiter(3, time.Minute),
+		crashLimiter: newIPWindowLimiter(3, time.Minute),
 	}
 	body := `{"packageName":"p","stackTrace":"boom"}`
 	for i := 0; i < 3; i++ {
