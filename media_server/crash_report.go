@@ -132,7 +132,8 @@ func appendCrashReport(dir string, line []byte) error {
 		_ = os.Remove(target + ".1")
 		_ = os.Rename(target, target+".1")
 	}
-	f, err := os.OpenFile(target, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	// 0640:崩溃栈可能含路径/设备等敏感信息,挂载卷对同宿主其他用户不可读。
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
 	if err != nil {
 		return err
 	}

@@ -186,9 +186,14 @@ ON CONFLICT(category_id, provider, native_id) DO NOTHING`,
 	return affected > 0, nil
 }
 
-// stripPageSuffix 移除 B 站分 P 的后缀 _pN,返回基础 native_id。
+// stripPageSuffix 仅对 bilibili 移除分 P 后缀 _pN,返回基础 native_id。
 // 例如 "BV1xx_p3" → "BV1xx", "BV1xx" → "BV1xx"。
-func stripPageSuffix(nativeID string) string {
+// 其他 provider 的 native_id 以 "_p<数字>" 结尾时不做截断(如未来 youtube 视频
+// ID 形如 "xxx_p2026"),避免聚合逻辑误伤。
+func stripPageSuffix(provider, nativeID string) string {
+	if provider != "bilibili" {
+		return nativeID
+	}
 	idx := strings.LastIndex(nativeID, "_p")
 	if idx < 0 {
 		return nativeID
@@ -231,7 +236,7 @@ func (c *Catalog) ImportPending(items []CatalogImportItem, reviewer string) (vid
 		if cat == "" || prov == "" || nid == "" {
 			continue
 		}
-		baseID := stripPageSuffix(nid)
+		baseID := stripPageSuffix(prov, nid)
 		key := cat + "|" + prov + "|" + baseID
 		g, ok := groups[key]
 		if !ok {
@@ -984,7 +989,7 @@ ORDER BY v.provider, v.native_id`, pagePattern)
 		v.DurationSec = dur.Int64
 		v.Creators = decodeCreators(creators.String)
 
-		baseID := stripPageSuffix(v.NativeID)
+		baseID := stripPageSuffix(v.Provider, v.NativeID)
 		key := v.Provider + "|" + baseID
 		if _, ok := pageMap[key]; !ok {
 			allKeys = append(allKeys, key)

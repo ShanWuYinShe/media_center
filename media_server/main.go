@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -112,8 +115,22 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 	log.Printf("media_server listening on %s", addr)
-	if err := srv.ListenAndServe(); err != nil {
-		log.Fatal(err)
+
+	// 优雅停机:收到 SIGTERM/SIGINT 后停止接收新连接,给进行中的请求最多
+	// 10 秒收尾(否则 compose stop/重启会直接砍断在途请求)。
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("listen: %v", err)
+		}
+	}()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
+	log.Println("media_server shutting down…")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("graceful shutdown: %v", err)
 	}
 }
 
@@ -146,6 +163,9 @@ func (s *mediaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // handleProviders 返回 catalog 中有 approved 视频的所有 provider。
 func (s *mediaServer) handleProviders(w http.ResponseWriter) {
+	// 目录数据变化低频(审核后更新),60s 缓存显著减少 App 启动/回首页的重复拉取;
+	// 凭证等敏感接口不在此列。
+	w.Header().Set("Cache-Control", "public, max-age=60")
 	if s.catalog == nil {
 		s.writeJSON(w, http.StatusOK, ProvidersResponse{Items: []ProviderInfo{}})
 		return
@@ -213,6 +233,7 @@ func (s *mediaServer) handleProviderRoute(w http.ResponseWriter, r *http.Request
 
 // handleProviderCategories 返回某 provider 有 approved 视频的分类列表。
 func (s *mediaServer) handleProviderCategories(w http.ResponseWriter, r *http.Request, provider string) {
+	w.Header().Set("Cache-Control", "public, max-age=60")
 	if s.catalog == nil {
 		s.writeJSON(w, http.StatusOK, CategoriesResponse{Items: []PublicCategory{}})
 		return
@@ -236,6 +257,7 @@ func (s *mediaServer) handleProviderCategories(w http.ResponseWriter, r *http.Re
 
 // handleProviderCategoryVideos 返回某 provider 某分类下 approved 视频列表(分页)。
 func (s *mediaServer) handleProviderCategoryVideos(w http.ResponseWriter, r *http.Request, provider, categoryID string) {
+	w.Header().Set("Cache-Control", "public, max-age=60")
 	page, pageSize, err := paginationFromRequest(r)
 	if err != nil {
 		s.writeError(w, err)
