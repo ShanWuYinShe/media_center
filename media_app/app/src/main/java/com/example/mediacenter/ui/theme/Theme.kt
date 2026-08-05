@@ -27,6 +27,20 @@ val LocalAppleTvColors = staticCompositionLocalOf { AppleTvColors() }
 fun MediaCenterTheme(content: @Composable () -> Unit) {
     CompositionLocalProvider(LocalAppleTvColors provides AppleTvColors()) {
         androidx.compose.material3.MaterialTheme(
+            // 显式指定深色 colorScheme:不传时默认 lightColorScheme,AlertDialog
+            // 默认按钮色、OutlinedButton 边框/文字等系统组件会渲染成浅色主题,
+            // 与全局深色视觉冲突。
+            colorScheme = darkColorScheme(
+                primary = AppleBlue,
+                onPrimary = Color.White,
+                secondary = AppleBlue,
+                background = BackgroundDark,
+                surface = CardGray,
+                onBackground = TextPrimary,
+                onSurface = TextPrimary,
+                error = ErrorRed,
+                onError = Color.White,
+            ),
             content = content,
         )
     }

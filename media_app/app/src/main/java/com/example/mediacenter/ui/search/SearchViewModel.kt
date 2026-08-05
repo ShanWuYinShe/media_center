@@ -7,6 +7,7 @@ import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.log.AppLog
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -52,6 +53,8 @@ class SearchViewModel(
     private var catalogReady = false
     // 是否已完成全部页(后台补全)。
     private var catalogComplete = false
+    // 补全失败标记:下次搜索前重试,避免本次会话搜索结果永久缺页。
+    private var completePending = false
 
     init {
         viewModelScope.launch {
@@ -91,12 +94,15 @@ class SearchViewModel(
             catalogReady = true
             catalogComplete = false
             AppLog.i("Search", "catalog fast-load: ${loaded.values.sumOf { it.size }} videos in ${loaded.size} categories")
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             AppLog.w("Search", "catalog fast-load failed: ${e.message}", e)
         }
     }
 
-    // 后台补全剩余页(FAST_PAGES+1..MAX)，让搜索结果更全。失败/中断静默。
+    // 后台补全剩余页(FAST_PAGES+1..MAX)，让搜索结果更全。失败标记 pending,
+    // 下次 performSearch 前重试;中断/取消直接向上传播。
     private suspend fun completeCatalog() {
         val cats = _uiState.value.categories
         if (cats.isEmpty()) return
@@ -114,9 +120,14 @@ class SearchViewModel(
                 catalogCache[catId] = merged
             }
             catalogComplete = true
+            completePending = false
             AppLog.i("Search", "catalog complete: ${catalogCache.values.sumOf { it.size }} videos")
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            AppLog.w("Search", "catalog complete failed: ${e.message}", e)
+            // 失败不丢已加载数据;标记 pending,下次搜索前重试
+            completePending = true
+            AppLog.w("Search", "catalog complete failed (will retry): ${e.message}", e)
         }
     }
 
@@ -124,6 +135,11 @@ class SearchViewModel(
         if (query.length < 2) {
             _uiState.value = _uiState.value.copy(results = emptyList(), isSearching = false, error = null)
             return
+        }
+        // 上次补全失败:在本次搜索前重新触发,避免搜索结果永久缺页。
+        if (catalogReady && completePending && !catalogComplete) {
+            completePending = false
+            viewModelScope.launch { completeCatalog() }
         }
         // provider 切换或首次:快速加载前几页(秒回)。
         if (!isCatalogCurrent || !catalogReady) {

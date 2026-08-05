@@ -1,23 +1,29 @@
 package com.example.mediacenter.data
 
+import android.content.Context
+import android.content.SharedPreferences
 import com.example.mediacenter.BuildConfig
 import com.example.mediacenter.log.AppLog
 
 class MediaRepository(
     private val api: MediaApi,
     private val bilibiliApi: BilibiliApi = BilibiliApi(),
+    prefs: SharedPreferences? = null,
 ) {
     // 当前选中的 provider(默认 bilibili)。首次加载 providers 后自动选第一个,
     // 之后用户手动切换优先;provider 状态在全局共享实例上,首页/搜索/播放页联动。
-    @Volatile var currentProvider: String = "bilibili"
+    // 选择持久化到 SharedPreferences,App 重启后恢复,不回到默认源。
+    @Volatile var currentProvider: String = prefs?.getString(KEY_CURRENT_PROVIDER, null) ?: "bilibili"
         private set
     private val providerInitialized = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val providerPrefs = prefs
 
     suspend fun providers(): List<ProviderInfo> {
         refreshCredentials()
         val items = api.providers().items.orEmpty()
         if (items.isNotEmpty() && !providerInitialized.getAndSet(true)) {
             currentProvider = items.first().id
+            persistProvider()
         }
         return items
     }
@@ -26,7 +32,16 @@ class MediaRepository(
     fun setProvider(provider: String) {
         if (provider == currentProvider) return
         currentProvider = provider
+        persistProvider()
         AppLog.i("Repo", "switch provider to $provider")
+    }
+
+    private fun persistProvider() {
+        providerPrefs?.edit()?.putString(KEY_CURRENT_PROVIDER, currentProvider)?.apply()
+    }
+
+    companion object {
+        private const val KEY_CURRENT_PROVIDER = "current_provider"
     }
 
     // 从 server 拉取 provider 凭证并注入到对应的 API 客户端。

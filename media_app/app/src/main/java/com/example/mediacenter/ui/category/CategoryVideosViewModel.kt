@@ -21,6 +21,8 @@ data class CategoryVideosUiState(
     val isLoadingMore: Boolean = false,
     val error: String? = null,
     val loadMoreFailed: Boolean = false,
+    // 没有更多数据(服务端 total 缺失/忽略 page 时也可靠终止翻页)
+    val noMore: Boolean = false,
 )
 
 /**
@@ -79,7 +81,7 @@ class CategoryVideosViewModel(
 
     fun loadMore() {
         val state = _uiState.value
-        if (requestInFlight || state.isLoadingInitial || state.isLoadingMore || state.loadMoreFailed) return
+        if (requestInFlight || state.isLoadingInitial || state.isLoadingMore || state.loadMoreFailed || state.noMore) return
         if (state.total > 0 && state.items.size >= state.total) return
         requestInFlight = true
         _uiState.update { it.copy(isLoadingMore = true, loadMoreFailed = false) }
@@ -94,6 +96,10 @@ class CategoryVideosViewModel(
                         page = response.page.coerceAtLeast(nextPage),
                         total = response.total,
                         isLoadingMore = false,
+                        // 终止保护:服务端 total 缺失(=0)或忽略 page 参数时,
+                        // 空页/无新增即判定没有更多,避免滚到底无限发请求。
+                        noMore = response.items.isNullOrEmpty() ||
+                            (response.total > 0 && merged.size >= response.total),
                     )
                 }
             } catch (e: Exception) {

@@ -233,9 +233,15 @@ private fun PlayerContent(
         c.play()
     }
 
-    // 解析失败(切清晰度/分P)时暂停旧流,避免覆盖层下声音继续
+    // 解析失败(切清晰度/分P)时暂停旧流,避免覆盖层下声音继续;
+    // 重试成功(overlayError 清空)后若 url 未变(加载 effect 不重启,极端情况
+    // 下签名地址相同),显式恢复播放,避免视频停在暂停态无任何提示。
     LaunchedEffect(overlayError) {
-        if (overlayError != null) controller?.pause()
+        if (overlayError != null) {
+            controller?.pause()
+        } else if (controller?.playbackState == Player.STATE_READY) {
+            controller?.play()
+        }
     }
 
     // 进度轮询;播放中每 5 秒持久化一次,崩溃/杀进程也能恢复。
