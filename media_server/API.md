@@ -76,6 +76,24 @@ type VideoSummary = {
 }
 ```
 
+### `GET /search?q=关键词&page=1&pageSize=20`
+
+在已审核（approved）目录中按关键词子串搜索（匹配标题/简介/作者，大小写不敏感，跨分类去重），按 pinned > score > native_id 排序。**不调任何上游**。`q` 为空返回空结果。
+
+```json
+{ "query": "流浪地球", "total": 2, "items": [ { "id": "BV1xxx", "title": "流浪地球", ... } ] }
+```
+
+### `GET /providers/credentials`
+
+返回 admin 配置的 provider 凭证（如 bilibili SESSDATA），App 端用于请求高分辨率内容。
+
+**鉴权**：请求必须携带 `X-App-Token` 头，且与服务端 `MEDIA_SERVER_APP_API_TOKEN` 一致（常量时间比较）；未配置 token 或令牌不匹配返回 401。同一 IP 每分钟超过 30 次返回 429。无凭证时返回空数组：
+
+```json
+{ "credentials": [] }
+```
+
 ### `GET /app/update?versionCode=1`
 
 返回 Android TV App 的最新发布版本。已是最新返回 `204 No Content`。
@@ -116,7 +134,8 @@ type VideoSummary = {
 
 ## 部署相关
 
-- `MEDIA_SERVER_PUBLIC_URL`（可选）：对外可见的 API 基址（如 `https://yinghuoren.com/api/media`）。位于反代后面时必须设置。
+- `MEDIA_SERVER_PUBLIC_URL`（建议必填）：对外可见的 API 基址（如 `https://yinghuoren.com/api/media`）。位于反代后面时必须设置；未设置时下载地址由 Host 推导，仅接受 `MEDIA_SERVER_ALLOWED_HOSTS` 白名单或本地网段（防 Host 头投毒）。
+- `MEDIA_SERVER_APP_API_TOKEN`：凭证接口令牌，与 App 构建时注入的 `APP_API_TOKEN` 一致；为空则凭证接口 401。
 - `contentCategories.json` 定义分类 ID 到标题/描述的映射。sources 字段保留解析（向后兼容旧配置）但不再使用。
 
 ## App 侧必须遵守
