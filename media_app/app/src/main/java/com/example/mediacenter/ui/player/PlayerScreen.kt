@@ -446,7 +446,8 @@ private fun ControlsOverlay(
                 .background(Color.Black.copy(alpha = 0.65f))
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
-            // 拖动中的临时进度:拖动期间优先展示它,松手/按键时才真正 seek
+            // 拖动中的临时进度:拖动期间只更新本地值,松手/按键结束时才真正
+            // seek——避免飞鼠/触屏拖动产生每帧连续 seek 请求。
             var dragPositionMs by remember { mutableStateOf<Float?>(null) }
             val sliderMax = durationMs.toFloat().coerceAtLeast(1f)
             // 焦点在 Slider 上时,左右键 = 快进/快退 10s(长按连续触发)
@@ -454,9 +455,11 @@ private fun ControlsOverlay(
                 value = (dragPositionMs ?: positionMs.toFloat()).coerceIn(0f, sliderMax),
                 onValueChange = { value ->
                     dragPositionMs = value
-                    onSeek(value.toLong())
                 },
-                onValueChangeFinished = { dragPositionMs = null },
+                onValueChangeFinished = {
+                    dragPositionMs?.let { onSeek(it.toLong()) }
+                    dragPositionMs = null
+                },
                 valueRange = 0f..sliderMax,
                 modifier = Modifier
                     .weight(1f)
@@ -537,7 +540,7 @@ private fun SelectChip(
 ) {
     Button(
         onClick = onClick,
-        modifier = Modifier.requiredHeight(40.dp),
+        modifier = Modifier.requiredHeight(48.dp),
         colors = ButtonDefaults.colors(
             containerColor = if (selected) AppleBlue else CardGray,
             focusedContainerColor = AppleBlue,

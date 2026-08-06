@@ -22,6 +22,7 @@ import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.components.ProviderSelectDialog
 import com.example.mediacenter.ui.components.TopBar
 import com.example.mediacenter.ui.update.UpdateDialog
+import com.example.mediacenter.ui.update.UpdateDialogState
 import com.example.mediacenter.update.AppUpdateManager
 import com.example.mediacenter.util.NetworkRestoreEffect
 
@@ -31,17 +32,17 @@ fun HomeScreen(
     onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onSeeAll: (categoryId: String, title: String) -> Unit,
-    viewModel: HomeViewModel = viewModel(
-        factory = HomeViewModelFactory(
-            remember {
-                AppUpdateManager(
-                    LocalContext.current.applicationContext,
-                    MediaApi(BuildConfig.MEDIA_SERVER_URL),
-                )
-            },
-        ),
-    ),
 ) {
+    // 更新管理器与 ViewModel 在组合体内创建:AppUpdateManager 需要 context,
+    // 下载状态随 ViewModel 存活(离开首页不中断)。
+    val context = LocalContext.current
+    val updateManager = remember {
+        AppUpdateManager(
+            context.applicationContext,
+            MediaApi(BuildConfig.MEDIA_SERVER_URL),
+        )
+    }
+    val viewModel: HomeViewModel = viewModel(factory = HomeViewModelFactory(updateManager))
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
 
