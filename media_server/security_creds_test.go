@@ -132,3 +132,47 @@ func TestIsAllowedDownloadHost(t *testing.T) {
 		t.Error("no whitelist: localhost should be allowed for dev")
 	}
 }
+
+// TestAppDownloadURLRejectsHostPoisoning 验证 APK 下载地址推导的防投毒行为:
+// 配置了 PUBLIC_URL 时完全忽略请求 Host;未配置时恶意公网 Host 返回空(拒绝下发),
+// 仅白名单/本地开发 Host 可推导。
+func TestAppDownloadURLRejectsHostPoisoning(t *testing.T) {
+	t.Run("public url configured ignores malicious host", func(t *testing.T) {
+		s := &mediaServer{config: AppConfig{PublicBaseURL: "https://yinghuoren.com"}}
+		req := httptest.NewRequest(http.MethodGet, "/api/app/update", nil)
+		req.Host = "evil.example.com"
+		got := s.appDownloadURL(req, "normal")
+		if got != "https://yinghuoren.com/app/download?variant=normal" {
+			t.Fatalf("public url must win over host, got %q", got)
+		}
+	})
+
+	t.Run("no public url and untrusted host rejected", func(t *testing.T) {
+		s := &mediaServer{config: AppConfig{}}
+		req := httptest.NewRequest(http.MethodGet, "/api/app/update", nil)
+		req.Host = "evil.example.com"
+		if got := s.appDownloadURL(req, "normal"); got != "" {
+			t.Fatalf("untrusted host must be rejected, got %q", got)
+		}
+	})
+
+	t.Run("no public url and forwarded host spoof rejected", func(t *testing.T) {
+		s := &mediaServer{config: AppConfig{}}
+		req := httptest.NewRequest(http.MethodGet, "/api/app/update", nil)
+		req.Host = "media_server:8787" // 内部地址,但 X-Forwarded-Host 被伪造
+		req.Header.Set("X-Forwarded-Host", "attacker.com")
+		if got := s.appDownloadURL(req, "normal"); got != "" {
+			t.Fatalf("spoofed forwarded host must be rejected, got %q", got)
+		}
+	})
+
+	t.Run("no public url and local dev host allowed", func(t *testing.T) {
+		s := &mediaServer{config: AppConfig{}}
+		req := httptest.NewRequest(http.MethodGet, "/api/app/update", nil)
+		req.Host = "localhost:8787"
+		got := s.appDownloadURL(req, "normal")
+		if got == "" || !strings.Contains(got, "localhost") {
+			t.Fatalf("localhost should be allowed for dev, got %q", got)
+		}
+	})
+}
