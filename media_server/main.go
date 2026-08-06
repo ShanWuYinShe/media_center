@@ -231,7 +231,7 @@ func (s *mediaServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusOK, SearchResponse{Query: query, Total: 0, Items: []VideoSummary{}})
 		return
 	}
-	items, total, searchErr := s.catalog.SearchApproved(query, page, pageSize)
+	items, total, searchErr := s.catalog.SearchApproved(query, strings.TrimSpace(r.URL.Query().Get("provider")), page, pageSize)
 	if searchErr != nil {
 		log.Printf("search %q: %v", query, searchErr)
 		s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"})

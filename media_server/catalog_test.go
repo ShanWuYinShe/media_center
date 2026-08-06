@@ -282,7 +282,7 @@ func TestCatalogSearchApprovedOnlyReturnsApproved(t *testing.T) {
 	}
 
 	// "地球" appears in aaa(approved), ccc(rejected), ddd(pending) → only aaa, deduped to one row.
-	items, total, err := c.SearchApproved("地球", 1, 20)
+	items, total, err := c.SearchApproved("地球", "", 1, 20)
 	if err != nil {
 		t.Fatalf("search 地球: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestCatalogSearchApprovedOnlyReturnsApproved(t *testing.T) {
 	}
 
 	// ASCII case-insensitive: lowercase query matches mixed-case title.
-	items, total, err = c.SearchApproved("movie", 1, 20)
+	items, total, err = c.SearchApproved("movie", "", 1, 20)
 	if err != nil {
 		t.Fatalf("search movie: %v", err)
 	}
@@ -300,20 +300,35 @@ func TestCatalogSearchApprovedOnlyReturnsApproved(t *testing.T) {
 	}
 
 	// Creator field is searchable.
-	if items, _, err = c.SearchApproved("up-BV1aaa", 1, 20); err != nil || len(items) != 1 || items[0].NativeID != "BV1aaa" {
+	if items, _, err = c.SearchApproved("up-BV1aaa", "", 1, 20); err != nil || len(items) != 1 || items[0].NativeID != "BV1aaa" {
 		t.Fatalf("search creator: items=%v err=%v", idsOf(items), err)
 	}
 
 	// No match / empty query → empty result, no upstream call.
-	if items, total, _ = c.SearchApproved("不存在的关键词", 1, 20); total != 0 || len(items) != 0 {
+	if items, total, _ = c.SearchApproved("不存在的关键词", "", 1, 20); total != 0 || len(items) != 0 {
 		t.Fatalf("search none: total=%d items=%v", total, idsOf(items))
 	}
-	if items, total, _ = c.SearchApproved("   ", 1, 20); total != 0 || len(items) != 0 {
+	if items, total, _ = c.SearchApproved("   ", "", 1, 20); total != 0 || len(items) != 0 {
 		t.Fatalf("blank query: total=%d items=%v", total, idsOf(items))
 	}
 
 	// LIKE wildcards are escaped to literals: "%" must not match everything.
-	if _, total, _ = c.SearchApproved("%", 1, 20); total != 0 {
+	if _, total, _ = c.SearchApproved("%", "", 1, 20); total != 0 {
 		t.Fatalf("wildcard %% should be literal, got total=%d", total)
+	}
+
+	// provider 过滤:只返回该 provider 的结果。
+	mustUpsert(t, c, "youtube", "yt_earth", "Earth from Space", 600)
+	if _, err := c.AddPendingMember("movies", "youtube", "yt_earth", 10); err != nil {
+		t.Fatalf("add yt: %v", err)
+	}
+	if _, err := c.SetMemberStatus("movies", "youtube", "yt_earth", "approved", "tester"); err != nil {
+		t.Fatalf("approve yt: %v", err)
+	}
+	if items, total, _ := c.SearchApproved("earth", "youtube", 1, 20); total != 1 || len(items) != 1 || items[0].Provider != "youtube" {
+		t.Fatalf("provider filter: total=%d items=%v", total, idsOf(items))
+	}
+	if items, total, _ := c.SearchApproved("earth", "bilibili", 1, 20); total != 0 || len(items) != 0 {
+		t.Fatalf("provider filter should exclude other providers: total=%d", total)
 	}
 }

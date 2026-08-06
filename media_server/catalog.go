@@ -892,7 +892,9 @@ func escapeLike(s string) string {
 // SearchApproved 只在已审核(approved)的分类数据里按关键词搜索,绝不查询上游。
 // 匹配标题/简介/作者的子串(大小写不敏感),跨分类去重后按 置顶 > 分数 > native_id 排序,
 // 返回一页结果与去重后的总命中数。query 为空或没有命中的 approved 数据时返回空列表。
-func (c *Catalog) SearchApproved(query string, page, pageSize int) ([]CatalogVideo, int, error) {
+// provider 非空时只搜索该 provider(如 App 端只支持 bilibili 播放,避免返回
+// 其他 provider 无法播放的结果)。
+func (c *Catalog) SearchApproved(query, provider string, page, pageSize int) ([]CatalogVideo, int, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return []CatalogVideo{}, 0, nil
@@ -908,15 +910,21 @@ func (c *Catalog) SearchApproved(query string, page, pageSize int) ([]CatalogVid
   lower(v.title) LIKE ? ESCAPE '\' OR
   lower(COALESCE(v.description, '')) LIKE ? ESCAPE '\' OR
   lower(COALESCE(v.creators, '')) LIKE ? ESCAPE '\')`
+	args := []any{like, like, like}
+	whereSQL := where
+	if provider = strings.TrimSpace(strings.ToLower(provider)); provider != "" {
+		whereSQL += ` AND v.provider = ?`
+		args = append(args, provider)
+	}
 
 	var total int
 	countSQL := `SELECT COUNT(*) FROM (
 SELECT 1
 FROM videos v
 JOIN category_members m ON m.provider = v.provider AND m.native_id = v.native_id
-WHERE ` + where + `
+WHERE ` + whereSQL + `
 GROUP BY v.provider, v.native_id)`
-	if err := c.db.QueryRow(countSQL, like, like, like).Scan(&total); err != nil {
+	if err := c.db.QueryRow(countSQL, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count search: %w", err)
 	}
 	if total == 0 {
@@ -929,11 +937,12 @@ SELECT v.provider, v.native_id, v.title, v.description, v.creators, v.duration_s
        MAX(m.pinned) AS top, MAX(COALESCE(m.score, 0)) AS sc
 FROM videos v
 JOIN category_members m ON m.provider = v.provider AND m.native_id = v.native_id
-WHERE ` + where + `
+WHERE ` + whereSQL + `
 GROUP BY v.provider, v.native_id
 ORDER BY top DESC, sc DESC, v.native_id ASC
 LIMIT ? OFFSET ?`
-	rows, err := c.db.Query(listSQL, like, like, like, pageSize, offset)
+	queryArgs := append(append([]any{}, args...), pageSize, offset)
+	rows, err := c.db.Query(listSQL, queryArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query search: %w", err)
 	}
