@@ -43,8 +43,9 @@ fun ProviderSelectDialog(
                             focusedContentColor = TextPrimary,
                         ),
                     ) {
+                        // 选中态加 ✓ 标记:仅靠底色区分在 TV 亮度/色偏下不易分辨
                         Text(
-                            text = provider.name ?: provider.id,
+                            text = if (provider.id == currentProvider) "✓  " + (provider.name ?: provider.id) else (provider.name ?: provider.id),
                             color = TextPrimary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,

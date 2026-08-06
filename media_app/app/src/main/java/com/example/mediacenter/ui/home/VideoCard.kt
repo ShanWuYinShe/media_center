@@ -78,7 +78,7 @@ fun VideoCard(
                 Text(
                     text = formatSeconds(duration),
                     color = Color.White,
-                    fontSize = 12.sp,
+                    fontSize = 14.sp,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(8.dp)

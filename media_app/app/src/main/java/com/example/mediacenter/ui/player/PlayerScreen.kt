@@ -1,11 +1,17 @@
 package com.example.mediacenter.ui.player
 
+import android.Manifest
+import android.app.Activity
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioManager
+import android.os.Build
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import androidx.activity.compose.BackHandler
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -268,6 +274,19 @@ private fun PlayerContent(
     // 音频焦点:抢占时暂停、归还后恢复,兼顾来电/其他 App 播放
     val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     var resumeAfterTransient by remember { mutableStateOf(false) }
+
+    // Android 13+ 通知权限:首次进入播放页时请求(媒体通知/系统媒体栏才需要),
+    // 不在 App 启动时弹窗打扰用户;拒绝后不影响播放,仅系统媒体栏不可见。
+    LaunchedEffect(Unit) {
+        val activity = context as? Activity
+        if (activity != null &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(activity, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
+        }
+    }
+
     val audioFocusListener = remember {
         AudioManager.OnAudioFocusChangeListener { change ->
             when (change) {
@@ -483,7 +502,7 @@ private fun ControlsOverlay(
             Text(
                 text = "${formatDuration(positionMs)} / ${formatDuration(durationMs)}",
                 color = TextSecondary,
-                fontSize = 12.sp,
+                fontSize = 14.sp,
             )
             Spacer(Modifier.height(8.dp))
             Row(
@@ -548,7 +567,7 @@ private fun SelectChip(
             focusedContentColor = TextPrimary,
         ),
     ) {
-        Text(label, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
+        Text(label, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 16.sp)
     }
 }
 

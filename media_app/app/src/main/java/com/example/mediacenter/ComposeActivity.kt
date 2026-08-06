@@ -1,8 +1,5 @@
 package com.example.mediacenter
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -19,11 +16,7 @@ class ComposeActivity : ComponentActivity() {
                 AppNavigation()
             }
         }
-        // Android 13+ 需运行时授予通知权限,系统媒体栏/播放通知才可见
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
-        }
+        // 通知权限(POST_NOTIFICATIONS)不在启动时请求——TV 用户会困惑且可能拒绝;
+        // 延迟到首次进入播放页时请求(见 PlayerScreen),媒体通知/系统媒体栏才需要它。
     }
 }

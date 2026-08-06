@@ -102,7 +102,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Text(
                     text = logs.ifEmpty { "(空)" },
                     color = TextSecondary,
-                    fontSize = 12.sp,
+                    fontSize = 14.sp,
                     modifier = Modifier
                         .fillMaxWidth()
                         .requiredHeight(400.dp)
