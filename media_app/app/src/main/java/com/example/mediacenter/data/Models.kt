@@ -54,6 +54,14 @@ data class VideosResponse(
     val items: List<VideoSummary>? = null,
 )
 
+// /api/search 的响应:在 approved 目录中按关键词搜索(服务端排序与去重)。
+@Serializable
+data class SearchResponse(
+    val query: String = "",
+    val total: Int = 0,
+    val items: List<VideoSummary>? = null,
+)
+
 // PlaybackOption 表示一条真实可播放的流(BilibiliApi 按指定 qn 解析后产出)。
 // 每个选项的 url 都是对应 qn 的实际流地址;切清晰度需按新 qn 重新解析,而非复用旧 url。
 @Serializable

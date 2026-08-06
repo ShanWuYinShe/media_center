@@ -136,6 +136,22 @@ class SearchViewModel(
             _uiState.value = _uiState.value.copy(results = emptyList(), isSearching = false, error = null)
             return
         }
+        _uiState.value = _uiState.value.copy(isSearching = true, error = null)
+        // 优先服务端搜索:跨全部分类页、按置顶/分数排序,一次请求出全量结果。
+        // 旧版 server 没有 /api/search 或瞬时网络失败时回退本地目录过滤。
+        val serverResults = try {
+            repository.search(query)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLog.w("Search", "server search failed, fallback to local catalog: ${e.message}", e)
+            null
+        }
+        if (serverResults != null) {
+            _uiState.value = _uiState.value.copy(isSearching = false, results = serverResults, error = null)
+            return
+        }
+        // ── 本地回退:拉目录缓存后按标题过滤 ──
         // 上次补全失败:在本次搜索前重新触发,避免搜索结果永久缺页。
         if (catalogReady && completePending && !catalogComplete) {
             completePending = false
@@ -143,7 +159,6 @@ class SearchViewModel(
         }
         // provider 切换或首次:快速加载前几页(秒回)。
         if (!isCatalogCurrent || !catalogReady) {
-            _uiState.value = _uiState.value.copy(isSearching = true, error = null)
             refreshCatalogFast()
             if (!catalogReady) {
                 _uiState.value = _uiState.value.copy(

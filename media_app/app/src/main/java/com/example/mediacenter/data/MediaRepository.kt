@@ -75,6 +75,10 @@ class MediaRepository(
     suspend fun catalogPage(categoryId: String, page: Int = 1, pageSize: Int = 18): VideosResponse =
         api.categoryVideos(currentProvider, categoryId, page, pageSize)
 
+    /** 服务端搜索(当前 provider 内,approved 目录)。失败时由调用方回退本地过滤。 */
+    suspend fun search(query: String): List<VideoSummary> =
+        api.search(query, currentProvider).items.orEmpty()
+
     /**
      * 解析播放地址:按当前 provider 分发。bilibili 走 WBI 签名 + view + playurl
      * (bvid 支持 "bvid_pN" 多P分条格式);其他 provider 无本地解析器时给出明确错误。

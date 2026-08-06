@@ -62,6 +62,15 @@ class MediaApi(
         ),
     )
 
+    /** 服务端搜索(approved 目录,按 provider 过滤,跨分类去重排序)。 */
+    suspend fun search(query: String, provider: String): SearchResponse = get(
+        pathSegments = listOf("search"),
+        query = mapOf(
+            "q" to query,
+            "provider" to provider,
+        ),
+    )
+
     suspend fun appUpdate(currentVersionCode: Int): AppUpdateInfo? {
         val body = getOptionalBody(
             pathSegments = listOf("app", "update"),
