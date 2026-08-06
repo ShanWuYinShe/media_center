@@ -27,6 +27,8 @@ import kotlinx.coroutines.launch
 data class HomeUiState(
     val categories: List<ContentCategory> = emptyList(),
     val categoryVideos: Map<String, List<VideoSummary>> = emptyMap(),
+    // 加载失败(非空内容)的分类 id 集合:与"真的没有内容"区分,UI 展示失败文案。
+    val categoryErrors: Set<String> = emptySet(),
     val providers: List<ProviderInfo> = emptyList(),
     val currentProvider: String = "",
     val isLoading: Boolean = true,
@@ -69,17 +71,26 @@ class HomeViewModel(
                 )
                 val cats = repository.categories()
                 // 并行拉取各分类第一页,避免分类多时首页加载时间线性增长。
-                // 单个分类失败(超时/5xx)不拖垮整个首页:该分类显示空 + 其余正常展示,
-                // 下拉/重进会整体刷新。
-                val videos = coroutineScope {
+                // 单个分类失败(超时/5xx)不拖垮整个首页:该分类显示失败文案,
+                // 其余正常展示,下拉/重进会整体刷新。
+                val results = coroutineScope {
                     cats.map { cat ->
                         async {
                             cat.id to runCatching { repository.catalogPage(cat.id).items.orEmpty() }
-                                .getOrDefault(emptyList())
                         }
-                    }.awaitAll().toMap()
+                    }.awaitAll()
                 }
-                _uiState.value = _uiState.value.copy(categories = cats, categoryVideos = videos, isLoading = false)
+                val videos = mutableMapOf<String, List<VideoSummary>>()
+                val failed = mutableSetOf<String>()
+                for ((catId, result) in results) {
+                    result.onSuccess { videos[catId] = it }.onFailure { failed.add(catId) }
+                }
+                _uiState.value = _uiState.value.copy(
+                    categories = cats,
+                    categoryVideos = videos,
+                    categoryErrors = failed,
+                    isLoading = false,
+                )
             } catch (e: Exception) {
                 // 被取消的任务(CancellationException)不当作错误展示
                 if (e is kotlinx.coroutines.CancellationException) throw e

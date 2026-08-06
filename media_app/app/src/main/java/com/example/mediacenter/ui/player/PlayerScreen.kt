@@ -161,13 +161,19 @@ private fun PlayerContent(
 
     // 与 PlaybackService 里的播放器异步建立 MediaController 连接。
     // 系统媒体栏/通知/媒体键由服务端 MediaSession 承载,页面只负责驱动。
+    // 连接失败自动重试(最多 MAX_CONTROLLER_ATTEMPTS 次,间隔 2s),
+    // 覆盖服务启动竞态/瞬时故障,避免用户只能返回重进。
     var controller by remember { mutableStateOf<MediaController?>(null) }
     var controllerFailed by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
+    var connectAttempts by remember { mutableIntStateOf(0) }
+    LaunchedEffect(connectAttempts) {
+        if (connectAttempts > 0) {
+            delay(CONTROLLER_RETRY_DELAY_MS)
+        }
         val sessionToken = SessionToken(context, ComponentName(context, PlaybackService::class.java))
         val future = MediaController.Builder(context, sessionToken).buildAsync()
-        controller = try {
-            suspendCancellableCoroutine { continuation ->
+        val connected = try {
+            suspendCancellableCoroutine<MediaController?> { continuation ->
                 val onReady = {
                     val mediaController = runCatching { future.get() }.getOrNull()
                     if (continuation.isActive) {
@@ -187,8 +193,15 @@ private fun PlayerContent(
                 future.addListener(onReady, Executor { command -> command.run() })
             }
         } catch (e: Exception) {
-            controllerFailed = true
             null
+        }
+        if (connected != null) {
+            controller = connected
+        } else if (connectAttempts < MAX_CONTROLLER_ATTEMPTS) {
+            // 未达上限:递增触发 LaunchedEffect 重启,进入下一轮重试
+            connectAttempts++
+        } else {
+            controllerFailed = true
         }
     }
 
@@ -596,3 +609,7 @@ private val CONTROL_KEYS = setOf(
 private const val SEEK_STEP_MS = 10_000L
 
 private const val AUTO_HIDE_DELAY_MS = 4000L
+
+// MediaController 连接失败的重试上限与间隔(覆盖服务启动竞态/瞬时故障)
+private const val MAX_CONTROLLER_ATTEMPTS = 3
+private const val CONTROLLER_RETRY_DELAY_MS = 2000L

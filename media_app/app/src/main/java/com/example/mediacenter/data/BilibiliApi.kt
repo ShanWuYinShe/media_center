@@ -6,6 +6,7 @@ import java.io.IOException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -231,7 +232,23 @@ class BilibiliApi(
         return cookieFields.entries.joinToString("; ") { "${it.key}=${it.value}" }
     }
 
+    // 对瞬时网络错误(IOException)做一次退避重试:B 站 API 偶发超时/连接重置,
+    // 直接失败会让播放页一次报错;业务错误(BilibiliApiException)与取消不重试。
     private suspend inline fun <reified T> getJson(url: String): T {
+        var attempt = 0
+        while (true) {
+            try {
+                return getJsonOnce<T>(url)
+            } catch (e: IOException) {
+                if (attempt >= MAX_RETRIES) throw e
+                AppLog.w("Bili", "GET $url IO error, retry ${attempt + 1}/$MAX_RETRIES: ${e.message}")
+                delay(RETRY_BACKOFF_MS[attempt])
+                attempt++
+            }
+        }
+    }
+
+    private suspend inline fun <reified T> getJsonOnce(url: String): T {
         val request = Request.Builder()
             .url(url)
             .apply { DIRECT_HEADERS.forEach { (k, v) -> header(k, v) } }
@@ -284,6 +301,9 @@ class BilibiliApi(
         // 有凭证(如 SESSDATA)时首选清晰度:127 = 4K,B 站自动降级到视频可用的最高质量。
         private const val PREFERRED_QUALITY_WITH_COOKIE = 127
         private const val WBI_KEY_TTL_MILLIS = 10L * 60 * 1000
+        // 瞬时网络错误重试:1 次,800ms 退避(播放解析是用户主动操作,容忍一次重试)。
+        private const val MAX_RETRIES = 1
+        private val RETRY_BACKOFF_MS = longArrayOf(800L)
 
         // B 站反爬要求:必须带 PC 端 User-Agent + Referer 才能拿到 playurl。
         // 与 PlaybackService 的 BILI_CDN_HEADERS 同源(单一来源),播放流/playurl 共用。

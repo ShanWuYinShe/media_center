@@ -34,6 +34,8 @@ object AppLog {
 
     @Volatile private var logFile: File? = null
     @Volatile private var rotatedFile: File? = null
+    // 单线程 executor 串行写入:缓存当前文件长度,避免每条日志都 stat 一次。
+    private var cachedLength = 0L
 
     /** 在 Application 启动时调用一次,准备文件落盘目录。失败不影响 logcat 输出。 */
     fun init(context: Context) {
@@ -109,13 +111,19 @@ object AppLog {
         val target = logFile ?: return
         synchronized(fileLock) {
             runCatching {
-                if (target.length() > MAX_FILE_BYTES) {
+                if (cachedLength == 0L) {
+                    cachedLength = target.length()
+                }
+                if (cachedLength > MAX_FILE_BYTES) {
                     rotatedFile?.let { rotated ->
                         rotated.delete()
                         target.renameTo(rotated)
                     }
+                    cachedLength = 0L
                 }
-                target.appendText("$line\n")
+                val payload = "$line\n"
+                target.appendText(payload)
+                cachedLength += payload.length
             }
         }
     }
@@ -127,6 +135,7 @@ object AppLog {
                 synchronized(fileLock) {
                     logFile?.delete()
                     rotatedFile?.delete()
+                    cachedLength = 0L
                 }
             }
         }

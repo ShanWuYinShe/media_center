@@ -29,6 +29,7 @@ fun CategoryRow(
     onVideoClick: (VideoSummary) -> Unit,
     onSeeAll: () -> Unit,
     modifier: Modifier = Modifier,
+    loadFailed: Boolean = false,
 ) {
     Column(modifier = modifier.padding(vertical = 12.dp)) {
         Row(
@@ -53,10 +54,11 @@ fun CategoryRow(
             }
         }
         if (videos.isEmpty()) {
-            // 加载中/无内容时给一行说明，而不是裸标题+空 LazyRow（用户会以为坏了）。
+            // 加载中/无内容时给一行说明,而不是裸标题+空 LazyRow(用户会以为坏了)。
+            // 加载失败与"真没有内容"区分展示,避免误导用户以为该分类确实为空。
             Text(
-                text = "\u672C\u5206\u7C7B\u6682\u65E0\u5185\u5BB9",
-                color = TextTertiary,
+                text = if (loadFailed) "\u672C\u5206\u7C7B\u52A0\u8F7D\u5931\u8D25\uFF0C\u8BF7\u5237\u65B0\u91CD\u8BD5" else "\u672C\u5206\u7C7B\u6682\u65E0\u5185\u5BB9",
+                color = if (loadFailed) AppleBlue else TextTertiary,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )

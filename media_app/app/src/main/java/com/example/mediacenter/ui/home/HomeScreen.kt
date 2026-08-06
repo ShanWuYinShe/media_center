@@ -106,6 +106,7 @@ fun HomeScreen(
                     videos = state.categoryVideos[category.id].orEmpty(),
                     onVideoClick = onVideoClick,
                     onSeeAll = { onSeeAll(category.id, category.title) },
+                    loadFailed = state.categoryErrors.contains(category.id),
                 )
             }
         }
