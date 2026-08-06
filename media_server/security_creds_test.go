@@ -176,3 +176,49 @@ func TestAppDownloadURLRejectsHostPoisoning(t *testing.T) {
 		}
 	})
 }
+
+// TestSearchHandler 验证 /api/search 端点接线:空 query 返回空结果,有数据时
+// 只返回 approved 且跨分类去重(SearchApproved 的 handler 级回归)。
+func TestSearchHandler(t *testing.T) {
+	c := openTestCatalog(t)
+	mustUpsert(t, c, "bilibili", "BV1aaa", "流浪地球 科幻大片", 1800)
+	if _, err := c.AddPendingMember("movies", "bilibili", "BV1aaa", 10); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+	if _, err := c.SetMemberStatus("movies", "bilibili", "BV1aaa", "approved", "tester"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	mustUpsert(t, c, "bilibili", "BV1pending", "未审核 流浪", 1800)
+
+	s := &mediaServer{catalog: c}
+
+	t.Run("empty query returns empty", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/search", nil)
+		rec := httptest.NewRecorder()
+		s.handleSearch(rec, req)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"total":0`) {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("only approved matches", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/search?q=流浪", nil)
+		rec := httptest.NewRecorder()
+		s.handleSearch(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"BV1aaa"`) || strings.Contains(rec.Body.String(), "BV1pending") {
+			t.Fatalf("search should match only approved: %s", rec.Body.String())
+		}
+	})
+
+	t.Run("bad page rejected", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/search?q=流浪&page=12abc", nil)
+		rec := httptest.NewRecorder()
+		s.handleSearch(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("dirty page param should be 400, got %d", rec.Code)
+		}
+	})
+}

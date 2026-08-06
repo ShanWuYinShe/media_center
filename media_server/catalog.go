@@ -767,6 +767,13 @@ func (c *Catalog) PendingReviews(opts PendingReviewsOptions) ([]PendingReviewIte
 }
 
 // ReviewMember 更新某分类成员的审校字段:status / pinned / rank 任一非 nil 即更新该列,
+// validationError 是业务校验错误:消息可安全返回客户端,与底层 DB/SQL 错误
+// (可能泄露实现细节)区分。handler 层用 errors.As 识别,而不是依赖"是否被
+// %w wrap"这类隐式约定(任何 wrap 链改动都会改变对外行为)。
+type validationError struct{ msg string }
+
+func (e *validationError) Error() string { return e.msg }
+
 // 并记录审校人与时间。三者全为 nil 时报错(避免无意义的空更新)。返回受影响行数(0 表示
 // 该 (分类,视频) 不存在)。admin 管理界面用它做 approve/reject/置顶/排序。
 func (c *Catalog) ReviewMember(categoryID, provider, nativeID string, status *string, pinned *bool, rank *sql.NullInt64, reviewer string) (int64, error) {
@@ -774,14 +781,14 @@ func (c *Catalog) ReviewMember(categoryID, provider, nativeID string, status *st
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	nativeID = strings.TrimSpace(nativeID)
 	if categoryID == "" || provider == "" || nativeID == "" {
-		return 0, fmt.Errorf("review member: category/provider/nativeID required")
+		return 0, &validationError{"review member: category/provider/nativeID required"}
 	}
 	var sets []string
 	var args []any
 	if status != nil {
 		st := strings.TrimSpace(*status)
 		if !validMemberStatus(st) {
-			return 0, fmt.Errorf("review member: invalid status: %q", st)
+			return 0, &validationError{fmt.Sprintf("review member: invalid status: %q", st)}
 		}
 		sets = append(sets, "status=?")
 		args = append(args, st)
@@ -803,7 +810,7 @@ func (c *Catalog) ReviewMember(categoryID, provider, nativeID string, status *st
 		}
 	}
 	if len(sets) == 0 {
-		return 0, fmt.Errorf("review member: nothing to update")
+		return 0, &validationError{"review member: nothing to update"}
 	}
 	sets = append(sets, "reviewer=?", "reviewed_at=?")
 	args = append(args, strings.TrimSpace(reviewer), time.Now().UTC().Format(time.RFC3339), categoryID, provider, nativeID)

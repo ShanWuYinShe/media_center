@@ -50,6 +50,14 @@ type VideosResponse struct {
 	Items    []VideoSummary  `json:"items"`
 }
 
+// SearchResponse 是 /api/search 的响应:在已审核(approved)目录数据中按关键词
+// 子串匹配(标题/简介/作者),跨分类去重。
+type SearchResponse struct {
+	Query string         `json:"query"`
+	Total int            `json:"total"`
+	Items []VideoSummary `json:"items"`
+}
+
 type apiErrorBody struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`

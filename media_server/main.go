@@ -146,6 +146,8 @@ func (s *mediaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleProviderCredentials(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/providers/"):
 		s.handleProviderRoute(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/search":
+		s.handleSearch(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/app/update":
 		s.handleAppUpdate(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/app/download":
@@ -211,6 +213,37 @@ func constantTimeEqual(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
+// handleSearch 在已审核(approved)目录数据中按关键词搜索(标题/简介/作者子串,
+// 跨分类去重),不调任何上游。App 端目前用本地目录过滤,此端点供未来优化/外部
+// 工具使用;query 为空时返回空结果。
+func (s *mediaServer) handleSearch(w http.ResponseWriter, r *http.Request) {
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if query == "" {
+		s.writeJSON(w, http.StatusOK, SearchResponse{Query: "", Total: 0, Items: []VideoSummary{}})
+		return
+	}
+	page, pageSize, err := paginationFromRequest(r)
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	if s.catalog == nil {
+		s.writeJSON(w, http.StatusOK, SearchResponse{Query: query, Total: 0, Items: []VideoSummary{}})
+		return
+	}
+	items, total, searchErr := s.catalog.SearchApproved(query, page, pageSize)
+	if searchErr != nil {
+		log.Printf("search %q: %v", query, searchErr)
+		s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"})
+		return
+	}
+	summaries := make([]VideoSummary, 0, len(items))
+	for _, cv := range items {
+		summaries = append(summaries, s.summaryFromCatalogVideo(cv))
+	}
+	s.writeJSON(w, http.StatusOK, SearchResponse{Query: query, Total: total, Items: summaries})
+}
+
 // handleProviderRoute 按 /api/providers/{provider}/... 后续路径分发。
 func (s *mediaServer) handleProviderRoute(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/providers/")
@@ -249,7 +282,9 @@ func (s *mediaServer) handleProviderCategories(w http.ResponseWriter, r *http.Re
 		if cat, ok := s.categoriesByID[id]; ok {
 			items = append(items, PublicCategory{ID: cat.ID, Title: cat.Title, Description: cat.Description})
 		} else {
-			items = append(items, PublicCategory{ID: id, Title: id})
+			// catalog 有 approved 数据但 contentCategories.json 未定义该分类:
+			// 标题带上 id 便于定位配置缺失,而不是把裸 id 当标题展示。
+			items = append(items, PublicCategory{ID: id, Title: "未定义分类 " + id})
 		}
 	}
 	s.writeJSON(w, http.StatusOK, CategoriesResponse{Items: items})
