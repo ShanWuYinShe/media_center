@@ -16,11 +16,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.google.android.exoplayer2.ExoPlayer
-import com.google.android.exoplayer2.ui.PlayerView
 import androidx.recyclerview.widget.RecyclerView
 import com.example.mediacenter.data.MediaApi
 import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.player.CappedLoadErrorHandlingPolicy
+import com.example.mediacenter.player.PlayerViewHolder
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.MediaViewModel
@@ -80,7 +80,7 @@ class MainActivity : ComponentActivity() {
     internal var playerRotationVideoId: String? = null
     internal var playerVideoRotationDegrees: Int = 0
     internal var playerVideoRotationUserSet: Boolean = false
-    internal var playerSurface: PlayerView? = null
+    internal var playerSurface: PlayerViewHolder? = null
     internal var orientationIndicator: TextView? = null
     internal var homeFocusArea: HomeFocusArea = HomeFocusArea.Category
     internal var rememberedCategoryId: String? = null

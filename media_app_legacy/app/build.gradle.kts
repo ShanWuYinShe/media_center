@@ -139,7 +139,14 @@ kotlin {
 }
 
 dependencies {
-    val exoVersion = "2.19.1"
+    // ExoPlayer 锁定 2.18.7(2.x 中功能完整且 deprecation 警告最少的稳定版):
+    // 2.19.x 是迁移 Media3 的过渡版,把 Player/PlaybackException/PlayerView 等
+    // 核心 API 全部标记 @Deprecated,产生 95+ 条编译警告;而 Media3 要求 minSdk 21,
+    // 与项目"必须支持 Android 4.4.2"的目标冲突,不能升级解决。
+    // 2.16.1 虽无 PlayerView @Deprecated 标记,但缺 AUDIO_CONTENT_TYPE_MOVIE 等
+    // 播放功能所需常量,故取 2.18.7:仅剩 PlayerView 类级标记(无替代 API,
+    // 由项目内 PlayerViewWrapper 收敛处理)。
+    val exoVersion = "2.18.7"
 
     implementation("androidx.activity:activity-ktx:1.8.2")
     implementation("androidx.core:core-ktx:1.12.0")

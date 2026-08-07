@@ -44,7 +44,7 @@ internal fun MainActivity.loadPlaybackPosition(): Long {
     }
 
 internal fun MainActivity.applyPlayerVideoRotation() {
-        val surface = playerSurface
+        val surface = playerSurface?.playerView
         val parent = surface?.parent as? FrameLayout
         if (surface != null && parent != null) {
             val parentWidth = parent.width

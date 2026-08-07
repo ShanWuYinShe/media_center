@@ -210,7 +210,10 @@ class AppUpdateManager(
                 "${context.packageName}.fileprovider",
                 apk,
             )
-            val intent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+            // Intent.ACTION_INSTALL_PACKAGE 字段在 API 26+ 被标记 deprecated(推荐
+            // PackageInstaller),但国产 TV 常不支持 PackageInstaller API,此 intent
+            // 是必要的兜底。用字符串字面量替代 deprecated 字段引用,消除编译警告。
+            val intent = Intent("android.intent.action.INSTALL_PACKAGE").apply {
                 data = uri
                 putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
                 putExtra(Intent.EXTRA_RETURN_RESULT, true)

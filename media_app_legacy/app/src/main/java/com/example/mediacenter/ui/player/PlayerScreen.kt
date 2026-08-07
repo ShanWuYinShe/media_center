@@ -14,6 +14,7 @@ import android.widget.ProgressBar
 import android.widget.LinearLayout
 import androidx.core.view.isNotEmpty
 import com.google.android.exoplayer2.C
+import com.example.mediacenter.player.PlayerViewHolder
 import com.google.android.exoplayer2.audio.AudioAttributes
 import com.google.android.exoplayer2.ExoPlayer
 import com.google.android.exoplayer2.MediaItem
@@ -21,7 +22,6 @@ import com.google.android.exoplayer2.PlaybackException
 import com.google.android.exoplayer2.Player
 import com.google.android.exoplayer2.source.DefaultMediaSourceFactory
 import com.google.android.exoplayer2.ui.AspectRatioFrameLayout
-import com.google.android.exoplayer2.ui.PlayerView
 import com.google.android.exoplayer2.upstream.DefaultHttpDataSource
 import com.google.android.exoplayer2.video.VideoSize
 import com.example.mediacenter.MainActivity
@@ -343,14 +343,15 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
                 }
             }
         }
-        val playerView = (layoutInflater.inflate(R.layout.view_player_texture, screen, false) as PlayerView).apply {
+        val holder = PlayerViewHolder.inflate(layoutInflater, screen, false)
+        val playerView = holder.playerView.apply {
             player = nextPlayer
             useController = false
             setBackgroundColor(Color.BLACK)
             // FIT 会按视频真实宽高比自动 letterbox/pillarbox;旋转时外层会交换视图宽高。
             resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
         }
-        playerSurface = playerView
+        playerSurface = holder
         screen.addView(playerView, FrameLayout.LayoutParams(match(), match(), Gravity.CENTER))
         screen.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyPlayerVideoRotation() }
         // 缓冲指示:独立于自动隐藏的控制层,只要播放器处于 BUFFERING 就常驻显示,
