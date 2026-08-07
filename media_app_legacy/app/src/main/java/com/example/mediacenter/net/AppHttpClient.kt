@@ -37,23 +37,20 @@ import okhttp3.OkHttpClient
  * 覆盖 ExoPlayer DefaultHttpDataSource(走 HttpsURLConnection)的播放链路。
  */
 object AppHttpClient {
-    private var tls: Tls? = null
-    private var initialized = false
+    // TLS 配置延迟构建:首次 newBuilder()/installHttpsUrlConnectionDefault() 访问时初始化,
+    // 彻底消除"init() 必须先于 MediaApi 构造"的时序依赖。trust-all 不需要 context,
+    // 因此用无参 lazy 即可。
+    private val tls: Tls? by lazy { buildTls() }
 
     @Volatile private var httpsDefaultInstalled = false
 
     /**
-     * 在 Application.onCreate 早期调用一次,构建 trust-all TLS。
-     * 必须在任何网络请求之前完成(否则 [newBuilder] 返回的客户端没有套用自定义 TLS)。
+     * 早期初始化入口(可选)。TLS 现在是 by lazy,首次网络请求时自动构建,
+     * 不再强制要求先调用此方法。保留它仅为 Application.onCreate 里预热 + 记日志。
      */
-    @Synchronized
     fun init(context: Context) {
-        if (initialized) return
-        initialized = true
-        tls = buildTls()
-        if (tls == null) {
-            AppLog.w("Http", "TLS init failed, falling back to platform default (old devices may fail to connect)")
-        }
+        // 触发 lazy 初始化(返回值忽略),确保 TLS 在 Application 早期就绑好。
+        tls
     }
 
     /** 共享的基础客户端(OkHttp 默认超时),用于无特殊超时需求的场景。 */
