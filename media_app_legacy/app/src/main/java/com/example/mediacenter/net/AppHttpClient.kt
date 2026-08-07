@@ -14,6 +14,7 @@ import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 import okhttp3.Cache
+import okhttp3.ConnectionSpec
 import okhttp3.OkHttpClient
 
 /**
@@ -84,8 +85,59 @@ object AppHttpClient {
     fun newBuilder(): OkHttpClient.Builder {
         val builder = OkHttpClient.Builder()
         tls?.let { builder.sslSocketFactory(it.socketFactory, it.trustManager) }
+        builder.connectionSpecs(listOf(MODERN_TLS_WITH_ECDSA_CBC))
         return builder
     }
+
+    /**
+     * OkHttp 3.12 的 MODERN_TLS 白名单(APPROVED_CIPHER_SUITES)缺 ECDSA CBC 套件:
+     * 它包含 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA / TLS_RSA_WITH_AES_128_CBC_SHA,
+     * 但**没有** TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA / AES_256_CBC_SHA。
+     *
+     * Android 4.4.2 的 TLS 栈不支持 TLS 1.3 和 GCM/CHACHA20,只能用 CBC 套件;
+     * 而 Cloudflare(yinghuoren.com)只提供 ECDSA 套件(证书是 ECDSA,无 RSA 套件)。
+     * 交集为空 → 握手必然失败,表现为"安全连接失败"(trust-all 救不了,因为
+     * 失败在套件协商层,证书校验根本没走到)。
+     *
+     * 这里在 OkHttp 白名单基础上补上 ECDSA CBC 套件,让 4.4.2 能协商
+     * TLS 1.2 + ECDHE-ECDSA-AES128-SHA 连上 Cloudflare。
+     */
+    /**
+     * OkHttp 3.12 的 MODERN_TLS 白名单(APPROVED_CIPHER_SUITES)缺 ECDSA CBC 套件:
+     * 它包含 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA / TLS_RSA_WITH_AES_128_CBC_SHA,
+     * 但**没有** TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA / AES_256_CBC_SHA。
+     *
+     * Android 4.4.2 的 TLS 栈不支持 TLS 1.3 和 GCM/CHACHA20,只能用 CBC 套件;
+     * 而 Cloudflare(yinghuoren.com)只提供 ECDSA 套件(证书是 ECDSA,无 RSA 套件)。
+     * 交集为空 → 握手必然失败,表现为"安全连接失败"(trust-all 救不了,因为
+     * 失败在套件协商层,证书校验根本没走到)。
+     *
+     * 这里在 OkHttp 白名单基础上补上 ECDSA CBC 套件,让 4.4.2 能协商
+     * TLS 1.2 + ECDHE-ECDSA-AES128-SHA 连上 Cloudflare。
+     */
+    private val MODERN_TLS_WITH_ECDSA_CBC: ConnectionSpec = ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
+        .cipherSuites(
+            "TLS_AES_128_GCM_SHA256",
+            "TLS_AES_256_GCM_SHA384",
+            "TLS_CHACHA20_POLY1305_SHA256",
+            "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+            "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+            "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+            "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+            "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+            "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+            "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+            "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+            "TLS_RSA_WITH_AES_128_GCM_SHA256",
+            "TLS_RSA_WITH_AES_256_GCM_SHA384",
+            "TLS_RSA_WITH_AES_128_CBC_SHA",
+            "TLS_RSA_WITH_AES_256_CBC_SHA",
+            "TLS_RSA_WITH_3DES_EDE_CBC_SHA",
+            // 补上 OkHttp 3.12 缺失的 ECDSA CBC 套件(Android 4.4 连 Cloudflare 的关键)。
+            "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA",
+            "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA",
+        )
+        .build()
 
     /**
      * 把 trust-all 的 [SSLSocketFactory] 设为 HttpsURLConnection 进程级默认,
