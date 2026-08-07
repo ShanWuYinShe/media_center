@@ -1,21 +1,15 @@
 package com.example.mediacenter.ui.details
 
 import android.graphics.Color
-import android.text.TextUtils
 import android.view.Gravity
-import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import androidx.core.view.isNotEmpty
 import android.widget.ScrollView
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.TextView
 import android.graphics.drawable.GradientDrawable
 import com.example.mediacenter.MainActivity
-import com.example.mediacenter.data.PlaybackOption
-import com.example.mediacenter.data.PlaybackPages
-import com.example.mediacenter.data.VideoDetails
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.setContent
 import com.example.mediacenter.ui.showAllPagesDialog
@@ -36,12 +30,8 @@ import com.example.mediacenter.ui.components.pill
 import com.example.mediacenter.ui.components.formatDurationSeconds
 import com.example.mediacenter.ui.components.linearMatch
 import com.example.mediacenter.ui.components.primaryPill
-import com.example.mediacenter.ui.components.rounded
-import com.example.mediacenter.ui.components.videoMeta
 import com.example.mediacenter.ui.components.wrap
-import com.example.mediacenter.ui.components.withStartMargin
 import com.example.mediacenter.ui.components.withTopMargin
-import com.example.mediacenter.ui.config.CategorySelectDebounceMs
 import com.example.mediacenter.ui.loadBackdropImage
 import com.example.mediacenter.ui.loadImage
 import com.example.mediacenter.ui.theme.Colors

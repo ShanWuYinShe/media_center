@@ -1,14 +1,10 @@
 package com.example.mediacenter.ui
 
-import android.content.Context
 import android.graphics.Color
 import android.view.Gravity
-import android.view.KeyEvent
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.ProgressBar
-import android.widget.TextView
 import com.example.mediacenter.MainActivity
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.components.centeredLoading
@@ -17,14 +13,10 @@ import com.example.mediacenter.ui.components.dp
 import com.example.mediacenter.ui.components.elevationCompat
 import com.example.mediacenter.ui.components.frameMatch
 import com.example.mediacenter.ui.components.label
-import com.example.mediacenter.ui.components.linearMatch
-import com.example.mediacenter.ui.components.match
-import com.example.mediacenter.ui.components.pill
 import com.example.mediacenter.ui.components.primaryPill
 import com.example.mediacenter.ui.components.rounded
 import com.example.mediacenter.ui.components.roundedGradient
 import com.example.mediacenter.ui.components.wrap
-import com.example.mediacenter.ui.components.withStartMargin
 import com.example.mediacenter.ui.components.withTopMargin
 import com.example.mediacenter.ui.theme.Colors
 import com.example.mediacenter.ui.theme.HomeFocusArea

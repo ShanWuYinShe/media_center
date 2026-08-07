@@ -1,6 +1,5 @@
 package com.example.mediacenter.ui.components
 
-import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.text.TextUtils

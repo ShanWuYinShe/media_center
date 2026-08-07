@@ -5,14 +5,11 @@ import androidx.core.content.edit
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.view.Gravity
-import android.widget.TextView
-import com.google.android.exoplayer2.ExoPlayer
 import com.google.android.exoplayer2.Player
 import com.google.android.exoplayer2.video.VideoSize
 import com.example.mediacenter.MainActivity
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.ui.config.PlaybackStabilityResetMs
-import com.example.mediacenter.ui.config.PlaybackUserAgent
 
 internal fun MainActivity.releasePlayer() {
         cancelPlaybackStabilityReset()

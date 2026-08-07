@@ -6,10 +6,8 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
-import android.widget.TextView
 import com.example.mediacenter.MainActivity
 import com.example.mediacenter.ui.components.dp
-import com.example.mediacenter.ui.components.frameMatch
 import com.example.mediacenter.ui.components.label
 import com.example.mediacenter.ui.components.pill
 import com.example.mediacenter.ui.components.primaryPill

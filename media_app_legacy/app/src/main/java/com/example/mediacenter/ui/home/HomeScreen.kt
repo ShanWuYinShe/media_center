@@ -1,6 +1,5 @@
 package com.example.mediacenter.ui.home
 
-import android.content.Context
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -8,7 +7,6 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
-import android.widget.TextView
 import androidx.core.view.isNotEmpty
 import android.view.inputmethod.EditorInfo
 import android.util.TypedValue
