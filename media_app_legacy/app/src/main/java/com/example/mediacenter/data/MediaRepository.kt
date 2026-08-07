@@ -10,6 +10,10 @@ class MediaRepository(
     @Volatile var currentProvider: String = "bilibili"
         private set
 
+    // HTTPS 握手失败后是否已降级到明文 HTTP(供诊断弹窗显示)。
+    val httpFallbackActive: Boolean
+        get() = api.httpFallbackActive
+
     private companion object {
         // 客户端关键词搜索时最多拉取的分类页数(每页 ≤ pageSize 条),用于扩大命中范围。
         // 服务端单分类通常几百条,5 页 × 18 ≈ 90 条已足够覆盖常见搜索词。

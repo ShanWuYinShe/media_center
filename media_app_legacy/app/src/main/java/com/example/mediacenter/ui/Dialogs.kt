@@ -5,16 +5,12 @@ import android.view.KeyEvent
 import android.widget.ScrollView
 import android.app.Dialog
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import android.graphics.Color
 import android.view.Gravity
 import android.view.View
 import android.view.Window
-import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.TextView
 import androidx.core.graphics.ColorUtils
 import com.example.mediacenter.BuildConfig
 import java.io.File
@@ -40,7 +36,6 @@ import com.example.mediacenter.ui.components.withEndMargin
 import com.example.mediacenter.ui.components.withTopMargin
 import com.example.mediacenter.ui.theme.Colors
 import com.example.mediacenter.update.AppUpdateResult
-import com.example.mediacenter.update.AppUpdateManager
 import com.example.mediacenter.update.InstallLaunchResult
 
 internal fun MainActivity.showDescriptionDialog(title: String, description: String) {
@@ -160,6 +155,8 @@ internal fun MainActivity.showSystemInfoDialog() {
             row("屏幕密度", "${dm.densityDpi}dpi (×${dm.density})")
             row("App 版本", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
             row("服务端地址", serverHost)
+            // 连接模式:HTTPS 握手失败自动降级明文 HTTP 后显示,便于排查 TLS 兼容性。
+            row("连接模式", if (viewModel.httpFallbackActive) "明文 HTTP(已降级)" else "HTTPS", highlight = viewModel.httpFallbackActive)
             // 排查"检查更新失败 / 检查系统时间"类问题最关键的现场:
             // 设备当前时间(证书时间类失败的确定性依据)与最近一次错误文案。
             row("系统时间", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))

@@ -40,6 +40,29 @@ class MediaApi(
         ?: throw IllegalArgumentException("MEDIA_SERVER_URL must be a valid URL")
     private val baseUrlIncludesApiPrefix = apiRoot.pathSegments().any { it.isNotEmpty() }
 
+    // HTTPS 握手失败时的明文降级通道:
+    // Android 4.4.2 的老 TLS 栈与 Cloudflare 的现代 TLS 配置(TLS1.3 + ECDSA-only 套件)
+    // 无法协商,trust-all 也救不了(失败在套件/协议协商,不在证书校验)。
+    // 服务端放行 HTTP 后,这里用明文 HTTP 重试一次,保证老设备 100% 能连上。
+    // 仅当 HTTPS 失败原因是 TLS 握手时触发,不影响正常 HTTPS 流量。
+    private val httpClient: OkHttpClient? = if (apiRoot.toString().startsWith("https://", ignoreCase = true)) {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .followRedirects(false) // 服务端/Cloudflare 若仍 301,不跟随,直接报错由上层处理
+            .build()
+    } else {
+        null
+    }
+    private val httpApiRoot: HttpUrl? = httpClient?.let {
+        apiRoot.newBuilder().scheme("http").build()
+    }
+
+    /** 是否已降级到明文 HTTP(供日志/诊断) */
+    @Volatile
+    var httpFallbackActive: Boolean = false
+        private set
+
     suspend fun providers(): ProvidersResponse = get(listOf("providers"))
 
     // 凭证接口需要 X-App-Token(与服务端 MEDIA_SERVER_APP_API_TOKEN 一致):
@@ -77,7 +100,9 @@ class MediaApi(
     }
 
     fun resolveApiUrl(pathSegments: List<String>): String {
-        val builder = apiRoot.newBuilder()
+        // 已降级到明文 HTTP 时,播放/缩略图等派生 URL 也用 HTTP,保持一致。
+        val root = if (httpFallbackActive) httpApiRoot ?: apiRoot else apiRoot
+        val builder = root.newBuilder()
         if (!baseUrlIncludesApiPrefix) {
             builder.addPathSegment("api")
         }
@@ -90,7 +115,6 @@ class MediaApi(
         query: Map<String, String> = emptyMap(),
         headers: Map<String, String> = emptyMap(),
     ): T {
-        val request = buildRequest(pathSegments, query, headers)
         val label = "/" + pathSegments.joinToString("/")
         val startedAt = System.currentTimeMillis()
 
@@ -99,7 +123,7 @@ class MediaApi(
         AppLog.d("Api", "GET $label query=${query.keys}")
         while (true) {
             try {
-                val body = execute(request)
+                val body = execute(buildRequest(apiRoot, pathSegments, query, headers))
                 val result = withContext(Dispatchers.Default) {
                     json.decodeFromString<T>(body)
                 }
@@ -126,17 +150,39 @@ class MediaApi(
                 attempt++
             }
         }
+        // HTTPS 重试耗尽:若是 TLS 握手失败(老设备与 Cloudflare TLS 配置不兼容),
+        // 降级到明文 HTTP 再试一次(服务端需放行 HTTP,见 MediaApi 类注释)。
+        if (classifyNetworkError(lastError) == NetworkErrorCategory.TLS_HANDSHAKE) {
+            val httpRoot = httpApiRoot
+            if (httpRoot != null) {
+                val httpRequest = buildRequest(httpRoot, pathSegments, query, headers)
+                AppLog.w("Api", "GET $label HTTPS TLS failed, falling back to plain HTTP")
+                httpFallbackActive = true
+                try {
+                    val body = execute(httpRequest, useHttp = true)
+                    val result = withContext(Dispatchers.Default) {
+                        json.decodeFromString<T>(body)
+                    }
+                    AppLog.w("Api", "GET $label ok via HTTP fallback in ${System.currentTimeMillis() - startedAt}ms")
+                    return result
+                } catch (httpError: Throwable) {
+                    AppLog.w("Api", "GET $label HTTP fallback also failed: ${httpError.message}", httpError)
+                    lastError = httpError
+                }
+            }
+        }
         val category = classifyNetworkError(lastError)
         AppLog.w("Api", "GET $label failed after ${attempt} retries in ${System.currentTimeMillis() - startedAt}ms ($category)", lastError)
         throw IOException(friendlyNetworkMessage(lastError), lastError)
     }
 
     private fun buildRequest(
+        root: HttpUrl,
         pathSegments: List<String>,
         query: Map<String, String>,
-        headers: Map<String, String> = emptyMap(),
+        headers: Map<String, String>,
     ): Request {
-        val builder = apiRoot.newBuilder()
+        val builder = root.newBuilder()
         if (!baseUrlIncludesApiPrefix) {
             builder.addPathSegment("api")
         }
@@ -154,8 +200,8 @@ class MediaApi(
             emptyMap()
         }
 
-    private suspend fun execute(request: Request): String = suspendCancellableCoroutine { continuation ->
-        val call = client.newCall(request)
+    private suspend fun execute(request: Request, useHttp: Boolean = false): String = suspendCancellableCoroutine { continuation ->
+        val call = (if (useHttp) httpClient ?: client else client).newCall(request)
         continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) {
@@ -188,34 +234,50 @@ class MediaApi(
         pathSegments: List<String>,
         query: Map<String, String> = emptyMap(),
     ): String? {
-        val request = buildRequest(pathSegments, query)
-        return suspendCancellableCoroutine { continuation ->
-            val call = client.newCall(request)
-            continuation.invokeOnCancellation { call.cancel() }
-            call.enqueue(object : Callback {
-                override fun onFailure(call: Call, error: IOException) {
+        val request = buildRequest(apiRoot, pathSegments, query, emptyMap())
+        return try {
+            requestBody(request, useHttp = false)
+        } catch (error: IOException) {
+            // HTTPS 握手失败时降级 HTTP 重试一次(见 MediaApi 类注释)。
+            if (classifyNetworkError(error) == NetworkErrorCategory.TLS_HANDSHAKE) {
+                val httpRoot = httpApiRoot
+                if (httpRoot != null) {
+                    val httpRequest = buildRequest(httpRoot, pathSegments, query, emptyMap())
+                    AppLog.w("Api", "GET optional ${pathSegments.joinToString("/")} HTTPS TLS failed, falling back to plain HTTP")
+                    httpFallbackActive = true
+                    return requestBody(httpRequest, useHttp = true)
+                }
+            }
+            throw error
+        }
+    }
+
+    private suspend fun requestBody(request: Request, useHttp: Boolean): String? = suspendCancellableCoroutine { continuation ->
+        val call = (if (useHttp) httpClient ?: client else client).newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, error: IOException) {
+                if (continuation.isActive) continuation.resumeWithException(error)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                try {
+                    response.use {
+                        if (it.code() == 204) {
+                            if (continuation.isActive) continuation.resume(null)
+                            return
+                        }
+                        val body = it.body()?.string() ?: throw IOException("响应体为空")
+                        if (!it.isSuccessful) {
+                            throw apiException(it.code(), body)
+                        }
+                        if (continuation.isActive) continuation.resume(body)
+                    }
+                } catch (error: Throwable) {
                     if (continuation.isActive) continuation.resumeWithException(error)
                 }
-
-                override fun onResponse(call: Call, response: Response) {
-                    try {
-                        response.use {
-                            if (it.code() == 204) {
-                                if (continuation.isActive) continuation.resume(null)
-                                return
-                            }
-                            val body = it.body()?.string() ?: throw IOException("响应体为空")
-                            if (!it.isSuccessful) {
-                                throw apiException(it.code(), body)
-                            }
-                            if (continuation.isActive) continuation.resume(body)
-                        }
-                    } catch (error: Throwable) {
-                        if (continuation.isActive) continuation.resumeWithException(error)
-                    }
-                }
-            })
-        }
+            }
+        })
     }
 
     private fun apiException(statusCode: Int, body: String): ApiException {

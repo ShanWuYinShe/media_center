@@ -87,6 +87,10 @@ private const val PlaybackRecoveryBackoffStepMs = 1_500L
 class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     private val mutableState = MutableStateFlow(MediaUiState())
     val state: StateFlow<MediaUiState> = mutableState
+
+    // HTTPS 握手失败后是否已降级到明文 HTTP(供诊断弹窗显示)。
+    val httpFallbackActive: Boolean
+        get() = repository.httpFallbackActive
     private var searchJob: Job? = null
     private var loadMoreJob: Job? = null
     private var detailsJob: Job? = null
