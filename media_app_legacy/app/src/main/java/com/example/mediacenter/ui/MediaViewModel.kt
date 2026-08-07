@@ -3,6 +3,7 @@ package com.example.mediacenter.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.mediacenter.data.ApiException
 import com.example.mediacenter.data.ContentCategory
 import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.PlaybackOption
@@ -11,6 +12,7 @@ import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.VideoDetails
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.log.AppLog
+import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
@@ -40,6 +42,9 @@ data class MediaUiState(
     val page: Int = 0,
     val playingVideo: VideoSummary? = null,
     val error: String? = null,
+    // 加载失败后正处于"自动重试"退避期:UI 显示失败原因 + 自动重试中,
+    // 不再只给一个手动"重试"按钮(老盒子上网络抖动频繁,应自动恢复)。
+    val autoRetrying: Boolean = false,
     // 多P视频的分页信息(当前页/总页数/页标题),UI 据此显示选集按钮。
     val currentPages: PlaybackPages? = null,
 )
@@ -87,6 +92,9 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     private var detailsJob: Job? = null
     private var recoveryJob: Job? = null
     private var playbackPrefetchJob: Job? = null
+    // 首页分类加载(loadCategoriesAndSearch)专用 job:失败自动重试期间可被
+    // 用户手动 retry 安全替换,不会出现两个重试循环并存。
+    private var loadHomeJob: Job? = null
     // 播放地址预取缓存:列表可见视频在后台提前解析,用户点详情时直接可用。
     private val playbackCache = mutableMapOf<String, PlaybackResult>()
     private val prefetchedPlaybackIds = mutableSetOf<String>()
@@ -208,68 +216,95 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         }
         searchJob?.cancel()
         searchJob = viewModelScope.launch {
-            mutableState.update {
-                if (silentRefresh || it.isContentScreen) {
-                    it.copy(
-                        loadMoreError = null,
-                    )
-                } else {
-                    it.copy(
-                        query = query,
-                        selectedCategoryId = categoryId,
-                        items = emptyList(),
-                        loading = true,
-                        loadingMore = false,
-                        loadMoreError = null,
-                        canLoadMore = false,
-                        page = 1,
-                        error = null,
-                        selected = null,
-                        playing = null,
-                        playingVideo = null,
-                    )
-                }
-            }
-            runCatchingCancellable {
-                repository.search(query, categoryId, page = 1, pageSize = PageSize)
-            }
-                .onSuccess { response ->
-                    mutableState.update { state ->
-                        state.copy(
-                            items = response.items,
-                            loading = if (silentRefresh || state.isContentScreen) state.loading else false,
-                            // 关键词搜索是一次性客户端聚合(已拉取多页),不分页;仅分类浏览才支持 loadMore。
-                            canLoadMore = query.isBlank() && response.items.size >= PageSize,
-                            page = 1,
-                            loadMoreError = null,
-                        )
-                    }
-                    // 分类浏览(空 query + 指定分类)结果写入分类缓存,供下次秒开。
-                    if (query.isBlank() && categoryId != null) {
-                        cacheCategoryList(
-                            categoryId,
-                            response.items,
-                            page = 1,
-                            canLoadMore = response.items.size >= PageSize,
-                        )
-                    }
-                    // 后台预取列表视频的播放地址,用户点详情时直接可用。
-                    prefetchVisiblePlayback(response.items)
-                }
-                .onFailure { error ->
-                    if (silentRefresh) {
-                        AppLog.w("Search", "silent refresh failed: ${error.message}", error)
+            // 失败自动重试:非静默场景下,IO/瞬时错误最多重试
+            // MAX_SEARCH_AUTO_RETRIES 次(退避见 SEARCH_AUTO_RETRY_BACKOFF_MS),
+            // 退避期 UI 显示"自动重试中";重试期间用户切走(进入详情/播放页)
+            // 则放弃重试,把错误静默丢弃,不覆盖新页面的状态。
+            var attempt = 0
+            while (true) {
+                val isSilent = mutableState.value.isContentScreen
+                mutableState.update {
+                    if (isSilent || it.isContentScreen) {
+                        it.copy(loadMoreError = null)
                     } else {
+                        it.copy(
+                            query = query,
+                            selectedCategoryId = categoryId,
+                            items = emptyList(),
+                            loading = true,
+                            loadingMore = false,
+                            loadMoreError = null,
+                            canLoadMore = false,
+                            page = 1,
+                            error = null,
+                            autoRetrying = false,
+                            selected = null,
+                            playing = null,
+                            playingVideo = null,
+                        )
+                    }
+                }
+                runCatchingCancellable {
+                    repository.search(query, categoryId, page = 1, pageSize = PageSize)
+                }
+                    .onSuccess { response ->
                         mutableState.update { state ->
-                            if (state.isContentScreen) {
-                                AppLog.w("Search", "discard search error while content is visible: ${error.message}", error)
-                                state
-                            } else {
-                                state.copy(loading = false, error = error.message ?: "搜索失败")
+                            state.copy(
+                                items = response.items,
+                                loading = if (isSilent || state.isContentScreen) state.loading else false,
+                                // 关键词搜索是一次性客户端聚合(已拉取多页),不分页;仅分类浏览才支持 loadMore。
+                                canLoadMore = query.isBlank() && response.items.size >= PageSize,
+                                page = 1,
+                                loadMoreError = null,
+                            )
+                        }
+                        // 分类浏览(空 query + 指定分类)结果写入分类缓存,供下次秒开。
+                        if (query.isBlank() && categoryId != null) {
+                            cacheCategoryList(
+                                categoryId,
+                                response.items,
+                                page = 1,
+                                canLoadMore = response.items.size >= PageSize,
+                            )
+                        }
+                        // 后台预取列表视频的播放地址,用户点详情时直接可用。
+                        prefetchVisiblePlayback(response.items)
+                        return@launch
+                    }
+                    .onFailure { error ->
+                        if (isSilent) {
+                            AppLog.w("Search", "silent refresh failed: ${error.message}", error)
+                            return@launch
+                        }
+                        if (attempt < MAX_SEARCH_AUTO_RETRIES && isAutoRetryable(error)) {
+                            attempt++
+                            val backoff = SEARCH_AUTO_RETRY_BACKOFF_MS[attempt - 1]
+                            AppLog.w("Search", "auto retry ${attempt}/$MAX_SEARCH_AUTO_RETRIES in ${backoff}ms: ${error.message}", error)
+                            mutableState.update { state ->
+                                if (state.isContentScreen) {
+                                    state
+                                } else {
+                                    state.copy(
+                                        loading = false,
+                                        error = error.message ?: "搜索失败",
+                                        autoRetrying = true,
+                                    )
+                                }
                             }
+                            delay(backoff)
+                        } else {
+                            mutableState.update { state ->
+                                if (state.isContentScreen) {
+                                    AppLog.w("Search", "discard search error while content is visible: ${error.message}", error)
+                                    state
+                                } else {
+                                    state.copy(loading = false, autoRetrying = false, error = error.message ?: "搜索失败")
+                                }
+                            }
+                            return@launch
                         }
                     }
-                }
+            }
         }
     }
 
@@ -932,6 +967,15 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         }
     }
 
+    /**
+     * 是否值得自动重试:网络 IO 错误(含 MediaApi 包装后的确定性诊断 IOException)
+     * 与瞬时 5xx。业务错误(400/401 等非瞬时 ApiException)重试不会成功,直接展示。
+     */
+    private fun isAutoRetryable(error: Throwable?): Boolean {
+        if (error == null) return false
+        return error is IOException || (error is ApiException && error.isTransient)
+    }
+
     fun back() {
         // 取消可能"迟到回写"的任务,否则:在播放页按 ↓(下一个)后立刻按 BACK,
         // back() 把 playing 清空(回到详情),但仍在跑的 detailsJob 完成后又把
@@ -972,55 +1016,83 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     }
 
     private fun loadCategoriesAndSearch() {
-        viewModelScope.launch {
+        loadHomeJob?.cancel()
+        loadHomeJob = viewModelScope.launch {
             // 启动时拉取 provider 凭证(如 bilibili SESSDATA),失败时静默降级。
             repository.refreshCredentials()
-            // categories 失败时直接 setError 退出,**不再**调 search()。
-            // 避免:网络持续不通 → categories 失败 + search(query="", null) 也 400 失败 → 用户陷入"重试 → 失败 → 重试"的死循环。
-            val silentRefresh = mutableState.value.isContentScreen
-            mutableState.update {
-                if (silentRefresh) {
-                    it.copy(loadMoreError = null)
-                } else {
-                    it.copy(loading = true, loadMoreError = null, error = null)
+            // 分类加载失败自动重试:最多 MAX_HOME_AUTO_RETRIES 次(退避见
+            // HOME_AUTO_RETRY_BACKOFF_MS),覆盖老盒子"开机 WiFi 未就绪 /
+            // 网络闪断"的场景;重试期间用户切走则放弃,最终失败才落错误态。
+            var attempt = 0
+            while (true) {
+                // categories 失败时不调 search()。避免:网络持续不通 →
+                // categories 失败 + search(query="", null) 也 400 失败 →
+                // 用户陷入"重试 → 失败 → 重试"的死循环。
+                val silentRefresh = mutableState.value.isContentScreen
+                mutableState.update {
+                    if (silentRefresh) {
+                        it.copy(loadMoreError = null)
+                    } else {
+                        it.copy(loading = true, loadMoreError = null, error = null, autoRetrying = false)
+                    }
                 }
-            }
-            val categoriesResult = runCatchingCancellable { repository.categories() }
-            val categories = categoriesResult.getOrNull()
-            if (categories == null) {
+                val categoriesResult = runCatchingCancellable { repository.categories() }
+                val categories = categoriesResult.getOrNull()
+                if (categories != null) {
+                    // categories 拿到了,确定默认选中:
+                    //   - 若之前已选 ID 仍存在,沿用(用户切了 chip 又触发 retry 不会被重置)
+                    //   - 否则落到列表首项
+                    mutableState.update { current ->
+                        val validId = current.selectedCategoryId
+                            ?.takeIf { id -> categories.any { it.id == id } }
+                        val nextId = validId ?: categories.firstOrNull()?.id
+                        current.copy(
+                            categories = categories,
+                            selectedCategoryId = if (silentRefresh || current.isContentScreen) {
+                                current.selectedCategoryId
+                            } else {
+                                nextId
+                            },
+                        )
+                    }
+                    search(mutableState.value.query)
+                    return@launch
+                }
+                val error = categoriesResult.exceptionOrNull()
                 if (silentRefresh) {
                     AppLog.w(
                         "Search",
-                        "silent category refresh failed: ${categoriesResult.exceptionOrNull()?.message}",
-                        categoriesResult.exceptionOrNull(),
+                        "silent category refresh failed: ${error?.message}",
+                        error,
                     )
-                } else {
+                    return@launch
+                }
+                if (attempt >= MAX_HOME_AUTO_RETRIES || !isAutoRetryable(error)) {
                     mutableState.update {
                         it.copy(
                             loading = false,
-                            error = categoriesResult.exceptionOrNull()?.message ?: "加载分类失败",
+                            autoRetrying = false,
+                            error = error?.message ?: "加载分类失败",
                         )
                     }
+                    return@launch
                 }
-                return@launch
-            }
-            // categories 拿到了,确定默认选中:
-            //   - 若之前已选 ID 仍存在,沿用(用户切了 chip 又触发 retry 不会被重置)
-            //   - 否则落到列表首项
-            mutableState.update { current ->
-                val validId = current.selectedCategoryId
-                    ?.takeIf { id -> categories.any { it.id == id } }
-                val nextId = validId ?: categories.firstOrNull()?.id
-                current.copy(
-                    categories = categories,
-                    selectedCategoryId = if (silentRefresh || current.isContentScreen) {
-                        current.selectedCategoryId
-                    } else {
-                        nextId
-                    },
+                attempt++
+                val backoff = HOME_AUTO_RETRY_BACKOFF_MS[attempt - 1]
+                AppLog.w(
+                    "Search",
+                    "categories load failed, auto retry $attempt/$MAX_HOME_AUTO_RETRIES in ${backoff}ms: ${error?.message}",
+                    error,
                 )
+                mutableState.update {
+                    it.copy(
+                        loading = false,
+                        error = error?.message ?: "加载分类失败",
+                        autoRetrying = true,
+                    )
+                }
+                delay(backoff)
             }
-            search(mutableState.value.query)
         }
     }
 
@@ -1049,6 +1121,17 @@ private const val CategoryCacheTtlMs = 10 * 60 * 1000L
 // 每个 playbackOptions 是 3 个串行网络调用;无限制并发会在长列表上打满网络/内存。
 private const val MAX_PREFETCH = 4
 private const val PREFETCH_CONCURRENCY = 2
+
+// 首页分类加载失败自动重试:最多额外重试 MAX_HOME_AUTO_RETRIES 次,
+// 退避 2s/4s/8s。老 TV 盒子开机时 WiFi/路由未就绪很常见,单次失败直接
+// 弹错误卡住首页体验差;重试期 UI 显示"自动重试中",耗尽后才落手动重试。
+private const val MAX_HOME_AUTO_RETRIES = 3
+private val HOME_AUTO_RETRY_BACKOFF_MS = longArrayOf(2_000L, 4_000L, 8_000L)
+
+// 分类切换 / 关键词搜索失败自动重试:2 次,退避 2s/4s(比首页少,
+// 因为切分类是用户主动操作,等待感知更强)。
+private const val MAX_SEARCH_AUTO_RETRIES = 2
+private val SEARCH_AUTO_RETRY_BACKOFF_MS = longArrayOf(2_000L, 4_000L)
 
 class MediaViewModelFactory(
     private val repository: MediaRepository,

@@ -15,7 +15,15 @@
 **/gradle/gradle-daemon-jvm.properties
 
 # ----- IDE / 编辑器 -----
-**/.idea/
+# Android Studio / IntelliJ:只忽略机器特定 / 频繁变动的文件,
+# 保留可共享的项目级配置(inspection profiles 等),让团队设置(如关闭拼写检查)
+# 能进版本库。.idea/ 自带的 .gitignore 会补充忽略 shelf/workspace.xml。
+**/.idea/workspace.xml
+**/.idea/caches/
+**/.idea/shelf/
+**/.idea/.name
+**/.idea/deploymentTargetSelector.xml
+**/.idea/runConfigurations.xml
 **/.vscode/
 **/.fleet/
 **/*.swp

@@ -15,6 +15,7 @@ import androidx.core.content.FileProvider
 import com.example.mediacenter.BuildConfig
 import com.example.mediacenter.data.AppUpdateInfo
 import com.example.mediacenter.data.MediaApi
+import com.example.mediacenter.data.friendlyNetworkMessage
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.net.AppHttpClient
 import java.io.File
@@ -22,6 +23,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -34,22 +36,40 @@ class AppUpdateManager(
     private var installReceiver: BroadcastReceiver? = null
     private val installAction = "${context.packageName}.INSTALL_RESULT"
     suspend fun checkAndDownload(): AppUpdateResult {
-        val update = try {
-            api.appUpdate(BuildConfig.VERSION_CODE)
-        } catch (error: Throwable) {
-            AppLog.w("Update", "check failed: ${error.message}", error)
-            return AppUpdateResult.Failed("检查更新失败，请稍后重试")
-        } ?: return AppUpdateResult.NoUpdate
-
-        if (update.versionCode <= BuildConfig.VERSION_CODE) return AppUpdateResult.NoUpdate
-        AppLog.i("Update", "new version ${update.versionName} (${update.versionCode}) found")
-        val apk = try {
-            downloadAndVerify(update)
-        } catch (error: Throwable) {
-            AppLog.w("Update", "download failed: ${error.message}", error)
-            return AppUpdateResult.Failed("下载更新失败，请稍后重试")
+        // 检查阶段自动重试:老 TV 盒子上 TLS/网络抖动常见,单次失败直接弹
+        // "检查更新失败"没有意义。最多 CHECK_MAX_ATTEMPTS 次,退避见
+        // CHECK_RETRY_BACKOFF_MS;仍失败时用确定性分类给出根因文案。
+        var lastError: Throwable? = null
+        for (attempt in 0 until CHECK_MAX_ATTEMPTS) {
+            try {
+                val update = api.appUpdate(BuildConfig.VERSION_CODE)
+                if (update == null) return AppUpdateResult.NoUpdate
+                if (update.versionCode <= BuildConfig.VERSION_CODE) return AppUpdateResult.NoUpdate
+                AppLog.i("Update", "new version ${update.versionName} (${update.versionCode}) found")
+                val apk = try {
+                    downloadAndVerify(update)
+                } catch (error: Throwable) {
+                    lastError = error
+                    if (attempt < CHECK_MAX_ATTEMPTS - 1) {
+                        AppLog.w("Update", "download failed, retry ${attempt + 1}/$CHECK_MAX_ATTEMPTS: ${error.message}", error)
+                        delay(CHECK_RETRY_BACKOFF_MS[attempt])
+                        continue
+                    }
+                    AppLog.w("Update", "download failed: ${error.message}", error)
+                    return AppUpdateResult.Failed("下载更新失败：${friendlyNetworkMessage(error)}")
+                }
+                return AppUpdateResult.ReadyToInstall(update, apk)
+            } catch (error: Throwable) {
+                lastError = error
+                if (attempt < CHECK_MAX_ATTEMPTS - 1) {
+                    AppLog.w("Update", "check failed, retry ${attempt + 1}/$CHECK_MAX_ATTEMPTS: ${error.message}", error)
+                    delay(CHECK_RETRY_BACKOFF_MS[attempt])
+                    continue
+                }
+            }
         }
-        return AppUpdateResult.ReadyToInstall(update, apk)
+        AppLog.w("Update", "check failed after $CHECK_MAX_ATTEMPTS attempts", lastError)
+        return AppUpdateResult.Failed("检查更新失败：${friendlyNetworkMessage(lastError)}")
     }
 
     private suspend fun downloadAndVerify(update: AppUpdateInfo): File = withContext(Dispatchers.IO) {
@@ -147,9 +167,12 @@ class AppUpdateManager(
             val intent = Intent(installAction).apply {
                 `package` = context.packageName
             }
+            // FLAG_IMMUTABLE 是 API 23+ 才有的常量;在 API 21/22 上引用会 NoSuchFieldError。
+            // 本方法入口守卫是 >= LOLLIPOP(API 21),因此必须按版本选择标志。
+            val pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT or
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
             val pendingIntent = PendingIntent.getBroadcast(
-                context, sessionId, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                context, sessionId, intent, pendingFlags,
             )
 
             installReceiver?.let { context.unregisterReceiver(it) }
@@ -245,6 +268,9 @@ sealed class AppUpdateResult {
     data class ReadyToInstall(val update: AppUpdateInfo, val apk: File) : AppUpdateResult()
     data class Failed(val message: String) : AppUpdateResult()
 }
+
+private const val CHECK_MAX_ATTEMPTS = 3
+private val CHECK_RETRY_BACKOFF_MS = longArrayOf(2_000L, 4_000L)
 
 sealed class InstallLaunchResult {
     object Started : InstallLaunchResult()

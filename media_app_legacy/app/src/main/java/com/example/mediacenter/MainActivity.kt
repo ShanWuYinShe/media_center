@@ -84,6 +84,8 @@ import com.example.mediacenter.update.InstallLaunchResult
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import java.util.WeakHashMap
 import java.util.concurrent.TimeUnit
@@ -267,12 +269,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         AppLog.i("Activity", "onDestroy")
-        networkCallback?.let { cb ->
-            runCatching {
-                val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-                cm?.unregisterNetworkCallback(cb)
+        // registerNetworkRestore 只在 API 24+ 注册回调;注销也要同样守卫,
+        // 否则 unregisterNetworkCallback(API 21+)在更低版本上会崩。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            networkCallback?.let { cb ->
+                runCatching {
+                    val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                    cm?.unregisterNetworkCallback(cb)
+                }
+                networkCallback = null
             }
-            networkCallback = null
         }
         releasePlayer()
         super.onDestroy()
@@ -330,6 +336,7 @@ class MainActivity : ComponentActivity() {
             previous.categories != state.categories ||
             previous.selectedCategoryId != state.selectedCategoryId ||
             previous.loading != state.loading ||
+            previous.autoRetrying != state.autoRetrying ||
             previous.error != state.error
         ) {
             return false
@@ -401,7 +408,7 @@ class MainActivity : ComponentActivity() {
         }
         when {
             state.loading && state.items.isEmpty() -> body.addView(centeredLoading("正在加载…"), frameMatch())
-            state.error != null && state.items.isEmpty() -> body.addView(errorState(state.error, viewModel::retry), frameMatch())
+            state.error != null && state.items.isEmpty() -> body.addView(errorState(state.error, viewModel::retry, state.autoRetrying), frameMatch())
             state.items.isEmpty() -> body.addView(emptyState(if (state.query.isBlank()) "当前分类暂无内容" else "没有找到相关内容"), frameMatch())
             else -> {
                 body.addView(
@@ -572,6 +579,39 @@ class MainActivity : ComponentActivity() {
             }
             registerFocusTarget(HomeFocusTarget.Category(category.id), chip)
             chipRow.addView(chip, LinearLayout.LayoutParams(wrap(), dp(44)).withEndMargin(dp(12)))
+        }
+
+        // 分类加载失败(categories 为空)时分类栏也要有可聚焦元素:
+        // 1) 遥控器始终能进入分类行——"最左分类连按左键 5 次"调出系统诊断
+        //    弹窗的入口不能因为加载失败而消失;
+        // 2) 占位 chip 按 OK 直接重试,不依赖错误卡片上的"重试"按钮。
+        if (categories.isEmpty()) {
+            val placeholder = pill(
+                text = "分类加载失败，按 OK 重试",
+                selected = false,
+                heightDp = 44,
+                horizontalPaddingDp = 22,
+                onClick = { viewModel.retry() },
+            ).apply {
+                setOnKeyListener { _, keyCode, event ->
+                    if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_LEFT -> {
+                            // 同真实分类 chip:焦点已在此(最左)时连按左键累计触发诊断弹窗。
+                            leftEdgePressCount++
+                            if (leftEdgePressCount >= DIAGNOSTIC_LEFT_PRESS_COUNT) {
+                                leftEdgePressCount = 0
+                                showSystemInfoDialog()
+                            }
+                            true
+                        }
+                        KeyEvent.KEYCODE_DPAD_UP -> true
+                        else -> false
+                    }
+                }
+            }
+            registerFocusTarget(HomeFocusTarget.Category(HomeFocusNoCategoryKey), placeholder)
+            chipRow.addView(placeholder, LinearLayout.LayoutParams(wrap(), dp(44)).withEndMargin(dp(12)))
         }
 
         val scroll = HorizontalScrollView(this).apply {
@@ -2236,6 +2276,10 @@ class MainActivity : ComponentActivity() {
             row("屏幕密度", "${dm.densityDpi}dpi (×${dm.density})")
             row("App 版本", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
             row("服务端地址", serverHost)
+            // 排查"检查更新失败 / 检查系统时间"类问题最关键的现场:
+            // 设备当前时间(证书时间类失败的确定性依据)与最近一次错误文案。
+            row("系统时间", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
+            row("最近错误", currentState.error ?: "无")
             row("可用内存", "${availMemMb}MB / ${totalMemMb}MB")
 
             val close = pill("关闭", selected = true, heightDp = 48, horizontalPaddingDp = 28) { dismiss() }
@@ -2684,6 +2728,9 @@ class MainActivity : ComponentActivity() {
             ?: state.selectedCategoryId?.takeIf { id -> state.categories.any { it.id == id } }
             ?: state.categories.firstOrNull()?.id
         return categoryId?.let(HomeFocusTarget::Category)
+            // categories 为空(加载失败)时把焦点落到占位 chip,保证分类栏
+            // 有初始焦点——遥控器左键连按 5 次即可调出系统诊断弹窗排查。
+            ?: if (state.categories.isEmpty()) HomeFocusTarget.Category(HomeFocusNoCategoryKey) else null
     }
 
     private fun homeCategoryKey(state: MediaUiState): String {
@@ -2714,7 +2761,7 @@ class MainActivity : ComponentActivity() {
         return box
     }
 
-    private fun errorState(message: String, onRetry: () -> Unit): View {
+    private fun errorState(message: String, onRetry: () -> Unit, autoRetrying: Boolean = false): View {
         val card = LinearLayout(this).apply {
             gravity = Gravity.CENTER_HORIZONTAL
             orientation = LinearLayout.VERTICAL
@@ -2742,9 +2789,25 @@ class MainActivity : ComponentActivity() {
             },
             LinearLayout.LayoutParams(wrap(), wrap()).withTopMargin(dp(8)),
         )
-        val retry = primaryPill("重试", heightDp = 50, horizontalPaddingDp = 40, onClick = onRetry)
-        card.addView(retry, LinearLayout.LayoutParams(wrap(), dp(50)).withTopMargin(dp(24)))
-        retry.post { retry.requestFocus() }
+        if (autoRetrying) {
+            // 自动重试中:展示进度而非手动按钮,且不抢占焦点——让焦点留在
+            // 分类栏(占位 chip),遥控器左键连按 5 次仍可调出系统诊断弹窗。
+            val retrying = pill(
+                text = "自动重试中…",
+                selected = false,
+                heightDp = 50,
+                horizontalPaddingDp = 40,
+                onClick = {},
+            ).apply {
+                isFocusable = false
+                isClickable = false
+            }
+            card.addView(retrying, LinearLayout.LayoutParams(wrap(), dp(50)).withTopMargin(dp(24)))
+        } else {
+            val retry = primaryPill("重试", heightDp = 50, horizontalPaddingDp = 40, onClick = onRetry)
+            card.addView(retry, LinearLayout.LayoutParams(wrap(), dp(50)).withTopMargin(dp(24)))
+            retry.post { retry.requestFocus() }
+        }
         return centeredCard(card)
     }
 

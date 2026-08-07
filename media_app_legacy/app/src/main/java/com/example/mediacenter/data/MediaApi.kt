@@ -20,6 +20,8 @@ import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.security.cert.CertificateExpiredException
+import java.security.cert.CertificateNotYetValidException
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
 
@@ -126,7 +128,7 @@ class MediaApi(
         }
         val category = classifyNetworkError(lastError)
         AppLog.w("Api", "GET $label failed after ${attempt} retries in ${System.currentTimeMillis() - startedAt}ms ($category)", lastError)
-        throw IOException(friendlyNetworkMessage(category), lastError)
+        throw IOException(friendlyNetworkMessage(lastError), lastError)
     }
 
     private fun buildRequest(
@@ -241,8 +243,17 @@ class MediaApi(
  * 此前这些原因全部被笼统报成"网络连接失败",无法区分。这里按异常类型
  * 归类,既用于日志(便于远程诊断),也驱动 [friendlyNetworkMessage] 给出
  * 更有针对性的用户提示。
+ *
+ * **根因优先**:SSL 层异常(SSLHandshakeException 等)只是外壳,真正的根因
+ * 在 cause 链深处(如 Android 4.4 直接抛出的 `CertificateNotYetValidException`,
+ * 或 `No cipher suites in common`)。因此先遍历整条 cause 链做精确分类,
+ * 再落到通用的 SSL / 超时 / DNS 分类,避免把"证书时间不对"误报成泛化的
+ * "检查系统时间"猜测。
  */
-private enum class NetworkErrorCategory {
+internal enum class NetworkErrorCategory {
+    TLS_CERT_TIME,
+    TLS_CIPHER_MISMATCH,
+    TLS_CHAIN_UNTRUSTED,
     TLS_HANDSHAKE,
     CONNECT_TIMEOUT,
     DNS_FAILURE,
@@ -250,11 +261,41 @@ private enum class NetworkErrorCategory {
     GENERIC_NETWORK,
 }
 
-private fun classifyNetworkError(error: Throwable?): NetworkErrorCategory {
+internal fun classifyNetworkError(error: Throwable?): NetworkErrorCategory {
+    // 展开整条 cause 链,按"根因优先"逐项匹配。
+    val chain = generateSequence(error) { it.cause }.toList()
+    fun anyMessage(marker: String): Boolean =
+        chain.any { it.message?.contains(marker, ignoreCase = true) == true }
+
+    // 1) 证书时间类:设备时钟漂移导致证书"尚未生效 / 已过期"。
+    if (chain.any { it is CertificateNotYetValidException || it is CertificateExpiredException }) {
+        return NetworkErrorCategory.TLS_CERT_TIME
+    }
+    if (anyMessage("not yet valid") || anyMessage("NotBefore") ||
+        anyMessage("NotAfter") || anyMessage("expired")
+    ) {
+        return NetworkErrorCategory.TLS_CERT_TIME
+    }
+    // 2) 密码套件不匹配:老设备(如 Android 4.4)与服务端没有共同套件。
+    if (anyMessage("no cipher suites") || anyMessage("no cipher") ||
+        anyMessage("cipher suites in common")
+    ) {
+        return NetworkErrorCategory.TLS_CIPHER_MISMATCH
+    }
+    // 3) 证书链不受信任:签名 / 锚点校验不过(区别于纯时间问题)。
+    if (anyMessage("unable to find valid certification path") ||
+        anyMessage("not trusted") || anyMessage("untrusted") ||
+        anyMessage("certificate_unknown")
+    ) {
+        return NetworkErrorCategory.TLS_CHAIN_UNTRUSTED
+    }
+    // 4) 其余 SSL / TLS 握手失败(保留原兜底,但不再是"猜测时间"的唯一出口)。
+    if (chain.any { it is SSLException }) {
+        return NetworkErrorCategory.TLS_HANDSHAKE
+    }
     var cause: Throwable? = error
     while (cause != null) {
         when (cause) {
-            is SSLException -> return NetworkErrorCategory.TLS_HANDSHAKE
             is SocketTimeoutException -> return NetworkErrorCategory.CONNECT_TIMEOUT
             is UnknownHostException -> return NetworkErrorCategory.DNS_FAILURE
             is ConnectException -> return NetworkErrorCategory.CONNECTION_REFUSED
@@ -287,12 +328,19 @@ private fun classifyNetworkError(error: Throwable?): NetworkErrorCategory {
 /**
  * 将分类后的网络错误翻译成面向用户的提示。
  *
- * 对 TLS 握手失败额外提示"可能是设备时间不准"——这是电视盒子最高频的
- * 根因(RTC 没电池,断电后时钟漂移),用户手动校准时间即可解决,无需网络。
+ * 分类是**确定性的**:证书时间类只在 cause 链里出现"未生效 / 已过期"信号时
+ * 才提示时间;证书不受信任 / 密码套件不匹配分别给出各自的确定结论,不再把
+ * 所有 TLS 失败一律归咎于系统时间。
  */
-private fun friendlyNetworkMessage(category: NetworkErrorCategory): String = when (category) {
+internal fun friendlyNetworkMessage(error: Throwable?): String = when (classifyNetworkError(error)) {
+    NetworkErrorCategory.TLS_CERT_TIME ->
+        "安全连接失败：服务器证书在本设备当前时间无效，确定是设备系统时间不准确。请在系统设置中校准时间后重试"
+    NetworkErrorCategory.TLS_CIPHER_MISMATCH ->
+        "安全连接失败：设备系统版本过旧，无法与服务器建立安全连接"
+    NetworkErrorCategory.TLS_CHAIN_UNTRUSTED ->
+        "安全连接失败：服务器证书不受本设备信任，请检查网络环境（代理/劫持）后重试"
     NetworkErrorCategory.TLS_HANDSHAKE ->
-        "安全连接失败，请检查设备的系统时间是否准确后重试"
+        "安全连接失败，请检查设备时间与网络后重试"
     NetworkErrorCategory.CONNECT_TIMEOUT ->
         "连接超时，请检查网络后重试"
     NetworkErrorCategory.DNS_FAILURE ->

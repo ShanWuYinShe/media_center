@@ -24,8 +24,13 @@ class MediaCenterApp : MultiDexApplication() {
                 "MODEL=${Build.MODEL} " +
                 "DEVICE=${Build.DEVICE}",
         )
-        // 尽早安装 OCSP soft-fail 的 TLS 默认工厂:覆盖 Media3 DefaultHttpDataSource(走
-        // HttpsURLConnection)的播放链路,避免时钟不准的设备在播放时握手失败。须在任何网络请求前。
+        // TLS 初始化:加载附加根 CA(GTS Root R4)+ 构建 soft-fail TrustManager。
+        // 必须在任何网络请求之前完成,否则 OkHttp / HttpsURLConnection 用的仍是平台
+        // 默认 TLS——Android 4.4.2 系统信任库缺失 GTS Root R4,会握手失败。
+        // 顺序:先 init(加载证书 + 构建 TLS),再 install(设为 HttpsURLConnection 默认)。
+        AppHttpClient.init(this)
+        // 把自定义 TLS 设为 HttpsURLConnection 进程级默认,覆盖 ExoPlayer
+        // DefaultHttpDataSource(走 HttpsURLConnection)的播放链路。
         AppHttpClient.installHttpsUrlConnectionDefault()
         // 启用 HTTP 磁盘缓存(缩略图复用):必须在任何图片请求前、Application 早期初始化。
         AppHttpClient.initCache(this)
