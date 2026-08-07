@@ -63,7 +63,7 @@ fun SearchScreen(
         Spacer(Modifier.height(12.dp))
         when {
             state.isSearching -> LoadingIndicator()
-            state.error != null -> ErrorView(state.error!!, modifier = Modifier.fillMaxSize())
+            state.error != null -> ErrorView(message = state.error!!, modifier = Modifier.fillMaxSize())
             state.query.length < 2 -> {
                 Text(
                     "\u8F93\u5165\u81F3\u5C11 2 \u4E2A\u5B57\u7B26\u641C\u7D22\u89C6\u9891",

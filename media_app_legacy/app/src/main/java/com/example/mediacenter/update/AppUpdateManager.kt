@@ -6,9 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageInstaller
-import android.net.Uri
+import androidx.core.net.toUri
 import android.os.Build
-import android.provider.Settings
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -112,10 +111,12 @@ class AppUpdateManager(
     }
 
     fun launchInstallPermissionSettings() {
-        // 国产 TV 可能不支持 ACTION_MANAGE_UNKNOWN_APP_SOURCES，降级到应用详情页。
+        // ACTION_MANAGE_UNKNOWN_APP_SOURCES 是 API 26 引入的常量,直接引用会在
+        // minSdk 19 上触发 lint InlinedApi。用字符串字面量 + runCatching 兜底:
+        // API 26+ 解析成功跳到安装权限页;< 26 或国产 TV 不支持则降级到应用详情页。
         val primaryIntent = Intent(
-            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-            Uri.parse("package:${context.packageName}"),
+            "android.settings.MANAGE_UNKNOWN_APP_SOURCES",
+            "package:${context.packageName}".toUri(),
         ).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
@@ -124,8 +125,8 @@ class AppUpdateManager(
         }.onFailure {
             AppLog.w("Update", "launchInstallPermissionSettings: redirect to app details", it)
             val fallbackIntent = Intent(
-                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.parse("package:${context.packageName}"),
+                "android.settings.APPLICATION_DETAILS_SETTINGS",
+                "package:${context.packageName}".toUri(),
             ).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }

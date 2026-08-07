@@ -20,9 +20,9 @@ import com.example.mediacenter.ui.theme.TextPrimary
 
 @Composable
 fun ErrorView(
+    modifier: Modifier = Modifier,
     message: String,
     onRetry: (() -> Unit)? = null,
-    modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(

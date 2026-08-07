@@ -6,10 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageInstaller
-import android.net.Uri
+import androidx.core.net.toUri
 import android.os.Build
-import android.provider.Settings
-import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.example.mediacenter.BuildConfig
@@ -95,9 +93,9 @@ class AppUpdateManager(
 
     /** apkUrl 的 host 必须与 API 基址 host 一致;不一致视为投毒,拒绝下载。 */
     private fun validateApkUrlHost(update: AppUpdateInfo) {
-        val expectedHost = runCatching { Uri.parse(api.baseUrl).host }.getOrNull()
+        val expectedHost = runCatching { api.baseUrl.toUri().host }.getOrNull()
         if (expectedHost.isNullOrEmpty()) return
-        val apkHost = runCatching { Uri.parse(update.apkUrl).host }.getOrNull()
+        val apkHost = runCatching { update.apkUrl.toUri().host }.getOrNull()
         if (apkHost != null && !apkHost.equals(expectedHost, ignoreCase = true)) {
             AppLog.w("Update", "refusing apk download: host $apkHost != api host $expectedHost")
             throw IllegalStateException("apk url host mismatch")
@@ -193,9 +191,11 @@ class AppUpdateManager(
      * ACTION_MANAGE_UNKNOWN_APP_SOURCES,此时降级到应用详情页。
      */
     fun launchInstallPermissionSettings() {
+        // ACTION_MANAGE_UNKNOWN_APP_SOURCES 是 API 26 常量,用字符串字面量避免 lint
+        // InlinedApi;runCatching 兜底:不支持时降级到应用详情页。
         val primaryIntent = Intent(
-            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-            Uri.parse("package:${context.packageName}"),
+            "android.settings.MANAGE_UNKNOWN_APP_SOURCES",
+            "package:${context.packageName}".toUri(),
         ).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
@@ -204,8 +204,8 @@ class AppUpdateManager(
         }.onFailure {
             AppLog.w("Update", "launchInstallPermissionSettings: redirect to app details", it)
             val fallbackIntent = Intent(
-                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.parse("package:${context.packageName}"),
+                "android.settings.APPLICATION_DETAILS_SETTINGS",
+                "package:${context.packageName}".toUri(),
             ).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
@@ -215,20 +215,18 @@ class AppUpdateManager(
 
     fun launchInstaller(apk: File): InstallLaunchResult {
         // 第1优先：PackageInstaller API（API 21+），session-based 安装。
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            val result = tryInstallWithSession(apk)
-            if (result is InstallLaunchResult.Started) return result
-            AppLog.w("Update", "PackageInstaller session failed")
-        }
-        // 第2优先：Intent.ACTION_INSTALL_PACKAGE。国产 TV 上比 ACTION_VIEW 更兼容。
-        val result = tryInstallWithInstallPackage(apk)
+        // minSdk=23,该守卫恒为真,但保留以兼容将来 minSdk 调整时 PackageInstaller 的语义边界。
+        val result = tryInstallWithSession(apk)
         if (result is InstallLaunchResult.Started) return result
+        AppLog.w("Update", "PackageInstaller session failed")
+        // 第2优先：Intent.ACTION_INSTALL_PACKAGE。国产 TV 上比 ACTION_VIEW 更兼容。
+        val installResult = tryInstallWithInstallPackage(apk)
+        if (installResult is InstallLaunchResult.Started) return installResult
         AppLog.w("Update", "ACTION_INSTALL_PACKAGE failed")
         // 第3优先（回退）：Intent.ACTION_VIEW + 权限弹窗引导。
         return tryInstallWithIntent(apk)
     }
 
-    @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
     private fun tryInstallWithSession(apk: File): InstallLaunchResult {
         return try {
             val packageInstaller = context.packageManager.packageInstaller

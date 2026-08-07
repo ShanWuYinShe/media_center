@@ -116,7 +116,7 @@ fun PlayerScreen(
                 )
             } else {
                 ErrorView(
-                    "无可用播放地址",
+                    message = "无可用播放地址",
                     onRetry = viewModel::resolvePlayback,
                     modifier = Modifier.fillMaxSize(),
                 )

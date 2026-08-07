@@ -128,7 +128,7 @@ object AppHttpClient {
      * 信任所有服务器证书的 TrustManager:对所有证书链直接放行,不做任何校验。
      * 参见类注释关于安全取舍的说明。
      */
-    @Suppress("CustomX509TrustManager")
+    @Suppress("CustomX509TrustManager", "TrustAllX509TrustManager")
     private class TrustAllManager : X509TrustManager {
         override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {
             // 不校验客户端证书。

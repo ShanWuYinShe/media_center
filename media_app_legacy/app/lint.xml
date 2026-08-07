@@ -3,4 +3,18 @@
     <!-- Android TV apps only require xhdpi assets; lower/higher densities
          are not needed for the TV form factor. -->
     <issue id="IconDensities" severity="informational" />
+
+    <!-- 依赖版本有意锁定在支持 Android 4.4 (API 19) 的最高版本:
+         okhttp 3.12.x 是最后一个支持 Android 4.x 的分支(3.13+/4.x/5.x 要求 API 21+);
+         core-ktx 1.12.0 / lifecycle 2.7.0 是兼容 API 19 的最高版本。
+         升级到"最新"会破坏 minSdk=19 兼容性,因此关闭"有新版本"提示。 -->
+    <issue id="GradleDependency" severity="ignore" />
+    <issue id="NewerVersionAvailable" severity="ignore" />
+
+    <!-- targetSdk 保持 34:legacy 目标是老 TV 盒子,不必追最新 targetSdk
+         (升 35/36 会触发更多行为变更,且无实际收益)。 -->
+    <issue id="OldTargetApi" severity="ignore" />
+
+    <!-- 启动图标用满屏方形是本项目设计选择(TV 桌面适配)。 -->
+    <issue id="IconLauncherShape" severity="ignore" />
 </lint>

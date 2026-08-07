@@ -96,9 +96,9 @@ fun HomeScreen(
         }
         when {
             state.isLoading -> item { LoadingIndicator() }
-            state.error != null -> item { ErrorView(state.error!!, onRetry = { viewModel.loadHome() }) }
+            state.error != null -> item { ErrorView(message = state.error!!, onRetry = { viewModel.loadHome() }) }
             state.categories.isEmpty() -> item {
-                ErrorView("\u6682\u65E0\u5206\u7C7B\u6570\u636E")
+                ErrorView(message = "\u6682\u65E0\u5206\u7C7B\u6570\u636E")
             }
             else -> items(state.categories, key = { it.id }) { category ->
                 CategoryRow(

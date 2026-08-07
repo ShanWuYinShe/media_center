@@ -3,4 +3,11 @@
     <!-- Android TV apps only require xhdpi assets; lower/higher densities
          are not needed for the TV form factor. -->
     <issue id="IconDensities" severity="informational" />
+
+    <!-- 媒体类库(media3/tv-material/navigation-compose)升级需要协同迁移,
+         按需手动升级,关闭"有新版本"噪音。 -->
+    <issue id="GradleDependency" severity="ignore" />
+
+    <!-- 启动图标用满屏方形是本项目设计选择(TV 桌面适配)。 -->
+    <issue id="IconLauncherShape" severity="ignore" />
 </lint>

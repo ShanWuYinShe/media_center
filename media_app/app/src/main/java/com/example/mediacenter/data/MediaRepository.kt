@@ -2,6 +2,7 @@ package com.example.mediacenter.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.core.content.edit
 import com.example.mediacenter.BuildConfig
 import com.example.mediacenter.log.AppLog
 
@@ -39,7 +40,7 @@ class MediaRepository(
     }
 
     private fun persistProvider() {
-        providerPrefs?.edit()?.putString(KEY_CURRENT_PROVIDER, currentProvider)?.apply()
+        providerPrefs?.edit { putString(KEY_CURRENT_PROVIDER, currentProvider) }
     }
 
     companion object {

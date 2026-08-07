@@ -88,8 +88,8 @@ fun CategoryVideosScreen(
 
         when {
             state.isLoadingInitial -> LoadingIndicator(modifier = Modifier.fillMaxSize())
-            state.error != null -> ErrorView(state.error!!, onRetry = { viewModel.load(categoryId, title) })
-            state.items.isEmpty() -> ErrorView("\u6682\u65E0\u5185\u5BB9")
+            state.error != null -> ErrorView(message = state.error!!, onRetry = { viewModel.load(categoryId, title) })
+            state.items.isEmpty() -> ErrorView(message = "\u6682\u65E0\u5185\u5BB9")
             else -> CategoryGrid(
                 items = state.items,
                 isLoadingMore = state.isLoadingMore,
