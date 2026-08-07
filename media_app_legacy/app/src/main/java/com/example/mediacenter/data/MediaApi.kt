@@ -340,7 +340,7 @@ internal fun friendlyNetworkMessage(error: Throwable?): String = when (classifyN
     NetworkErrorCategory.TLS_CHAIN_UNTRUSTED ->
         "安全连接失败：服务器证书不受本设备信任，请检查网络环境（代理/劫持）后重试"
     NetworkErrorCategory.TLS_HANDSHAKE ->
-        "安全连接失败，请检查设备时间与网络后重试"
+        "安全连接失败，请检查网络后重试"
     NetworkErrorCategory.CONNECT_TIMEOUT ->
         "连接超时，请检查网络后重试"
     NetworkErrorCategory.DNS_FAILURE ->
