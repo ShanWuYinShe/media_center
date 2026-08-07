@@ -49,7 +49,9 @@ class MediaApi(
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
-            .followRedirects(false) // 服务端/Cloudflare 若仍 301,不跟随,直接报错由上层处理
+            // 跟随重定向:服务端/Cloudflare 若已放行 HTTP 则直接 200;
+            // 若仍 301 跳 HTTPS,跟随后在 HTTPS 上握手失败,最终由上层报错。
+            .followRedirects(true)
             .build()
     } else {
         null
