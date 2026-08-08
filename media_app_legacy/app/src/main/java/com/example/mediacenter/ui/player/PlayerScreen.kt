@@ -450,15 +450,19 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
         }
         val statusDot = View(this).apply { background = rounded(Colors.APPLE_BLUE, 999) }
         val statusText = label("", 15f, Colors.TEXT_SECONDARY, bold = true, maxLines = 1)
+        // 快捷键提示(发现性):仅在当前场景下相关时显示。
+        val hints = buildList {
+            if (hasPrevious || hasNext) add("▲▼ 切换视频")
+            if (state.availableQualities.size > 1) add("MENU 键切换清晰度")
+        }
         val statusRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(statusDot, LinearLayout.LayoutParams(dp(9), dp(9)).withEndMargin(dp(10)))
             addView(statusText, linearWrap())
-            // 多清晰度时提示 MENU 键可切换(新交互的发现性提示)。
-            if (state.availableQualities.size > 1) {
+            hints.forEach { hint ->
                 addView(
-                    label("MENU 键切换清晰度", 13f, Colors.TEXT_TERTIARY, maxLines = 1),
+                    label(hint, 13f, Colors.TEXT_TERTIARY, maxLines = 1),
                     LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(16)),
                 )
             }
