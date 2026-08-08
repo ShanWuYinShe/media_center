@@ -153,6 +153,7 @@ internal fun MainActivity.homeFocusTargetFor(state: MediaUiState): HomeFocusTarg
                     ?: state.items.firstOrNull()?.id?.let(HomeFocusTarget::Video)
             }
             homeFocusArea == HomeFocusArea.Search -> HomeFocusTarget.Search
+            homeFocusArea == HomeFocusArea.Filter -> HomeFocusTarget.Filter(state.durationFilter.id)
             else -> homeDefaultCategoryTarget(state)
         }
     }

@@ -2,6 +2,7 @@ package com.example.mediacenter.ui
 
 import android.app.ActivityManager
 import android.view.KeyEvent
+import android.view.ViewGroup
 import android.widget.ScrollView
 import android.app.Dialog
 import android.content.Context
@@ -12,7 +13,10 @@ import android.view.View
 import android.view.Window
 import android.widget.LinearLayout
 import androidx.core.graphics.ColorUtils
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.example.mediacenter.BuildConfig
+import com.example.mediacenter.net.AppHttpClient
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -157,6 +161,10 @@ internal fun MainActivity.showSystemInfoDialog() {
             row("服务端地址", serverHost)
             // 连接模式:HTTPS 握手失败自动降级明文 HTTP 后显示,便于排查 TLS 兼容性。
             row("连接模式", if (viewModel.httpFallbackActive) "明文 HTTP(已降级)" else "HTTPS", highlight = viewModel.httpFallbackActive)
+            // TLS 引擎与校验降级计数:Conscrypt 主路径 / 平台回退,以及证书校验
+            // soft-fail 接受连接的次数。与"连接模式"一起构成网络链路诊断三件套。
+            row("TLS 引擎", AppHttpClient.tlsPathLabel, highlight = AppHttpClient.tlsPathLabel != "Conscrypt")
+            row("TLS 校验降级", "${AppHttpClient.softFailCount} 次", highlight = AppHttpClient.softFailCount > 0)
             // 排查"检查更新失败 / 检查系统时间"类问题最关键的现场:
             // 设备当前时间(证书时间类失败的确定性依据)与最近一次错误文案。
             row("系统时间", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
@@ -173,78 +181,138 @@ internal fun MainActivity.showSystemInfoDialog() {
     }
 
 internal fun MainActivity.showAllPagesDialog(pages: PlaybackPages) {
-        val activity = this
-        Dialog(activity).apply {
-            requestWindowFeature(Window.FEATURE_NO_TITLE)
-            val card = LinearLayout(activity).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(28), dp(24), dp(28), dp(24))
-                background = rounded(Colors.SURFACE_ELEVATED, 24, 1, Colors.GlassBorder)
+    val titles = List(pages.totalPages) { i ->
+        pages.pageTitles.getOrElse(i) { "第${i + 1}集" }
+    }
+    showOptionListDialog(
+        title = "选集 · 共${pages.totalPages}集",
+        options = titles,
+        currentIndex = pages.currentPage,
+    ) { index -> viewModel.selectPage(index) }
+}
+
+/**
+ * 通用单列选择弹窗(选集 / 清晰度等共用)。
+ *
+ * 用 RecyclerView 惰性建行:选集动辄几百集,ScrollView+LinearLayout 一次性全量
+ * inflate 在 4.4.2 老盒子上打开即卡。行样式与旧实现一致(焦点态 AppleBlue 背景 +
+ * 白色文字 + 微放大,current 项淡蓝底色),编号列固定宽度保持对齐。
+ *
+ * @param options 每行的显示文本
+ * @param currentIndex 当前选中项(淡蓝底色高亮),null 表示无高亮
+ * @param onSelect 选中回调(传行号);null 表示不可选(纯展示)
+ */
+internal fun MainActivity.showOptionListDialog(
+    title: String,
+    options: List<String>,
+    currentIndex: Int?,
+    onSelect: ((Int) -> Unit)?,
+) {
+    val activity = this
+    Dialog(activity).apply {
+        requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val card = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(28), dp(24), dp(28), dp(24))
+            background = rounded(Colors.SURFACE_ELEVATED, 24, 1, Colors.GlassBorder)
+        }
+        card.addView(label(title, 22f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1), linearMatch())
+
+        // 行内状态(绑定期更新):index 供点击回调,isCurrent 供焦点/底色刷新。
+        class OptionRowHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
+            private var boundIndex = 0
+            private var boundIsCurrent = false
+            private val idxLabel = label("", 13f, Colors.TEXT_TERTIARY, bold = true, maxLines = 1).apply {
+                gravity = Gravity.CENTER
+                minWidth = dp(36)
             }
-            card.addView(
-                label("选集 · 共${pages.totalPages}集", 22f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1),
-                linearMatch(),
-            )
-            val scroll = ScrollView(activity)
-            val list = LinearLayout(activity).apply {
-                orientation = LinearLayout.VERTICAL
-            }
-            var currentRow: View? = null
-            for (i in 0 until pages.totalPages) {
-                val title = pages.pageTitles.getOrElse(i) { "第${i + 1}集" }
-                val isCurrent = i == pages.currentPage
-                val row = LinearLayout(activity).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dp(4), dp(8), dp(4), dp(8))
-                    isFocusable = true
-                    isClickable = true
-                    setOnClickListener {
+            private val titleLabel = label("", 15f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1)
+
+            init {
+                row.gravity = Gravity.CENTER_VERTICAL
+                row.setPadding(dp(4), dp(8), dp(4), dp(8))
+                row.isFocusable = true
+                row.isClickable = true
+                row.addView(idxLabel, LinearLayout.LayoutParams(dp(36), wrap()))
+                titleLabel.layoutParams = LinearLayout.LayoutParams(0, wrap(), 1f).withStartMargin(dp(8))
+                row.addView(titleLabel)
+                row.setOnClickListener {
+                    if (onSelect != null) {
                         dismiss()
-                        viewModel.selectPage(i)
-                    }
-                    background = rounded(if (isCurrent) ColorUtils.setAlphaComponent(Colors.APPLE_BLUE, 38) else Color.TRANSPARENT, 12, 0, Color.TRANSPARENT)
-                    val idxLabel = label("${i + 1}", 13f, Colors.TEXT_TERTIARY, bold = true, maxLines = 1).apply {
-                        gravity = Gravity.CENTER
-                        minWidth = dp(36)
-                    }
-                    addView(idxLabel, LinearLayout.LayoutParams(dp(36), wrap()))
-                    val titleLabel = label(title, 15f, if (isCurrent) Colors.APPLE_BLUE else Colors.TEXT_PRIMARY, bold = isCurrent, maxLines = 1).apply {
-                        layoutParams = LinearLayout.LayoutParams(0, wrap(), 1f).withStartMargin(dp(8))
-                    }
-                    addView(titleLabel)
-                    // 焦点态:AppleBlue 背景 + 白色文字 + 微放大,与 pill 风格一致
-                    setOnFocusChangeListener { _, focused ->
-                        background = rounded(
-                            when {
-                                focused -> Colors.APPLE_BLUE
-                                isCurrent -> ColorUtils.setAlphaComponent(Colors.APPLE_BLUE, 38)
-                                else -> Color.TRANSPARENT
-                            }, 12,
-                            if (focused) 2 else 0,
-                            if (focused) Colors.GLASS_BORDER_FOCUSED else Color.TRANSPARENT,
-                        )
-                        elevationCompat(if (focused) dp(6).toFloat() else 0f)
-                        idxLabel.setTextColor(if (focused) Colors.TEXT_PRIMARY else Colors.TEXT_TERTIARY)
-                        titleLabel.setTextColor(if (focused) Colors.TEXT_PRIMARY else if (isCurrent) Colors.APPLE_BLUE else Colors.TEXT_PRIMARY)
-                        animate().cancel()
-                        animate().scaleX(if (focused) 1.04f else 1f).scaleY(if (focused) 1.04f else 1f).setDuration(140).start()
+                        onSelect(boundIndex)
                     }
                 }
-                if (isCurrent) currentRow = row
-                list.addView(row, linearMatch())
+                // 焦点态:AppleBlue 背景 + 白色文字 + 微放大,与 pill 风格一致
+                row.setOnFocusChangeListener { _, focused ->
+                    row.background = rounded(
+                        when {
+                            focused -> Colors.APPLE_BLUE
+                            boundIsCurrent -> ColorUtils.setAlphaComponent(Colors.APPLE_BLUE, 38)
+                            else -> Color.TRANSPARENT
+                        }, 12,
+                        if (focused) 2 else 0,
+                        if (focused) Colors.GLASS_BORDER_FOCUSED else Color.TRANSPARENT,
+                    )
+                    row.elevationCompat(if (focused) dp(6).toFloat() else 0f)
+                    idxLabel.setTextColor(if (focused) Colors.TEXT_PRIMARY else Colors.TEXT_TERTIARY)
+                    titleLabel.setTextColor(
+                        if (focused) Colors.TEXT_PRIMARY
+                        else if (boundIsCurrent) Colors.APPLE_BLUE
+                        else Colors.TEXT_PRIMARY,
+                    )
+                    row.animate().cancel()
+                    row.animate().scaleX(if (focused) 1.04f else 1f).scaleY(if (focused) 1.04f else 1f).setDuration(140).start()
+                }
             }
-            scroll.addView(list, frameMatch())
-            card.addView(scroll, LinearLayout.LayoutParams(match(), 0, 1f).withTopMargin(dp(12)))
-            val close = pill("关闭", selected = true, heightDp = 48, horizontalPaddingDp = 28) { dismiss() }
-            card.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(16)))
-            setContentView(card)
-            window?.setBackgroundDrawableResource(android.R.color.transparent)
-            window?.setLayout((resources.displayMetrics.widthPixels * 0.62f).toInt(), (resources.displayMetrics.heightPixels * 0.72f).toInt())
-            val focusView = currentRow ?: close
-            focusView.post { focusView.requestFocus() }
-        }.show()
-    }
+
+            fun bind(index: Int) {
+                boundIndex = index
+                boundIsCurrent = index == currentIndex
+                idxLabel.text = String.format(Locale.getDefault(), "%d", index + 1)
+                titleLabel.text = options[index]
+                titleLabel.isSelected = false
+                // 非 current 且未聚焦时还原底色(焦点刷新只改 focus 分支)
+                if (!boundIsCurrent && !row.isFocused) {
+                    row.background = rounded(Color.TRANSPARENT, 12, 0, Color.TRANSPARENT)
+                }
+            }
+        }
+
+        val listAdapter = object : RecyclerView.Adapter<OptionRowHolder>() {
+            override fun getItemCount(): Int = options.size
+            override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): OptionRowHolder {
+                val row = LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                }
+                return OptionRowHolder(row)
+            }
+
+            override fun onBindViewHolder(holder: OptionRowHolder, position: Int) {
+                holder.bind(position)
+            }
+        }
+        val recycler = RecyclerView(activity).apply {
+            layoutManager = LinearLayoutManager(activity)
+            this.adapter = listAdapter
+        }
+        card.addView(recycler, LinearLayout.LayoutParams(match(), 0, 1f).withTopMargin(dp(12)))
+        val close = pill("关闭", selected = true, heightDp = 48, horizontalPaddingDp = 28) { dismiss() }
+        card.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(16)))
+        setContentView(card)
+        window?.setBackgroundDrawableResource(android.R.color.transparent)
+        window?.setLayout((resources.displayMetrics.widthPixels * 0.62f).toInt(), (resources.displayMetrics.heightPixels * 0.72f).toInt())
+        // 焦点落到当前项(超出可视区时先滚动过去);无 current 则落到关闭按钮
+        recycler.post {
+            val focusIndex = currentIndex ?: -1
+            if (focusIndex >= 0) {
+                recycler.scrollToPosition(focusIndex)
+                recycler.findViewHolderForAdapterPosition(focusIndex)?.itemView?.requestFocus() ?: close.requestFocus()
+            } else {
+                close.requestFocus()
+            }
+        }
+    }.show()
+}
 
 internal fun MainActivity.promptInstallUpdate(result: AppUpdateResult.ReadyToInstall) {
         val activity = this

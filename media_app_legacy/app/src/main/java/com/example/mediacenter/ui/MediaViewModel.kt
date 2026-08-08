@@ -8,6 +8,7 @@ import com.example.mediacenter.data.ContentCategory
 import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.PlaybackOption
 import com.example.mediacenter.data.PlaybackPages
+import com.example.mediacenter.data.PlaybackQuality
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.VideoDetails
 import com.example.mediacenter.data.VideoSummary
@@ -47,7 +48,39 @@ data class MediaUiState(
     val autoRetrying: Boolean = false,
     // 多P视频的分页信息(当前页/总页数/页标题),UI 据此显示选集按钮。
     val currentPages: PlaybackPages? = null,
+    // 当前视频全部可用清晰度(播放页清晰度切换弹窗数据源)。
+    val availableQualities: List<PlaybackQuality> = emptyList(),
+    // 时长筛选(分类浏览用):ALL 不过滤;搜索模式(query 非空)忽略该筛选。
+    val durationFilter: DurationFilter = DurationFilter.ALL,
 )
+
+/**
+ * 时长筛选档位(分类浏览用):按视频时长把列表收窄,数据来自 VideoSummary 的
+ * durationSeconds(服务端 catalog 已有字段,无需额外请求)。
+ * 阈值:短片 < 10 分钟;中片 10~45 分钟;长片 > 45 分钟。
+ */
+enum class DurationFilter(val id: String, val label: String) {
+    ALL("all", "全部"),
+    SHORT("short", "短片"),
+    MEDIUM("medium", "中片"),
+    LONG("long", "长片"),
+}
+
+/** 视频是否命中某档时长筛选;时长缺失(null)的视频只出现在"全部"里。 */
+fun VideoSummary.matchesDuration(filter: DurationFilter): Boolean {
+    val seconds = durationSeconds ?: return false
+    return when (filter) {
+        DurationFilter.ALL -> true
+        DurationFilter.SHORT -> seconds < 10 * 60
+        DurationFilter.MEDIUM -> seconds in 10 * 60 until 45 * 60
+        DurationFilter.LONG -> seconds >= 45 * 60
+    }
+}
+
+/** 按当前状态输出展示列表:搜索模式与"全部"档不过滤,其余按时长筛选。 */
+fun MediaUiState.displayItems(): List<VideoSummary> =
+    if (query.isNotBlank() || durationFilter == DurationFilter.ALL) items
+    else items.filter { it.matchesDuration(durationFilter) }
 
 /**
  * 项目级"取消友好"的 runCatching:遇到 [CancellationException] **重抛**,
@@ -59,8 +92,7 @@ data class MediaUiState(
  *
  * 用法与 [runCatching] 完全一致,只是更安全。
  */
-private inline fun <T> runCatchingCancellable(block: () -> T): Result<T> {
-    return try {
+private inline fun <T> runCatchingCancellable(block: () -> T): Result<T> {    return try {
         Result.success(block())
     } catch (e: CancellationException) {
         throw e
@@ -100,8 +132,15 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     // 用户手动 retry 安全替换,不会出现两个重试循环并存。
     private var loadHomeJob: Job? = null
     // 播放地址预取缓存:列表可见视频在后台提前解析,用户点详情时直接可用。
-    private val playbackCache = mutableMapOf<String, PlaybackResult>()
-    private val prefetchedPlaybackIds = mutableSetOf<String>()
+    // LRU 有上限:长时间浏览多个分类后纯 Java 对象持续累积,低堆老盒子有 OOM 风险
+    // (插入顺序 LinkedHashMap,超限淘汰最早插入的条目)。
+    private val playbackCache = object : LinkedHashMap<String, PlaybackResult>(16, 0.75f, false) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, PlaybackResult>?): Boolean =
+            size > MaxPlaybackCacheEntries
+    }
+    // 已预取 id 集合(去重用),同样设上限:超限后旧 id 被淘汰,
+    // 对应视频滚动回可视区时会重新预取(可接受)。
+    private val prefetchedPlaybackIds = LinkedHashSet<String>()
     // 在列表末尾按"下一个"时,记录续播来源 id:loadMore 拉到新一页后,
     // 在其 onSuccess 里自动续播该来源的下一条,避免自动续播在分页边界"断档"。
     private var pendingAutoAdvanceFromId: String? = null
@@ -125,7 +164,11 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         val timestamp: Long,
     )
 
-    private val categoryListCache = mutableMapOf<String, CategoryCacheEntry>()
+    // 分类级缓存 LRU 上限:超过后淘汰最早进入的分类,防止长会话内存无上限增长。
+    private val categoryListCache = object : LinkedHashMap<String, CategoryCacheEntry>(16, 0.75f, false) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CategoryCacheEntry>?): Boolean =
+            size > MaxCategoryCacheEntries
+    }
     private var categoryRefreshJob: Job? = null
 
     private fun cacheCategoryList(
@@ -171,6 +214,10 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                                 .onSuccess { result ->
                                     playbackCache[video.id] = result
                                     prefetchedPlaybackIds.add(video.id)
+                                    // 预取 id 集上限:淘汰最早记录,避免无限膨胀
+                                    while (prefetchedPlaybackIds.size > MaxPrefetchedIds) {
+                                        prefetchedPlaybackIds.remove(prefetchedPlaybackIds.iterator().next())
+                                    }
                                 }
                         }
                     }
@@ -381,6 +428,15 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         loadMore()
     }
 
+    /**
+     * 时长筛选切换(分类浏览筛选行回调)。只更新筛选状态,列表渲染层
+     * ([MediaUiState.displayItems])即时生效;已加载数据无需重新请求。
+     */
+    fun selectDurationFilter(filter: DurationFilter) {
+        if (mutableState.value.durationFilter == filter) return
+        mutableState.update { it.copy(durationFilter = filter) }
+    }
+
     fun selectCategory(category: ContentCategory) {
         // 已选中的分类不再重复搜索，避免焦点自动切换时反复触发无用请求
         if (category.id == mutableState.value.selectedCategoryId) return
@@ -474,7 +530,8 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     mutableState.update { state ->
                         if (state.selected?.id != details.id) return@update state
                         state.copy(selected = state.selected.copy(playbackOptions = result.options),
-                                   currentPages = result.pages)
+                                   currentPages = result.pages,
+                                   availableQualities = result.availableQualities)
                     }
                 }
                 .onFailure { error ->
@@ -591,6 +648,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                             playing = fresh,
                             playingVideo = video ?: state.playingVideo,
                             currentPages = result.pages,
+                            availableQualities = result.availableQualities,
                         )
                     }
                 }
@@ -601,6 +659,27 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     }
                 }
         }
+    }
+
+    /**
+     * 播放页清晰度切换入口(清晰度弹窗回调):按目标 qn 重新解析 playurl 并续播。
+     * 与播放中恢复流程共用 [switchQuality];目标 qn 与当前一致或非法时忽略。
+     */
+    fun selectPlaybackQuality(qn: Int) {
+        val state = mutableState.value
+        val selected = state.selected ?: return
+        val current = state.playing ?: return
+        if (qn <= 0 || qn == current.qn) return
+        // 合成目标 qn 的占位 option:switchQuality 只取 qn 重新解析,
+        // 解析结果里按 id/label 匹配不到时取新结果唯一选项(见 switchQuality)。
+        val target = PlaybackOption(
+            id = "quality-$qn",
+            kind = "vod",
+            label = "清晰度 $qn",
+            url = "",
+            qn = qn,
+        )
+        switchQuality(selected, target, state.playingVideo)
     }
 
     /**
@@ -911,9 +990,9 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
             runCatchingCancellable {
                 val details = repository.details(nextVideo)
                 val result = repository.playbackOptions(details)
-                Pair(details.copy(playbackOptions = result.options), result.pages)
+                Triple(details.copy(playbackOptions = result.options), result.pages, result.availableQualities)
             }
-                .onSuccess { (details, pages) ->
+                .onSuccess { (details, pages, qualities) ->
                     if (session != playbackSession) return@onSuccess
                     val option = details.playbackOptions.firstOrNull()
                     if (option == null) {
@@ -925,6 +1004,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                                 playingVideo = nextVideo,
                                 playing = null,
                                 currentPages = pages,
+                                availableQualities = qualities,
                                 error = "该视频暂无可播放清晰度",
                             )
                         }
@@ -936,6 +1016,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                                 playingVideo = nextVideo,
                                 playing = option,
                                 currentPages = pages,
+                                availableQualities = qualities,
                             )
                         }
                     }
@@ -1125,6 +1206,12 @@ private const val CategoryCacheTtlMs = 10 * 60 * 1000L
 // 每个 playbackOptions 是 3 个串行网络调用;无限制并发会在长列表上打满网络/内存。
 private const val MAX_PREFETCH = 4
 private const val PREFETCH_CONCURRENCY = 2
+
+// 内存缓存上限:长时间浏览多分类/多视频后防止纯 Java 对象无限累积,
+// 低堆(老盒子常见 128MB 堆)场景下避免 OOM。超限按插入顺序淘汰最旧条目。
+private const val MaxCategoryCacheEntries = 24
+private const val MaxPlaybackCacheEntries = 32
+private const val MaxPrefetchedIds = 128
 
 // 首页分类加载失败自动重试:最多额外重试 MAX_HOME_AUTO_RETRIES 次,
 // 退避 2s/4s/8s。老 TV 盒子开机时 WiFi/路由未就绪很常见,单次失败直接

@@ -31,6 +31,7 @@ import com.example.mediacenter.ui.config.containsHeader
 import com.example.mediacenter.data.PlaybackOption
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.setContent
+import com.example.mediacenter.ui.showOptionListDialog
 import com.example.mediacenter.ui.components.dp
 import com.example.mediacenter.ui.components.elevationCompat
 import com.example.mediacenter.ui.components.formatTime
@@ -256,7 +257,11 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
             isFocusable = true
             isFocusableInTouchMode = true
             setOnKeyListener { _, keyCode, event ->
-                AppLog.i("PlayerKey", "code=$keyCode action=${event.action} repeat=${event.repeatCount} long=${event.isLongPress} dt=${event.eventTime - centerDownTime}")
+                // 只记首次按下(ACTION_DOWN + repeatCount=0):长按会以几十 Hz 重复
+                // 派发 ACTION_DOWN,全记会在日志里刷屏,淹没真正的现场。
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    AppLog.i("PlayerKey", "code=$keyCode action=${event.action} repeat=${event.repeatCount} long=${event.isLongPress} dt=${event.eventTime - centerDownTime}")
+                }
                 if (event.action == KeyEvent.ACTION_UP) {
                     if (!isCenterKey(keyCode)) return@setOnKeyListener false
                     val handledByLong = centerConsumedByLong
@@ -331,11 +336,26 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
                         showOverlay()
                         true
                     }
-                    // 部分遥控器/机型若仍能派发 MENU/INFO,则作为长按 OK 之外的备用入口。
+                    // MENU/INFO 键:多清晰度视频弹清晰度选择;只有一种清晰度时
+                    // 保持原行为(旋转画面),清晰度弹窗没有单选项的价值。
                     KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO -> {
                         if (event.repeatCount == 0) {
-                            togglePlayerOrientation()
-                            showOverlay()
+                            val qualities = viewModel.state.value.availableQualities
+                            if (qualities.size > 1) {
+                                val currentQn = viewModel.state.value.playing?.qn ?: 0
+                                val currentIndex = qualities.indexOfFirst { it.qn == currentQn }
+                                    .takeIf { it >= 0 }
+                                showOptionListDialog(
+                                    title = "清晰度",
+                                    options = qualities.map { it.label },
+                                    currentIndex = currentIndex,
+                                ) { index ->
+                                    qualities.getOrNull(index)?.let { viewModel.selectPlaybackQuality(it.qn) }
+                                }
+                            } else {
+                                togglePlayerOrientation()
+                                showOverlay()
+                            }
                         }
                         true
                     }
@@ -549,7 +569,12 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
         val progressTick = object : Runnable {
             override fun run() {
                 if (overlay.parent == null) return
-                updateProgress()
+                // overlay 淡出(alpha=0,隐藏)后不再刷新进度控件:状态变化已由
+                // Player.Listener(onPlaybackStateChanged 等)驱动,这里只负责
+                // 进度条平滑推进。避免低端盒子整个播放过程每 300ms 空转改 View。
+                if (overlay.alpha > 0.5f) {
+                    updateProgress()
+                }
                 overlay.postDelayed(this, 300)
             }
         }

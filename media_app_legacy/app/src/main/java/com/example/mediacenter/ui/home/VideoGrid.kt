@@ -41,6 +41,10 @@ import com.example.mediacenter.ui.theme.HomeFocusTarget
 import com.example.mediacenter.ui.views.ThumbnailImageView
 import com.example.mediacenter.ui.views.ChevronDownView
 
+// RecyclerView 视图缓存大小:滚出屏幕的卡片先留缓存(不清 bitmap)快速滚回即显;
+// 太大浪费内存(老盒子低堆),太小失去缓存意义。6 张 ≈ 2 行卡片。
+private const val VIDEO_VIEW_CACHE_SIZE = 6
+
     internal fun MainActivity.videoGrid(
         items: List<VideoSummary>,
         canLoadMore: Boolean,
@@ -80,7 +84,10 @@ import com.example.mediacenter.ui.views.ChevronDownView
             clipChildren = true
             setPadding(0, dp(16), 0, dp(32))
             itemAnimator = null
-            setItemViewCacheSize(0)
+            // 保留少量视图缓存:滚出屏幕的卡片先留在缓存里(不清 bitmap),
+            // 快速滚回时立即显示,不用重新解码;超出的视图才走 onViewRecycled 释放
+            // 资源。此前 0 缓存 + detach 即清图,快速滚动反复解码导致占位图闪烁。
+            setItemViewCacheSize(VIDEO_VIEW_CACHE_SIZE)
             addOnScrollListener(object : RecyclerView.OnScrollListener() {
                 override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                     val lastVisible = layoutManager.findLastVisibleItemPosition()
@@ -273,7 +280,9 @@ import com.example.mediacenter.ui.views.ChevronDownView
 
         override fun onViewDetachedFromWindow(holder: RecyclerView.ViewHolder) {
             if (holder is VideoHolder) {
-                holder.cancelVisibleThumbnail()
+                // 只取消未完成的加载,不清 bitmap:视图还在 cache 里,保留位图
+                // 让快速滚回立即显示;真正的资源释放在 onViewRecycled(缓存淘汰时)。
+                holder.cancelPendingThumbnailLoad()
             }
             super.onViewDetachedFromWindow(holder)
         }
@@ -442,8 +451,14 @@ import com.example.mediacenter.ui.views.ChevronDownView
                 )
             }
 
-            fun cancelVisibleThumbnail() {
+            /** 只取消未完成的加载,保留已解码位图(滚动优化:滚回立即显示)。 */
+            fun cancelPendingThumbnailLoad() {
                 image.cancelThumbnailLoad()
+            }
+
+            /** 完整释放:取消加载 + 清位图 + 显示占位(视图被回收/重绑时调用)。 */
+            fun cancelVisibleThumbnail() {
+                cancelPendingThumbnailLoad()
                 image.setThumbnailBitmap(null)
                 setPlaceholderVisible(initials, true)
             }

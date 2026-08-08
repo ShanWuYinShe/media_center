@@ -111,7 +111,10 @@ internal fun MainActivity.loadBackdropImage(
             try {
                 val bitmap = ThumbnailFetchSemaphore.withPermit {
                     val bytes = fetchThumbnailBytesWithRetry(imageUrl, headers)
-                    withContext(Dispatchers.Default) {
+                    // 解码放 IO 池:BitmapFactory 是 native 活,不占 Default 池——
+                    // 低核老盒子上 Default 与 MediaApi 的 JSON 解码共享,图片解码
+                    // 会饿死网络响应解析,表现为列表滚动时请求超时。
+                    withContext(Dispatchers.IO) {
                         // 固定极小目标像素(不随密度),放大后形成柔和模糊。
                         decodeSampledBitmap(bytes, 48, 48)
                     }
@@ -150,7 +153,10 @@ internal suspend fun MainActivity.fetchBitmap(
     ): Bitmap? {
         return try {
             val bytes = fetchThumbnailBytesWithRetry(url, headers)
-            withContext(Dispatchers.Default) {
+            // 解码放 IO 池:BitmapFactory 是 native 活,不占 Default 池——
+            // 低核老盒子上 Default 与 MediaApi 的 JSON 解码共享,图片解码
+            // 会饿死网络响应解析,表现为列表滚动时请求超时。
+            withContext(Dispatchers.IO) {
                 decodeSampledBitmap(bytes, maxWidthPx, maxHeightPx)
             }
         } catch (error: CancellationException) {

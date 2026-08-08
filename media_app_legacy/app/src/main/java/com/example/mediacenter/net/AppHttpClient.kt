@@ -58,6 +58,15 @@ object AppHttpClient {
 
     @Volatile private var httpsDefaultInstalled = false
 
+    // ── 诊断状态(供关于/诊断弹窗展示,排查老盒子连接问题)──
+    /** 当前生效的 TLS 引擎路径:Conscrypt / 平台回退 / 默认。 */
+    @Volatile var tlsPathLabel: String = "未初始化"
+        private set
+
+    /** 证书校验 soft-fail 累计次数:>0 说明存在"校验失败但接受连接"的连接。 */
+    @Volatile var softFailCount: Int = 0
+        private set
+
     /**
      * 早期初始化入口:在 Application.onCreate 调用,预热 TLS(加载 Conscrypt 与
      * 内置根证书),确保任何网络请求之前 TLS 已就绪。
@@ -131,6 +140,7 @@ object AppHttpClient {
         synchronized(tlsLock) {
             if (tls != null) return
             tls = buildPreferredTls() ?: buildLegacyTls()
+            if (tls == null) tlsPathLabel = "默认(构建失败)"
         }
     }
 
@@ -159,6 +169,7 @@ object AppHttpClient {
             val trustManager = SoftFailTrustManager(buildTrustManagerWithBundledRoots())
             val sslContext = SSLContext.getInstance("TLS", "Conscrypt")
             sslContext.init(null, arrayOf<TrustManager>(trustManager), null)
+            tlsPathLabel = "Conscrypt"
             AppLog.i(
                 "Http",
                 "TLS: Conscrypt + system roots + bundled GTS Root R4 (validation on, soft-fail on error)",
@@ -242,6 +253,7 @@ object AppHttpClient {
         override fun getAcceptedIssuers(): Array<X509Certificate> = delegate.acceptedIssuers
 
         private fun acceptWithLog(kind: String, error: CertificateException) {
+            softFailCount++
             AppLog.w(
                 "Http",
                 "cert validation failed ($kind), soft-fail accepting connection: ${error.message}",
@@ -303,6 +315,7 @@ object AppHttpClient {
         val sslContext = SSLContext.getInstance("TLS").apply {
             init(null, arrayOf<TrustManager>(trustManager), null)
         }
+        tlsPathLabel = "平台回退"
         AppLog.w("Http", "TLS: platform fallback active (trust-all, legacy patched stack)")
         Tls(
             ModernTlsSocketFactory(sslContext.socketFactory),
