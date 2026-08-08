@@ -17,4 +17,10 @@
 
     <!-- 启动图标用满屏方形是本项目设计选择(TV 桌面适配)。 -->
     <issue id="IconLauncherShape" severity="ignore" />
+
+    <!-- Conscrypt 2.5.2 的预编译 libconscrypt_jni.so 未做 16KB 页对齐(Android 15+
+         要求)。该 .so 是第三方预编译产物,构建期无法重排 ELF 段;且本变体目标是
+         4.4.2 老盒子(armv7,4KB 页)。即便在 Android 15+ arm64 设备上加载失败,
+         AppHttpClient 也会自动回退平台 TLS 路径,不影响连通性,故关闭提示。 -->
+    <issue id="Aligned16KB" severity="ignore" />
 </lint>
