@@ -1,0 +1,180 @@
+package com.example.mediacenter.ui.player
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.mediacenter.data.PlaybackResult
+import com.example.mediacenter.ui.theme.AppleBlue
+import com.example.mediacenter.ui.theme.CardGray
+import com.example.mediacenter.ui.theme.TextPrimary
+import com.example.mediacenter.ui.theme.TextSecondary
+import com.example.mediacenter.ui.theme.UiIcons
+import com.example.mediacenter.util.formatDuration
+
+@Composable
+internal fun ControlsOverlay(
+    videoTitle: String,
+    playbackResult: PlaybackResult,
+    isPlaying: Boolean,
+    positionMs: Long,
+    durationMs: Long,
+    controlsFocus: FocusRequester,
+    onTogglePlay: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onSelectQuality: (Int) -> Unit,
+    onSelectPage: (Int) -> Unit,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val currentQn = playbackResult.options.firstOrNull()?.qn
+    Box(modifier = modifier.background(Color.Black.copy(alpha = 0.55f))) {
+        // 顶部:标题 + 返回
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.6f))
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = videoTitle,
+                color = TextPrimary,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.requiredSize(48.dp),
+            ) {
+                Icon(UiIcons.ArrowBack, contentDescription = "返回", tint = TextPrimary)
+            }
+        }
+        // 底部:进度 + 播放控制 + 分P + 清晰度
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.65f))
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        ) {
+            // 拖动中的临时进度:拖动期间只更新本地值,松手/按键结束时才真正
+            // seek——避免飞鼠/触屏拖动产生每帧连续 seek 请求。
+            var dragPositionMs by remember { mutableStateOf<Float?>(null) }
+            val sliderMax = durationMs.toFloat().coerceAtLeast(1f)
+            // 焦点在 Slider 上时,左右键 = 快进/快退 10s(长按连续触发)
+            Slider(
+                value = (dragPositionMs ?: positionMs.toFloat()).coerceIn(0f, sliderMax),
+                onValueChange = { value ->
+                    dragPositionMs = value
+                },
+                onValueChangeFinished = {
+                    dragPositionMs?.let { onSeek(it.toLong()) }
+                    dragPositionMs = null
+                },
+                valueRange = 0f..sliderMax,
+                modifier = Modifier
+                    .weight(1f)
+                    .requiredHeight(48.dp)
+                    .onPreviewKeyEvent { event ->
+                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        if (event.key != Key.DirectionLeft && event.key != Key.DirectionRight) {
+                            return@onPreviewKeyEvent false
+                        }
+                        val delta = if (event.key == Key.DirectionLeft) -SEEK_STEP_MS else SEEK_STEP_MS
+                        onSeek((positionMs + delta).coerceIn(0L, durationMs.coerceAtLeast(0L)))
+                        true
+                    },
+                colors = SliderDefaults.colors(
+                    thumbColor = AppleBlue,
+                    activeTrackColor = AppleBlue,
+                    inactiveTrackColor = CardGray,
+                ),
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                text = "${formatDuration(positionMs)} / ${formatDuration(durationMs)}",
+                color = TextSecondary,
+                fontSize = 14.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                IconButton(
+                    onClick = onTogglePlay,
+                    modifier = Modifier.requiredSize(48.dp).focusRequester(controlsFocus),
+                ) {
+                    Icon(
+                        imageVector = if (isPlaying) UiIcons.Pause else UiIcons.PlayArrow,
+                        contentDescription = if (isPlaying) "暂停" else "播放",
+                        tint = TextPrimary,
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                if (playbackResult.pages.totalPages > 1) {
+                    Text("分P", color = TextSecondary, fontSize = 14.sp)
+                    playbackResult.pages.pageTitles.forEachIndexed { index, pageTitle ->
+                        SelectChip(
+                            label = if (pageTitle.isBlank()) "${index + 1}P" else "${index + 1}P ${pageTitle}",
+                            selected = index == playbackResult.pages.currentPage,
+                            onClick = { onSelectPage(index) },
+                        )
+                    }
+                }
+            }
+            if (playbackResult.availableQualities.size > 1) {
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("清晰度", color = TextSecondary, fontSize = 14.sp)
+                    playbackResult.availableQualities.forEach { quality ->
+                        SelectChip(
+                            label = quality.label,
+                            selected = quality.qn == currentQn,
+                            onClick = { onSelectQuality(quality.qn) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
