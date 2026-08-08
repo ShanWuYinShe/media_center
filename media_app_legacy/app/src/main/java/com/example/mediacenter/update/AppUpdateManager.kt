@@ -134,7 +134,7 @@ class AppUpdateManager(
         }
     }
 
-    fun launchInstaller(apk: File): InstallLaunchResult {
+    suspend fun launchInstaller(apk: File): InstallLaunchResult {
         // 第1优先：PackageInstaller API（API 21+），session-based 安装。
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             val result = tryInstallWithSession(apk)
@@ -150,19 +150,23 @@ class AppUpdateManager(
     }
 
     @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
-    private fun tryInstallWithSession(apk: File): InstallLaunchResult {
+    private suspend fun tryInstallWithSession(apk: File): InstallLaunchResult {
         return try {
             val packageInstaller = context.packageManager.packageInstaller
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
             val sessionId = packageInstaller.createSession(params)
             val session = packageInstaller.openSession(sessionId)
 
-            FileInputStream(apk).use { input ->
-                val size = apk.length()
-                val out = session.openWrite("base.apk", 0, size)
-                input.copyTo(out)
-                session.fsync(out)
-                out.close()
+            // APK 复制到 PackageInstaller session 是磁盘 IO，必须在后台线程执行，
+            // 否则老盒子上主线程卡顿数秒甚至 ANR。
+            withContext(Dispatchers.IO) {
+                FileInputStream(apk).use { input ->
+                    val size = apk.length()
+                    val out = session.openWrite("base.apk", 0, size)
+                    input.copyTo(out)
+                    session.fsync(out)
+                    out.close()
+                }
             }
 
             val intent = Intent(installAction).apply {

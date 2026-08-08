@@ -13,8 +13,10 @@ import android.view.View
 import android.view.Window
 import android.widget.LinearLayout
 import androidx.core.graphics.ColorUtils
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import kotlinx.coroutines.launch
 import com.example.mediacenter.BuildConfig
 import com.example.mediacenter.net.AppHttpClient
 import java.io.File
@@ -343,7 +345,11 @@ internal fun MainActivity.promptInstallUpdate(result: AppUpdateResult.ReadyToIns
             }
             val install = primaryPill("安装更新", heightDp = 48, horizontalPaddingDp = 28) {
                 dismiss()
-                handleInstallLaunch(appUpdateManager.launchInstaller(result.apk), result.apk)
+                // 安装包含 APK 磁盘复制（PackageInstaller session 写入），
+                // 放到 IO 线程执行，避免主线程卡顿。
+                lifecycleScope.launch {
+                    handleInstallLaunch(appUpdateManager.launchInstaller(result.apk), result.apk)
+                }
             }
             val later = pill("稍后", selected = false, heightDp = 48, horizontalPaddingDp = 24) {
                 pendingUpdateApk = null

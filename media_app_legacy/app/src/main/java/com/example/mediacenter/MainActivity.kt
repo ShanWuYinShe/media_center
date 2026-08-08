@@ -205,7 +205,9 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         val apk = pendingUpdateApk ?: return
-        handleInstallLaunch(appUpdateManager.launchInstaller(apk), apk)
+        lifecycleScope.launch {
+            handleInstallLaunch(appUpdateManager.launchInstaller(apk), apk)
+        }
     }
 
     override fun onStop() {

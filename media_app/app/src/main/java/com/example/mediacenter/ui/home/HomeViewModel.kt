@@ -9,6 +9,7 @@ import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.ProviderInfo
 import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.ui.update.UpdateDialogState
 import com.example.mediacenter.update.AppUpdateManager
 import com.example.mediacenter.update.InstallLaunchResult
@@ -152,7 +153,11 @@ class HomeViewModel(
                 is UpdateCheckResult.UpdateAvailable -> {
                     _updateState.value = UpdateDialogState.Available(result.update)
                 }
-                else -> Unit
+                is UpdateCheckResult.Failed -> {
+                    // 检查失败不打扰用户（离线/服务器抖动常见），但必须留日志便于排查。
+                    AppLog.w("Update", "update check failed: ${result.message}")
+                }
+                UpdateCheckResult.NoUpdate -> Unit
             }
         }
     }
