@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -60,6 +61,47 @@ func TestCatalogListMembersFilters(t *testing.T) {
 	if _, err := c.ListMembers("movies", "bogus", 0, 0); err == nil {
 		t.Fatalf("expected error for invalid status filter")
 	}
+}
+
+func TestCatalogListMembersOffset(t *testing.T) {
+	c := openTestCatalog(t)
+	// score 从 99 递减到 95，按 score DESC 排序后顺序为 BV11, BV12, BV13, BV14, BV15。
+	for i := 1; i <= 5; i++ {
+		seedTestMember(t, c, "movies", "bilibili", fmt.Sprintf("BV1%d", i), fmt.Sprintf("V%d", i), 100-i)
+	}
+
+	page1, err := c.ListMembers("movies", "pending", 2, 0)
+	if err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if len(page1) != 2 || page1[0].NativeID != "BV11" || page1[1].NativeID != "BV12" {
+		t.Fatalf("page1 = %v", pageIDs(page1))
+	}
+
+	page2, err := c.ListMembers("movies", "pending", 2, 2)
+	if err != nil {
+		t.Fatalf("page2: %v", err)
+	}
+	if len(page2) != 2 || page2[0].NativeID != "BV13" || page2[1].NativeID != "BV14" {
+		t.Fatalf("page2 = %v", pageIDs(page2))
+	}
+
+	// 越界 offset 返回空页，不报错。
+	empty, err := c.ListMembers("movies", "pending", 2, 10)
+	if err != nil {
+		t.Fatalf("empty page: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("expected empty page, got %v", pageIDs(empty))
+	}
+}
+
+func pageIDs(items []PendingReviewItem) []string {
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.NativeID)
+	}
+	return out
 }
 
 func TestCatalogReviewMember(t *testing.T) {
