@@ -192,6 +192,8 @@ internal fun PlayerContent(
 
     // 进度轮询;播放中每 5 秒持久化一次,崩溃/杀进程也能恢复。
     // 暂停时停止轮询(每帧读 currentPosition + 写状态是无效开销)，恢复播放即重启本 effect。
+    // 覆盖层隐藏时跳过 positionMs/durationMs 写入:这两个状态只被覆盖层消费,
+    // 隐藏时无读者,写了也是无效开销(持久化照常,崩溃恢复不依赖 UI 可见)。
     LaunchedEffect(isPlaying) {
         if (!isPlaying) {
             // 暂停瞬间刷一次位置 + 时长用于覆盖层显示，之后不再轮询。
@@ -201,11 +203,15 @@ internal fun PlayerContent(
         }
         var tick = 0
         while (true) {
-            positionMs = controller?.currentPosition?.coerceAtLeast(0L) ?: 0L
-            durationMs = controller?.duration?.coerceAtLeast(0L) ?: 0L
+            val pos = controller?.currentPosition?.coerceAtLeast(0L) ?: 0L
+            val dur = controller?.duration?.coerceAtLeast(0L) ?: 0L
+            if (showControls) {
+                positionMs = pos
+                durationMs = dur
+            }
             tick++
             if (tick % 10 == 0) {
-                PlaybackPositionStore.save(context, videoId, positionMs)
+                PlaybackPositionStore.save(context, videoId, pos)
             }
             delay(500)
         }

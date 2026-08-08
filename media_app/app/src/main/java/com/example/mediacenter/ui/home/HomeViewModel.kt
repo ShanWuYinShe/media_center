@@ -56,6 +56,16 @@ class HomeViewModel(
     // 避免慢的旧请求后完成覆盖新状态(旧 provider 内容配新 currentProvider)。
     private var loadJob: Job? = null
 
+    // 分类第一页内存缓存:首页重进/重试不重复拉取(见 loadHome 注释)。
+    // 带 provider 标记:切换 provider 后自然失效;只缓存成功结果。
+    private data class FirstPageCacheEntry(
+        val provider: String,
+        val items: List<VideoSummary>,
+        val timestamp: Long,
+    )
+
+    private val firstPageCache = mutableMapOf<String, FirstPageCacheEntry>()
+
     init {
         loadHome()
         checkUpdate()
@@ -76,12 +86,32 @@ class HomeViewModel(
                 // 用信号量限制并发(弱网/老设备上打满连接池会互相拖慢);
                 // 单个分类失败(超时/5xx)不拖垮整个首页:该分类显示失败文案,
                 // 其余正常展示,下拉/重进会整体刷新。
+                //
+                // 分类第一页内存缓存(TTL 10 分钟):首页每次加载(重进/断网恢复/
+                // 手动重试)都全量重拉所有分类,弱网盒子上重复开销大且慢;缓存命中
+                // 直接秒开,超时/切 provider 才真正请求。缓存只存成功结果。
                 val results = coroutineScope {
                     val semaphore = Semaphore(HOME_CATEGORY_CONCURRENCY)
                     cats.map { cat ->
                         async {
                             semaphore.withPermit {
-                                cat.id to runCatching { repository.catalogPage(cat.id).items.orEmpty() }
+                                val provider = repository.currentProvider
+                                val cached = firstPageCache[cat.id]
+                                if (cached != null && cached.provider == provider &&
+                                    System.currentTimeMillis() - cached.timestamp < FirstPageCacheTtlMs
+                                ) {
+                                    cat.id to Result.success(cached.items)
+                                } else {
+                                    val result = runCatching { repository.catalogPage(cat.id).items.orEmpty() }
+                                    result.onSuccess {
+                                        firstPageCache[cat.id] = FirstPageCacheEntry(provider, it, System.currentTimeMillis())
+                                        // 缓存有上限:超限淘汰最早条目(分类数量有限,防御性兜底)
+                                        while (firstPageCache.size > MaxFirstPageCacheEntries) {
+                                            firstPageCache.remove(firstPageCache.keys.first())
+                                        }
+                                    }
+                                    cat.id to result
+                                }
                             }
                         }
                     }.awaitAll()
@@ -175,6 +205,10 @@ class HomeViewModel(
         // 首页并行拉取分类第一页的并发上限:弱网/老设备上超过该值的并发
         // 只会互相抢占连接与带宽,整体更慢。
         const val HOME_CATEGORY_CONCURRENCY = 4
+        // 分类第一页缓存有效期:10 分钟内重进首页直接用缓存,不重复请求。
+        const val FirstPageCacheTtlMs = 10 * 60 * 1000L
+        // 缓存条目上限(防御性兜底,正常分类数量远小于此)。
+        const val MaxFirstPageCacheEntries = 64
     }
 }
 
