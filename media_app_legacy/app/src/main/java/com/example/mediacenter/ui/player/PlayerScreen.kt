@@ -455,6 +455,13 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
             gravity = Gravity.CENTER_VERTICAL
             addView(statusDot, LinearLayout.LayoutParams(dp(9), dp(9)).withEndMargin(dp(10)))
             addView(statusText, linearWrap())
+            // 多清晰度时提示 MENU 键可切换(新交互的发现性提示)。
+            if (state.availableQualities.size > 1) {
+                addView(
+                    label("MENU 键切换清晰度", 13f, Colors.TEXT_TERTIARY, maxLines = 1),
+                    LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(16)),
+                )
+            }
         }
         top.addView(statusRow, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(14)))
         overlay.addView(top, FrameLayout.LayoutParams(match(), wrap(), Gravity.TOP))

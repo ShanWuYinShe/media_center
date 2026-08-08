@@ -10,6 +10,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.graphics.drawable.GradientDrawable
 import com.example.mediacenter.MainActivity
+import com.example.mediacenter.data.PlaybackOption
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.setContent
 import com.example.mediacenter.ui.showAllPagesDialog
@@ -44,6 +45,7 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
         if (selectedPlaybackVideoId != details.id) {
             selectedPlaybackVideoId = details.id
             selectedPlaybackOptionId = null
+            selectedQualityQn = null
             detailFocusTarget = DetailFocusTarget.Play
         }
         val screen = FrameLayout(this).apply { background = appBackground() }
@@ -198,11 +200,25 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
             detailErrorRetry = { viewModel.play(option) }
             val currentDuration = state.currentPages?.currentPageDurationSeconds ?: details.durationSeconds
             val durationText = currentDuration?.let { formatDurationSeconds(it) }
+            // 用户选了清晰度 chip:用该 qn 合成播放 option。play() 发现 qn 与当前
+            // 流不同时会按新 qn 重新解析 playurl;相同则直接用已缓存流,不重复请求。
+            val selectedQuality = state.availableQualities.firstOrNull { it.qn == selectedQualityQn }
+            val playOption = if (selectedQuality != null) {
+                PlaybackOption(
+                    id = "quality-${selectedQuality.qn}",
+                    kind = "vod",
+                    label = selectedQuality.label,
+                    url = "",
+                    qn = selectedQuality.qn,
+                )
+            } else {
+                option
+            }
             val playButton = primaryPill(
                 text = buildString {
                     append("播放")
                     durationText?.let { append(" $it") }
-                    option.label.takeIf { it.isNotBlank() }?.let { append(" · $it") }
+                    playOption.label.takeIf { it.isNotBlank() }?.let { append(" · $it") }
                 },
                 heightDp = playH,
                 horizontalPaddingDp = playHPad,
@@ -211,12 +227,57 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                 onFocusChange = { focused ->
                     if (focused) detailFocusTarget = DetailFocusTarget.Play
                 },
-                onClick = { viewModel.play(option) },
+                onClick = { viewModel.play(playOption) },
             )
             registerDetailFocus(DetailFocusTarget.Play, playButton)
             info.addView(playButton, LinearLayout.LayoutParams(wrap(), dp(playH)).withTopMargin(dp(gapPlay)))
 
-            if (options.size > 1) {
+            // 清晰度 chips:优先用 playurl 返回的可用清晰度列表(availableQualities,
+            // 之前恒返回单选项导致这里永不渲染);兼容非 B 站 provider 的多选项
+            // playbackOptions(此时 availableQualities 为空)。
+            val qualityChips = mutableListOf<View>()
+            val qualities = state.availableQualities
+            if (qualities.size > 1) {
+                qualities.take(5).forEach { quality ->
+                    val chip = pill(
+                        text = quality.label.ifBlank { "播放" },
+                        selected = quality.qn == selectedQualityQn,
+                        heightDp = chipH,
+                        horizontalPaddingDp = chipHPad,
+                        onFocusChange = { focused ->
+                            if (focused) detailFocusTarget = DetailFocusTarget.Option("quality-${quality.qn}")
+                        },
+                        onClick = {
+                            selectedQualityQn = quality.qn
+                            detailFocusTarget = DetailFocusTarget.Option("quality-${quality.qn}")
+                            invalidateUi()
+                        },
+                    )
+                    registerDetailFocus(DetailFocusTarget.Option("quality-${quality.qn}"), chip)
+                    qualityChips.add(chip)
+                }
+            } else if (options.size > 1) {
+                options.take(5).forEach { optionItem ->
+                    val chip = pill(
+                        text = optionItem.label.ifBlank { "播放" },
+                        selected = optionItem.id == selectedOption.id,
+                        heightDp = chipH,
+                        horizontalPaddingDp = chipHPad,
+                        onFocusChange = { focused ->
+                            if (focused) detailFocusTarget = DetailFocusTarget.Option(optionItem.id)
+                        },
+                        onClick = {
+                            selectedPlaybackOptionId = optionItem.id
+                            selectedQualityQn = null
+                            detailFocusTarget = DetailFocusTarget.Option(optionItem.id)
+                            invalidateUi()
+                        },
+                    )
+                    registerDetailFocus(DetailFocusTarget.Option(optionItem.id), chip)
+                    qualityChips.add(chip)
+                }
+            }
+            if (qualityChips.isNotEmpty()) {
                 info.addView(label("清晰度", metaSize, Colors.TEXT_TERTIARY, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapQuality)))
                 val optionRow = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
@@ -224,22 +285,7 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                     clipToPadding = false
                     setPadding(0, dp(gapDisclosure), 0, dp(4))
                 }
-                options.take(5).forEach { option ->
-                    val chip = pill(
-                        text = option.label.ifBlank { "播放" },
-                        selected = option.id == selectedOption.id,
-                        heightDp = chipH,
-                        horizontalPaddingDp = chipHPad,
-                        onFocusChange = { focused ->
-                            if (focused) detailFocusTarget = DetailFocusTarget.Option(option.id)
-                        },
-                        onClick = {
-                            selectedPlaybackOptionId = option.id
-                            detailFocusTarget = DetailFocusTarget.Option(option.id)
-                            invalidateUi()
-                        },
-                    )
-                    registerDetailFocus(DetailFocusTarget.Option(option.id), chip)
+                qualityChips.forEach { chip ->
                     optionRow.addView(
                         chip,
                         LinearLayout.LayoutParams(wrap(), dp(chipH)).withEndMargin(dp(14)),

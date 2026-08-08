@@ -92,6 +92,8 @@ class MainActivity : ComponentActivity() {
     internal var homeVideoAdapter: VideoGridAdapter? = null
     internal var savedGridState: Parcelable? = null
     internal var selectedPlaybackOptionId: String? = null
+    // 详情页清晰度 chips 选中的 qn(availableQualities 驱动;null = 未选,用默认清晰度)
+    internal var selectedQualityQn: Int? = null
     internal var selectedPlaybackVideoId: String? = null
     internal var detailFocusTarget: DetailFocusTarget = DetailFocusTarget.Play
     internal val playbackLoadErrorHandlingPolicy = CappedLoadErrorHandlingPolicy(MaxPlaybackRetries)
