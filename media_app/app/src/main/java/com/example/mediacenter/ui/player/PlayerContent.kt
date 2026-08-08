@@ -43,6 +43,7 @@ import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.util.NetworkRestoreEffect
 import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -80,6 +81,16 @@ internal fun PlayerContent(
     var controller by remember { mutableStateOf<MediaController?>(null) }
     var controllerFailed by remember { mutableStateOf(false) }
     var connectAttempts by remember { mutableIntStateOf(0) }
+    // MediaController 释放守卫:同一实例可能被"协程取消时 future 已完成"、
+    // "连接完成但页面已退出(onReady 未消费)"与"DisposableEffect onDispose"
+    // 三条路径各释放一次(MediaController.release 非幂等,重复释放有风险)。
+    // releaseOnce 保证每代 controller 恰好释放一次;新 controller 接管时重新武装。
+    val releaseGuard = remember { AtomicBoolean(false) }
+    fun releaseOnce(c: MediaController?) {
+        if (c != null && releaseGuard.compareAndSet(false, true)) {
+            c.release()
+        }
+    }
     LaunchedEffect(connectAttempts) {
         if (connectAttempts > 0) {
             delay(CONTROLLER_RETRY_DELAY_MS)
@@ -94,14 +105,14 @@ internal fun PlayerContent(
                         continuation.resume(mediaController)
                     } else {
                         // 页面已退出(协程取消),连接结果无人消费,立即释放避免泄漏
-                        mediaController?.release()
+                        releaseOnce(mediaController)
                     }
                     Unit
                 }
                 continuation.invokeOnCancellation {
                     // 协程取消时若连接已完成,直接释放
                     if (future.isDone) {
-                        runCatching { future.get().release() }
+                        runCatching { releaseOnce(future.get()) }
                     }
                 }
                 future.addListener(onReady, Executor { command -> command.run() })
@@ -110,6 +121,8 @@ internal fun PlayerContent(
             null
         }
         if (connected != null) {
+            // 新 controller 接管:重新武装释放守卫,旧 controller 已在 onDispose 释放
+            releaseGuard.set(false)
             controller = connected
         } else if (connectAttempts < MAX_CONTROLLER_ATTEMPTS) {
             // 未达上限:递增触发 LaunchedEffect 重启,进入下一轮重试
@@ -147,7 +160,7 @@ internal fun PlayerContent(
             // 退出播放页前保存位置,保证"播放中途返回"也能续播
             PlaybackPositionStore.save(context, videoId, controller?.currentPosition?.coerceAtLeast(0L) ?: 0L)
             controller?.removeListener(playerListener)
-            controller?.release()
+            releaseOnce(controller)
             // 本 App 无后台播放需求:页面退出即停止播放服务
             context.stopService(Intent(context, PlaybackService::class.java))
         }

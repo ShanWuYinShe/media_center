@@ -23,6 +23,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 data class HomeUiState(
     val categories: List<ContentCategory> = emptyList(),
@@ -71,12 +73,16 @@ class HomeViewModel(
                 )
                 val cats = repository.categories()
                 // 并行拉取各分类第一页,避免分类多时首页加载时间线性增长。
+                // 用信号量限制并发(弱网/老设备上打满连接池会互相拖慢);
                 // 单个分类失败(超时/5xx)不拖垮整个首页:该分类显示失败文案,
                 // 其余正常展示,下拉/重进会整体刷新。
                 val results = coroutineScope {
+                    val semaphore = Semaphore(HOME_CATEGORY_CONCURRENCY)
                     cats.map { cat ->
                         async {
-                            cat.id to runCatching { repository.catalogPage(cat.id).items.orEmpty() }
+                            semaphore.withPermit {
+                                cat.id to runCatching { repository.catalogPage(cat.id).items.orEmpty() }
+                            }
                         }
                     }.awaitAll()
                 }
@@ -163,6 +169,12 @@ class HomeViewModel(
         _updateState.value = null
         updateDownloading = false
         updateChecked = false
+    }
+
+    private companion object {
+        // 首页并行拉取分类第一页的并发上限:弱网/老设备上超过该值的并发
+        // 只会互相抢占连接与带宽,整体更慢。
+        const val HOME_CATEGORY_CONCURRENCY = 4
     }
 }
 

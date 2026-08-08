@@ -261,7 +261,7 @@ class BilibiliApi(
         // 用 suspendCancellableCoroutine 包裹:协程取消(切换清晰度/分P/退出播放页)
         // 时立即 call.cancel(),避免阻塞式 execute() 继续占用 IO 线程与连接。
         return withContext(Dispatchers.IO) {
-            suspendCancellableCoroutine { continuation ->
+            val body = suspendCancellableCoroutine<String> { continuation ->
                 val call = client.newCall(request)
                 continuation.invokeOnCancellation { call.cancel() }
                 call.enqueue(object : okhttp3.Callback {
@@ -274,12 +274,14 @@ class BilibiliApi(
                     override fun onResponse(call: Call, response: Response) {
                         try {
                             response.use {
-                                val body = it.body.string()
+                                val text = it.body.string()
                                 if (!it.isSuccessful) {
-                                    throw BilibiliApiException("B 站 API ${it.code}: ${body.take(200)}")
+                                    throw BilibiliApiException("B 站 API ${it.code}: ${text.take(200)}")
                                 }
                                 if (continuation.isActive) {
-                                    continuation.resume(json.decodeFromString<T>(body))
+                                    // 只把原始 body 交给协程,解码放到下面 Default 执行,
+                                    // 避免 JSON 解析阻塞 OkHttp 回调线程池。
+                                    continuation.resume(text)
                                 }
                             }
                         } catch (error: Throwable) {
@@ -290,6 +292,8 @@ class BilibiliApi(
                     }
                 })
             }
+            // JSON 解码是 CPU 活,放 Default(与 MediaApi 一致),不占 OkHttp 线程。
+            withContext(Dispatchers.Default) { json.decodeFromString<T>(body) }
         }
     }
 

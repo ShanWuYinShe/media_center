@@ -56,6 +56,8 @@ class CategoryVideosViewModel(
                 isLoadingMore = false,
                 error = null,
                 loadMoreFailed = false,
+                // 必须重置:同一 VM 换分类时,旧的 noMore=true 会永久挡住 loadMore
+                noMore = false,
             )
         }
         viewModelScope.launch {

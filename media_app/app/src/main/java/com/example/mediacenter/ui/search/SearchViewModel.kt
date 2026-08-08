@@ -8,6 +8,8 @@ import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.log.AppLog
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class SearchUiState(
     val query: String = "",
@@ -55,6 +58,9 @@ class SearchViewModel(
     private var catalogComplete = false
     // 补全失败标记:下次搜索前重试,避免本次会话搜索结果永久缺页。
     private var completePending = false
+    // 后台补全 job 引用:provider 切换时取消旧补全,防止旧源数据混入新源缓存
+    // (refreshCatalogFast 会 clear+putAll,旧补全晚到会覆盖新源内容)。
+    private var completeJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -80,6 +86,9 @@ class SearchViewModel(
     // 快速加载:各分类前 FAST_PAGES 页(秒回，足够覆盖首搜常见结果)。
     private suspend fun refreshCatalogFast() {
         try {
+            // 新目录接管前取消旧补全:否则旧 provider 的后台补全晚到会把
+            // 旧源数据混进新缓存(completeCatalog 合并处另有 provider 校验双保险)。
+            completeJob?.cancel()
             repository.refreshCredentials()
             val cats = repository.categories()
             _uiState.value = _uiState.value.copy(categories = cats)
@@ -103,7 +112,9 @@ class SearchViewModel(
 
     // 后台补全剩余页(FAST_PAGES+1..MAX)，让搜索结果更全。失败标记 pending,
     // 下次 performSearch 前重试;中断/取消直接向上传播。
-    private suspend fun completeCatalog() {
+    // provider 参数在启动时捕获:合并前校验目录仍属于该 provider,
+    // 防止"切 provider 后旧补全晚到"把旧源数据混入新源缓存(竞态修复)。
+    private suspend fun completeCatalog(provider: String) {
         val cats = _uiState.value.categories
         if (cats.isEmpty()) return
         try {
@@ -111,6 +122,11 @@ class SearchViewModel(
                 cats.map { cat ->
                     async { cat.id to loadCategoryPages(cat.id, FAST_PAGES + 1, MAX_PAGES_PER_CATEGORY) }
                 }.awaitAll().toMap()
+            }
+            // 合并前校验:provider 已切换则丢弃本次结果(数据已作废)。
+            if (cachedProvider != provider) {
+                AppLog.w("Search", "catalog complete dropped: provider switched (${cachedProvider} != $provider)")
+                return
             }
             // 合并:已有快速页 + 新增页(去重 by id)
             for ((catId, more) in extra) {
@@ -155,7 +171,8 @@ class SearchViewModel(
         // 上次补全失败:在本次搜索前重新触发,避免搜索结果永久缺页。
         if (catalogReady && completePending && !catalogComplete) {
             completePending = false
-            viewModelScope.launch { completeCatalog() }
+            completeJob?.cancel()
+            completeJob = viewModelScope.launch { completeCatalog(repository.currentProvider) }
         }
         // provider 切换或首次:快速加载前几页(秒回)。
         if (!isCatalogCurrent || !catalogReady) {
@@ -169,16 +186,20 @@ class SearchViewModel(
                 return
             }
             // 快速页已就绪即可出结果；剩余页后台补全，不阻塞首搜。
-            viewModelScope.launch { completeCatalog() }
+            completeJob?.cancel()
+            completeJob = viewModelScope.launch { completeCatalog(repository.currentProvider) }
         }
         // 同一视频可能出现在多个分类,去重避免列表 key 冲突。
         // 用 query 对标题做包含匹配；也匹配 creators（若有）。
         val q = query.trim()
-        val results = catalogCache.values.flatten()
-            .distinctBy { it.id }
-            .filter {
-                it.title.contains(q, ignoreCase = true)
-            }
+        // 先在主线程对缓存做快照(缓存仅主线程读写),再在 Default 上过滤,
+        // 避免大目录每次按键都在主线程全量扫描卡 UI。
+        val snapshot = catalogCache.values.toList()
+        val results = withContext(Dispatchers.Default) {
+            snapshot.flatten()
+                .distinctBy { it.id }
+                .filter { it.title.contains(q, ignoreCase = true) }
+        }
         _uiState.value = _uiState.value.copy(isSearching = false, results = results, error = null)
     }
 
