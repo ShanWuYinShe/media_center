@@ -29,7 +29,7 @@ func TestCatalogListMembersFilters(t *testing.T) {
 		t.Fatalf("approve: %v", err)
 	}
 
-	pending, err := c.ListMembers("movies", "pending", 0)
+	pending, err := c.ListMembers("movies", "pending", 0, 0)
 	if err != nil {
 		t.Fatalf("list pending: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestCatalogListMembersFilters(t *testing.T) {
 		t.Fatalf("expected status pending, got %q", pending[0].Status)
 	}
 
-	all, err := c.ListMembers("movies", "", 0)
+	all, err := c.ListMembers("movies", "", 0, 0)
 	if err != nil {
 		t.Fatalf("list all: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestCatalogListMembersFilters(t *testing.T) {
 	}
 
 	// invalid status filter is rejected.
-	if _, err := c.ListMembers("movies", "bogus", 0); err == nil {
+	if _, err := c.ListMembers("movies", "bogus", 0, 0); err == nil {
 		t.Fatalf("expected error for invalid status filter")
 	}
 }
@@ -110,7 +110,7 @@ func TestCatalogReviewMember(t *testing.T) {
 	if _, err := c.ReviewMember("movies", "bilibili", "BV1b", nil, nil, &sql.NullInt64{Valid: false}, "admin"); err != nil {
 		t.Fatalf("clear rank: %v", err)
 	}
-	items, err := c.ListMembers("movies", "approved", 0)
+	items, err := c.ListMembers("movies", "approved", 0, 0)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestInternalCatalogImportCreatesPendingOnly(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("import status = %d, body=%s", w.Code, w.Body.String())
 	}
-	items, err := c.ListMembers("movies", "pending", 0)
+	items, err := c.ListMembers("movies", "pending", 0, 0)
 	if err != nil {
 		t.Fatalf("list pending: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestInternalCatalogImportCreatesPendingOnly(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("reimport status = %d, body=%s", w.Code, w.Body.String())
 	}
-	approvedItems, err := c.ListMembers("movies", "approved", 0)
+	approvedItems, err := c.ListMembers("movies", "approved", 0, 0)
 	if err != nil {
 		t.Fatalf("list approved: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestInternalCatalogImportApprovedGoesLive(t *testing.T) {
 		t.Fatalf("approved import not live: total=%d items=%+v", total, items)
 	}
 	// Reviewer is recorded on the approved member.
-	members, err := c.ListMembers("movies", "approved", 0)
+	members, err := c.ListMembers("movies", "approved", 0, 0)
 	if err != nil {
 		t.Fatalf("list approved: %v", err)
 	}
@@ -362,7 +362,7 @@ func TestInternalCatalogExportRoundTrip(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("reimport: %d (%s)", w.Code, w.Body.String())
 	}
-	got, err := c2.ListMembers("movies", "approved", 0)
+	got, err := c2.ListMembers("movies", "approved", 0, 0)
 	if err != nil {
 		t.Fatalf("list reimported: %v", err)
 	}

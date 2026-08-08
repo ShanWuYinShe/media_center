@@ -260,7 +260,8 @@ func (s *mediaServer) handleInternalItems(w http.ResponseWriter, r *http.Request
 	if limit > 1000 {
 		limit = 1000
 	}
-	items, err := s.catalog.ListMembers(category, status, limit)
+	offset := positiveInt(q.Get("offset"), 0)
+	items, err := s.catalog.ListMembers(category, status, limit, offset)
 	if err != nil {
 		s.writeError(w, fmt.Errorf("list members: %w", err))
 		return
@@ -384,7 +385,7 @@ func (s *mediaServer) handleInternalExport(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	// limit=0 表示不限:一次性导出全部成员。
-	members, err := s.catalog.ListMembers(category, status, 0)
+	members, err := s.catalog.ListMembers(category, status, 0, 0)
 	if err != nil {
 		s.writeError(w, fmt.Errorf("export members: %w", err))
 		return

@@ -697,8 +697,9 @@ type PendingReviewsOptions struct {
 
 // ListMembers 返回某分类下指定状态的成员(status="" 表示所有状态),附带视频元数据与
 // 审校字段。排序与 ApprovedForCategory 一致(置顶 > 人工序 > 分数 > native_id),
-// 这样审校界面看到的顺序即上线后排前的顺序。categoryID="" 表示所有分类,limit<=0 不限。
-func (c *Catalog) ListMembers(categoryID, status string, limit int) ([]PendingReviewItem, error) {
+// 这样审校界面看到的顺序即上线后排前的顺序。categoryID="" 表示所有分类,limit<=0 不限;
+// offset>=0 时跳过前 offset 条(分页用)。
+func (c *Catalog) ListMembers(categoryID, status string, limit, offset int) ([]PendingReviewItem, error) {
 	var (
 		query strings.Builder
 		args  []any
@@ -724,6 +725,10 @@ WHERE 1=1`)
 	if limit > 0 {
 		query.WriteString("\nLIMIT ?")
 		args = append(args, limit)
+		if offset > 0 {
+			query.WriteString(" OFFSET ?")
+			args = append(args, offset)
+		}
 	}
 	rows, err := c.db.Query(query.String(), args...)
 	if err != nil {
@@ -763,7 +768,7 @@ WHERE 1=1`)
 // PendingReviews 返回待审(status='pending')候选,排序同 ListMembers。
 // -catalog-review 子命令复用它逐条展示与放行/拒绝。
 func (c *Catalog) PendingReviews(opts PendingReviewsOptions) ([]PendingReviewItem, error) {
-	return c.ListMembers(opts.CategoryID, "pending", opts.Limit)
+	return c.ListMembers(opts.CategoryID, "pending", opts.Limit, 0)
 }
 
 // ReviewMember 更新某分类成员的审校字段:status / pinned / rank 任一非 nil 即更新该列,
