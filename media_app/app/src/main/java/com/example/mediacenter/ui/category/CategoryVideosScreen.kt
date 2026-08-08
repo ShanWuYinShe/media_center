@@ -29,6 +29,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,10 +43,34 @@ import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.home.VideoCard
+import com.example.mediacenter.ui.player.SelectChip
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.util.NetworkRestoreEffect
 import kotlinx.coroutines.flow.distinctUntilChanged
+
+/**
+ * 时长筛选档位(分类"查看全部"列表用):数据来自 VideoSummary.durationSeconds
+ * (服务端 catalog 已有字段,纯客户端过滤,无需额外请求)。
+ * 阈值:短片 < 10 分钟;中片 10~45 分钟;长片 > 45 分钟。
+ */
+enum class DurationFilter(val id: String, val label: String) {
+    ALL("all", "全部"),
+    SHORT("short", "短片"),
+    MEDIUM("medium", "中片"),
+    LONG("long", "长片"),
+}
+
+/** 视频是否命中某档时长筛选;时长缺失(null)的视频只出现在"全部"里。 */
+private fun VideoSummary.matchesDuration(filter: DurationFilter): Boolean {
+    val seconds = durationSeconds ?: return false
+    return when (filter) {
+        DurationFilter.ALL -> true
+        DurationFilter.SHORT -> seconds < 10 * 60
+        DurationFilter.MEDIUM -> seconds in 10 * 60 until 45 * 60
+        DurationFilter.LONG -> seconds >= 45 * 60
+    }
+}
 
 @Composable
 fun CategoryVideosScreen(
@@ -54,6 +81,12 @@ fun CategoryVideosScreen(
     viewModel: CategoryVideosViewModel = viewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    // 时长筛选(本页内状态):过滤已加载列表,不触发重新请求;切回"全部"即恢复。
+    var durationFilter by remember { mutableStateOf(DurationFilter.ALL) }
+    val displayItems = remember(state.items, durationFilter) {
+        if (durationFilter == DurationFilter.ALL) state.items
+        else state.items.filter { it.matchesDuration(durationFilter) }
+    }
 
     BackHandler(onBack = onBack)
 
@@ -86,12 +119,29 @@ fun CategoryVideosScreen(
             )
         }
 
+        // 时长筛选行:全部 / 短片 / 中片 / 长片。
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            DurationFilter.entries.forEach { filter ->
+                SelectChip(
+                    label = filter.label,
+                    selected = filter == durationFilter,
+                    onClick = { durationFilter = filter },
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+
         when {
             state.isLoadingInitial -> LoadingIndicator(modifier = Modifier.fillMaxSize())
             state.error != null -> ErrorView(message = state.error!!, onRetry = { viewModel.load(categoryId, title) })
-            state.items.isEmpty() -> ErrorView(message = "\u6682\u65E0\u5185\u5BB9")
+            displayItems.isEmpty() -> ErrorView(
+                message = if (state.items.isEmpty()) "\u6682\u65E0\u5185\u5BB9" else "当前筛选下暂无内容",
+            )
             else -> CategoryGrid(
-                items = state.items,
+                items = displayItems,
                 isLoadingMore = state.isLoadingMore,
                 loadMoreFailed = state.loadMoreFailed,
                 onVideoClick = onVideoClick,
