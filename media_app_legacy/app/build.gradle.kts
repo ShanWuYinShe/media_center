@@ -158,6 +158,11 @@ dependencies {
     implementation("com.google.android.exoplayer:exoplayer-ui:$exoVersion")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("com.squareup.okhttp3:okhttp:3.12.13")
+    // Conscrypt:Google 官方 BoringSSL JSSE 实现,官方支持 Android KitKat (API 19)+。
+    // 在 4.4.2 上提供 TLS 1.2/1.3 + 全套现代密码套件(GCM/CHACHA20/ECDSA),
+    // 根治平台 TLS 栈(OpenSSL 1.0.1)与现代服务器(Cloudflare 等)握手失败的问题。
+    // 锁定 2.5.2:2.5.3 有 JNI 崩溃报告(google/conscrypt#1268)。
+    implementation("org.conscrypt:conscrypt-android:2.5.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("androidx.multidex:multidex:2.0.1")

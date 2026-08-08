@@ -40,11 +40,11 @@ class MediaApi(
         ?: throw IllegalArgumentException("MEDIA_SERVER_URL must be a valid URL")
     private val baseUrlIncludesApiPrefix = apiRoot.pathSegments().any { it.isNotEmpty() }
 
-    // HTTPS 握手失败时的明文降级通道:
-    // Android 4.4.2 的老 TLS 栈与 Cloudflare 的现代 TLS 配置(TLS1.3 + ECDSA-only 套件)
-    // 无法协商,trust-all 也救不了(失败在套件/协议协商,不在证书校验)。
-    // 服务端放行 HTTP 后,这里用明文 HTTP 重试一次,保证老设备 100% 能连上。
-    // 仅当 HTTPS 失败原因是 TLS 握手时触发,不影响正常 HTTPS 流量。
+    // HTTPS 握手失败时的明文降级通道(最后兜底):
+    // 主链路已由 Conscrypt 解决(见 AppHttpClient 类注释)——TLS 1.2/1.3 + 现代
+    // 套件 + 内置 GTS Root R4 在 4.4.2 上即可正常握手。此降级仅用于极端场景
+    // (Conscrypt 原生库无法加载的罕见 ABI、被网络设备劫持等),保证老设备 100%
+    // 能连上。仅当 HTTPS 失败原因是 TLS 握手时触发,不影响正常 HTTPS 流量。
     private val httpClient: OkHttpClient? = if (apiRoot.toString().startsWith("https://", ignoreCase = true)) {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)

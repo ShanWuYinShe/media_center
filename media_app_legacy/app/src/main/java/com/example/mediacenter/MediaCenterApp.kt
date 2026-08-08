@@ -24,10 +24,14 @@ class MediaCenterApp : MultiDexApplication() {
                 "MODEL=${Build.MODEL} " +
                 "DEVICE=${Build.DEVICE}",
         )
-        // TLS 初始化:加载附加根 CA(GTS Root R4)+ 构建 soft-fail TrustManager。
-        // 必须在任何网络请求之前完成,否则 OkHttp / HttpsURLConnection 用的仍是平台
-        // 默认 TLS——Android 4.4.2 系统信任库缺失 GTS Root R4,会握手失败。
-        // 顺序:先 init(加载证书 + 构建 TLS),再 install(设为 HttpsURLConnection 默认)。
+        // TLS 初始化:安装 Conscrypt(BoringSSL,官方支持 API 19+)+ 把内置的
+        // GTS Root R4(4.4.2 系统信任库缺失,但媒体服务器链锚定它)并进信任库,
+        // 构建"校验优先 + soft-fail"的 TrustManager(见 AppHttpClient 类注释)。
+        // 必须在任何网络请求之前完成,否则 OkHttp / HttpsURLConnection 用的仍是
+        // 平台默认 TLS——Android 4.4.2 的老 TLS 栈(OpenSSL 1.0.1)与 Cloudflare
+        // 等现代服务器握手失败(缺 TLS 1.2 默认启用 / 现代套件 / GTS 根)。
+        // 顺序:先 init(加载 Conscrypt + 证书 + 构建 TLS),再 install(设为
+        // HttpsURLConnection 默认)。
         AppHttpClient.init(this)
         // 把自定义 TLS 设为 HttpsURLConnection 进程级默认,覆盖 ExoPlayer
         // DefaultHttpDataSource(走 HttpsURLConnection)的播放链路。
