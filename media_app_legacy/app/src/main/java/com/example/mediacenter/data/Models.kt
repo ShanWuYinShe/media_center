@@ -100,10 +100,20 @@ data class PlaybackPages(
     val currentPageDurationSeconds: Long? get() = pageDurations.getOrNull(currentPage)
 }
 
-// PlaybackResult 是解析播放地址的完整结果:播放选项列表 + 多P信息。
+// PlaybackResult 是解析播放地址的完整结果:播放选项列表 + 多P信息 + 可用清晰度。
 data class PlaybackResult(
     val options: List<PlaybackOption>,
     val pages: PlaybackPages = PlaybackPages(),
+    // 该视频全部可用清晰度(播放页清晰度切换弹窗用)。由 playurl 接口的
+    // accept_quality/accept_description 得到,与 options 的当前单条 durl 无关;
+    // 切换清晰度必须按新 qn 重新解析(见 BilibiliApi.buildPlaybackOptions 注释)。
+    val availableQualities: List<PlaybackQuality> = emptyList(),
+)
+
+// 一个可选清晰度:qn 为 B 站 playurl 的清晰度编码,label 为显示文本(如 "1080P")。
+data class PlaybackQuality(
+    val qn: Int,
+    val label: String,
 )
 
 @Serializable

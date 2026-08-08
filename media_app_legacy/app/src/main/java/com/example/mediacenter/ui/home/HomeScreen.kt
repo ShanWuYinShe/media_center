@@ -14,6 +14,8 @@ import com.example.mediacenter.MainActivity
 import com.example.mediacenter.data.ContentCategory
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.ui.MediaUiState
+import com.example.mediacenter.ui.DurationFilter
+import com.example.mediacenter.ui.displayItems
 import com.example.mediacenter.ui.exitSearchMode
 import com.example.mediacenter.ui.homeCategoryKey
 import com.example.mediacenter.ui.homeDefaultCategoryTarget
@@ -98,6 +100,10 @@ internal fun MainActivity.renderHome(state: MediaUiState) {
         } else {
             content.addView(searchModeBar(state.query, ::registerFocusTarget), linearMatch())
         }
+        // 时长筛选行:仅分类浏览模式显示(搜索模式顶部已被搜索栏替换)。
+        if (state.query.isBlank()) {
+            content.addView(homeFilterBar(state.durationFilter, ::registerFocusTarget), linearMatch())
+        }
 
         val body = FrameLayout(this).apply {
             clipChildren = true
@@ -107,14 +113,25 @@ internal fun MainActivity.renderHome(state: MediaUiState) {
         if (state.items.isEmpty()) {
             resetHomeDetailsPrefetch()
         }
+        // 按时长筛选后的展示列表(ALL/搜索模式不过滤)。
+        val displayItems = state.displayItems()
         when {
             state.loading && state.items.isEmpty() -> body.addView(centeredLoading("正在加载…"), frameMatch())
             state.error != null && state.items.isEmpty() -> body.addView(errorState(state.error, viewModel::retry, state.autoRetrying), frameMatch())
-            state.items.isEmpty() -> body.addView(emptyState(if (state.query.isBlank()) "当前分类暂无内容" else "没有找到相关内容"), frameMatch())
+            displayItems.isEmpty() -> body.addView(
+                emptyState(
+                    when {
+                        state.query.isNotBlank() -> "没有找到相关内容"
+                        state.durationFilter != DurationFilter.ALL -> "当前筛选下暂无内容"
+                        else -> "当前分类暂无内容"
+                    },
+                ),
+                frameMatch(),
+            )
             else -> {
                 body.addView(
                     videoGrid(
-                        items = state.items,
+                        items = displayItems,
                         canLoadMore = state.canLoadMore,
                         loadingMore = state.loadingMore,
                         loadMoreError = state.loadMoreError,
@@ -232,19 +249,12 @@ internal fun MainActivity.homeTopBar(
                     when (keyCode) {
                         KeyEvent.KEYCODE_DPAD_UP -> true
                         KeyEvent.KEYCODE_DPAD_DOWN -> {
-                            // 进入下方视频网格前,取消任何挂起的分类切换防抖,
-                            // 避免迟到的切换在用户已进入网格后触发整屏重建、弹走焦点。
+                            // 进入下方内容前先落在时长筛选行(取消任何挂起的分类切换防抖,
+                            // 避免迟到的切换在用户已进入下方后触发整屏重建、弹走焦点)。
                             cancelPendingCategorySelect()
-                            val target = rememberedVideoFocusByCategory[homeCategoryKey(currentState)]
-                                ?.let(HomeFocusTarget::Video)
-                                ?: currentState.items.firstOrNull()?.id?.let(HomeFocusTarget::Video)
-                            if (target != null) {
-                                homeFocusArea = HomeFocusArea.Video
-                                requestHomeFocus(target)
-                                true
-                            } else {
-                                false
-                            }
+                            homeFocusArea = HomeFocusArea.Filter
+                            requestHomeFocus(HomeFocusTarget.Filter(currentState.durationFilter.id))
+                            true
                         }
                         KeyEvent.KEYCODE_DPAD_LEFT -> {
                             // 焦点已在最左分类时再按左键:边界拦截(焦点不动),
@@ -323,6 +333,68 @@ internal fun MainActivity.homeTopBar(
         }
         row.addView(scroll, LinearLayout.LayoutParams(0, wrap(), 1f))
         row.addView(searchButton, LinearLayout.LayoutParams(dp(54), dp(54)).withStartMargin(dp(14)))
+        return row
+    }
+
+/**
+ * 时长筛选行(分类浏览模式、分类栏下方):全部 / 短片 / 中片 / 长片。
+ *
+ * 焦点导航:上 → 分类栏;下 → 视频网格(首个**筛选后**可见视频)。
+ * 网格顶行按"上"仍回分类栏(保持既有肌肉记忆),筛选行通过分类栏"下"进入。
+ * 筛选即时生效:选中即更新 state.durationFilter,渲染层过滤,无需重新请求。
+ */
+internal fun MainActivity.homeFilterBar(
+        current: DurationFilter,
+        registerFocusTarget: (HomeFocusTarget, View) -> Unit,
+    ): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(2), 0, dp(8))
+            clipChildren = false
+            clipToPadding = false
+        }
+        DurationFilter.entries.forEach { filter ->
+            val chip = pill(
+                text = filter.label,
+                selected = filter == current,
+                heightDp = 40,
+                horizontalPaddingDp = 18,
+                onClick = { viewModel.selectDurationFilter(filter) },
+                onFocusChange = { focused ->
+                    if (focused) homeFocusArea = HomeFocusArea.Filter
+                },
+            ).apply {
+                setOnKeyListener { _, keyCode, event ->
+                    if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_UP -> {
+                            // 回分类栏:取消挂起的分类防抖,避免迟到的分类切换弹走焦点。
+                            cancelPendingCategorySelect()
+                            homeFocusArea = HomeFocusArea.Category
+                            homeDefaultCategoryTarget(currentState)?.let { requestHomeFocus(it) }
+                            true
+                        }
+                        KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            // 下网格:聚焦首个"筛选后"可见视频(不能取未过滤列表首项,
+                            // 否则可能落到被筛掉的视频上导致焦点找不到目标)。
+                            homeFocusArea = HomeFocusArea.Video
+                            val target = currentState.displayItems().firstOrNull()?.id
+                                ?.let(HomeFocusTarget::Video)
+                            if (target != null) {
+                                requestHomeFocus(target)
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        else -> false
+                    }
+                }
+            }
+            registerFocusTarget(HomeFocusTarget.Filter(filter.id), chip)
+            row.addView(chip, LinearLayout.LayoutParams(wrap(), dp(40)).withEndMargin(dp(10)))
+        }
         return row
     }
 

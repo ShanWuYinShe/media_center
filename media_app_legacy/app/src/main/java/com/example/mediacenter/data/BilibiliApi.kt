@@ -92,6 +92,7 @@ class BilibiliApi(
                 pageTitles = pageTitles,
                 pageDurations = pageDurations,
             ),
+            buildAvailableQualities(payload.data),
         )
     }
 
@@ -145,6 +146,16 @@ class BilibiliApi(
             ),
         )
     }
+
+    // 可用清晰度列表:accept_quality 与 accept_description 一一对应(顺序通常从高
+    // 到低),描述缺失时回退 qualityLabel。播放页清晰度切换弹窗的数据源。
+    private fun buildAvailableQualities(data: BiliPlayUrlResponse.PlayUrlData): List<PlaybackQuality> =
+        data.acceptQuality.mapIndexedNotNull { index, qn ->
+            val label = data.acceptDescription.getOrNull(index)
+                ?.takeIf { it.isNotBlank() }
+                ?: qualityLabel(qn)
+            PlaybackQuality(qn, label)
+        }
 
     // 调 B 站 view API 拿 bvid/cid/pages。
     private suspend fun fetchView(bvid: String): BiliViewResponse {

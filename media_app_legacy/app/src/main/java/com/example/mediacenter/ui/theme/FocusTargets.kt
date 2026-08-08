@@ -4,18 +4,22 @@ package com.example.mediacenter.ui.theme
 enum class HomeFocusArea {
     Search,
     Category,
+    Filter,
     Video,
 }
 
 sealed class HomeFocusTarget {
     object Search : HomeFocusTarget()
     data class Category(val id: String) : HomeFocusTarget()
+    /** 时长筛选 chip(DurationFilter.id):"all"/"short"/"medium"/"long"。 */
+    data class Filter(val id: String) : HomeFocusTarget()
     data class Video(val id: String) : HomeFocusTarget()
 
     fun viewTag(): String {
         return when (this) {
             Search -> "home:search"
             is Category -> "home:category:$id"
+            is Filter -> "home:filter:$id"
             is Video -> "home:video:$id"
         }
     }
