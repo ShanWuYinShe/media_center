@@ -42,7 +42,7 @@ class AppUpdateManager(
     private val installer = ApkInstaller(context)
 
     /** 委托:启动系统安装器(见 [ApkInstaller])。 */
-    fun launchInstaller(apk: File): InstallLaunchResult = installer.launchInstaller(apk)
+    suspend fun launchInstaller(apk: File): InstallLaunchResult = installer.launchInstaller(apk)
 
     /** 委托:引导用户开启"安装未知应用"权限(见 [ApkInstaller])。 */
     fun launchInstallPermissionSettings() = installer.launchInstallPermissionSettings()
@@ -173,7 +173,12 @@ class AppUpdateManager(
                         }
                         if (continuation.isActive) continuation.resume(target)
                     } catch (error: Throwable) {
-                        if (continuation.isActive) continuation.resumeWithException(error)
+                        if (continuation.isActive) {
+                            // 网络中断等 IO 失败会留下半成品 APK；主动清理，
+                            // 避免缓存目录堆积半成品文件。
+                            runCatching { if (target.isFile) target.delete() }
+                            continuation.resumeWithException(error)
+                        }
                     }
                 }
             })

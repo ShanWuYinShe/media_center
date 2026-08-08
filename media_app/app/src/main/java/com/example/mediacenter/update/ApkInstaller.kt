@@ -13,6 +13,8 @@ import androidx.core.net.toUri
 import com.example.mediacenter.log.AppLog
 import java.io.File
 import java.io.FileInputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * APK 安装器:从 AppUpdateManager 拆分。
@@ -61,7 +63,7 @@ class ApkInstaller(private val context: Context) {
         }
     }
 
-    fun launchInstaller(apk: File): InstallLaunchResult {
+    suspend fun launchInstaller(apk: File): InstallLaunchResult {
         // 第1优先：PackageInstaller API（API 21+），session-based 安装。
         // minSdk=23,该守卫恒为真,但保留以兼容将来 minSdk 调整时 PackageInstaller 的语义边界。
         val result = tryInstallWithSession(apk)
@@ -75,19 +77,23 @@ class ApkInstaller(private val context: Context) {
         return tryInstallWithIntent(apk)
     }
 
-    private fun tryInstallWithSession(apk: File): InstallLaunchResult {
+    private suspend fun tryInstallWithSession(apk: File): InstallLaunchResult {
         return try {
             val packageInstaller = context.packageManager.packageInstaller
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
             val sessionId = packageInstaller.createSession(params)
             val session = packageInstaller.openSession(sessionId)
 
-            FileInputStream(apk).use { input ->
-                val size = apk.length()
-                val out = session.openWrite("base.apk", 0, size)
-                input.copyTo(out)
-                session.fsync(out)
-                out.close()
+            // APK 复制到 PackageInstaller session 是几十 MB 到数百 MB 的磁盘 IO，
+            // 必须在后台线程执行，否则主线程卡顿数秒（老盒子上直接 ANR）。
+            withContext(Dispatchers.IO) {
+                FileInputStream(apk).use { input ->
+                    val size = apk.length()
+                    val out = session.openWrite("base.apk", 0, size)
+                    input.copyTo(out)
+                    session.fsync(out)
+                    out.close()
+                }
             }
 
             val intent = Intent(installAction).apply {
