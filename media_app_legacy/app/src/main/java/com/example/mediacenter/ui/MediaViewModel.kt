@@ -360,65 +360,101 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     }
 
     fun loadMore() {
+        // 已有翻页在飞不重复发起(滚动事件会高频触发;此前 cancel 在飞请求会
+        // 卡死 loadingMore,见 fetchMorePage 的 finally 复位注释)。
+        if (loadMoreJob?.isActive == true) return
+        loadMoreJob = viewModelScope.launch { fetchMorePage() }
+    }
+
+    /**
+     * 拉取下一页并合并进 items,返回是否还有更多(响应是否满页)。
+     *
+     * loadMore 与"筛选自动补页"([fillFilteredScreen])共用。**取消安全**:
+     * 任何退出路径(成功/失败/协程取消)都复位 loadingMore——原实现取消在飞的
+     * 请求后 loadingMore 永久卡 true,后续翻页全被挡死。
+     */
+    private suspend fun fetchMorePage(): Boolean {
         val current = mutableState.value
-        if (current.loading || current.loadingMore || !current.canLoadMore || current.loadMoreError != null) return
+        if (current.loading || current.loadingMore || !current.canLoadMore || current.loadMoreError != null) return false
         val nextPage = current.page + 1
-        loadMoreJob?.cancel()
-        loadMoreJob = viewModelScope.launch {
-            mutableState.update { it.copy(loadingMore = true, loadMoreError = null, error = null) }
-            runCatchingCancellable {
-                repository.search(
-                    current.query,
-                    current.selectedCategoryId,
+        mutableState.update { it.copy(loadingMore = true, loadMoreError = null, error = null) }
+        try {
+            val response = repository.search(
+                current.query,
+                current.selectedCategoryId,
+                page = nextPage,
+                pageSize = PageSize,
+            )
+            mutableState.update { state ->
+                val merged = (state.items + response.items).distinctBy { it.id }
+                state.copy(
+                    items = merged,
+                    loadingMore = false,
+                    loadMoreError = null,
+                    canLoadMore = response.items.size >= PageSize,
                     page = nextPage,
-                    pageSize = PageSize,
                 )
             }
-                .onSuccess { response ->
-                    mutableState.update { state ->
-                        val merged = (state.items + response.items).distinctBy { it.id }
-                        state.copy(
-                            items = merged,
-                            loadingMore = false,
-                            loadMoreError = null,
-                            canLoadMore = response.items.size >= PageSize,
-                            page = nextPage,
-                        )
-                    }
-                    // 把翻页后的完整列表写回分类缓存,下次进入该分类时保留已加载的多页内容。
-                    if (current.query.isBlank() && current.selectedCategoryId != null) {
-                        val latest = mutableState.value
-                        cacheCategoryList(
-                            current.selectedCategoryId,
-                            latest.items,
-                            page = nextPage,
-                            canLoadMore = response.items.size >= PageSize,
-                        )
-                    }
-                    // 后台预取新增视频的播放地址。
-                    prefetchVisiblePlayback(response.items)
-                    // 若是"末尾按下一个/自动续播触发的 loadMore",新页到手后
-                    // 继续把焦点视频续播下去,补上分页边界的断档。
-                    val pendingId = pendingAutoAdvanceFromId
-                    if (pendingId != null) {
-                        pendingAutoAdvanceFromId = null
-                        val newItems = mutableState.value.items
-                        val i = newItems.indexOfFirst { it.id == pendingId }
-                        if (i >= 0 && i + 1 < newItems.size) {
-                            playVideoAt(i + 1, newItems)
-                        }
-                    }
+            // 把翻页后的完整列表写回分类缓存,下次进入该分类时保留已加载的多页内容。
+            if (current.query.isBlank() && current.selectedCategoryId != null) {
+                val latest = mutableState.value
+                cacheCategoryList(
+                    current.selectedCategoryId,
+                    latest.items,
+                    page = nextPage,
+                    canLoadMore = response.items.size >= PageSize,
+                )
+            }
+            // 后台预取新增视频的播放地址。
+            prefetchVisiblePlayback(response.items)
+            // 若是"末尾按下一个/自动续播触发的 loadMore",新页到手后
+            // 继续把焦点视频续播下去,补上分页边界的断档。
+            val pendingId = pendingAutoAdvanceFromId
+            if (pendingId != null) {
+                pendingAutoAdvanceFromId = null
+                val newItems = mutableState.value.items
+                val i = newItems.indexOfFirst { it.id == pendingId }
+                if (i >= 0 && i + 1 < newItems.size) {
+                    playVideoAt(i + 1, newItems)
                 }
-                .onFailure { error ->
-                    // 续播依赖的分页加载失败:清掉待续播标记,避免悬挂。
-                    pendingAutoAdvanceFromId = null
-                    mutableState.update {
-                        it.copy(
-                            loadingMore = false,
-                            loadMoreError = error.message ?: "加载更多失败",
-                        )
-                    }
-                }
+            }
+            return response.items.size >= PageSize
+        } catch (e: CancellationException) {
+            throw e
+        } catch (error: Exception) {
+            // 续播依赖的分页加载失败:清掉待续播标记,避免悬挂。
+            pendingAutoAdvanceFromId = null
+            mutableState.update {
+                it.copy(
+                    loadingMore = false,
+                    loadMoreError = error.message ?: "加载更多失败",
+                )
+            }
+            return false
+        } finally {
+            // 取消路径(如切换分类/筛选补页被替换)也复位 loadingMore,防止卡死。
+            if (mutableState.value.loadingMore) {
+                mutableState.update { it.copy(loadingMore = false) }
+            }
+        }
+    }
+
+    /**
+     * 筛选自动补页:时长筛选选中后,若筛选结果不足一屏(RecyclerView 内容比视口
+     * 短时不产生滚动,onScrolled 不会触发翻页),自动补拉后续页直到铺满或没有更多。
+     * 每页 18 条,最多补 [FilterAutoFillMaxPages] 页兜底。
+     */
+    private fun fillFilteredScreen() {
+        val current = mutableState.value
+        if (current.query.isNotBlank() || current.durationFilter == DurationFilter.ALL) return
+        if (loadMoreJob?.isActive == true) return
+        loadMoreJob = viewModelScope.launch {
+            repeat(FilterAutoFillMaxPages) {
+                val s = mutableState.value
+                if (s.loading || !s.canLoadMore || s.loadMoreError != null) return@launch
+                if (s.displayItems().size >= FilterAutoFillTarget) return@launch
+                if (!fetchMorePage()) return@launch
+            }
         }
     }
 
@@ -431,10 +467,12 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     /**
      * 时长筛选切换(分类浏览筛选行回调)。只更新筛选状态,列表渲染层
      * ([MediaUiState.displayItems])即时生效;已加载数据无需重新请求。
+     * 选中非"全部"档位后自动补拉后续页(见 [fillFilteredScreen])。
      */
     fun selectDurationFilter(filter: DurationFilter) {
         if (mutableState.value.durationFilter == filter) return
         mutableState.update { it.copy(durationFilter = filter) }
+        if (filter != DurationFilter.ALL) fillFilteredScreen()
     }
 
     fun selectCategory(category: ContentCategory) {
@@ -1212,6 +1250,12 @@ private const val PREFETCH_CONCURRENCY = 2
 private const val MaxCategoryCacheEntries = 24
 private const val MaxPlaybackCacheEntries = 32
 private const val MaxPrefetchedIds = 128
+
+// 时长筛选自动补页:筛选结果不足一屏(RecyclerView 无滚动则 onScrolled 不触发)
+// 时自动补拉,直到铺满 [FilterAutoFillTarget] 条;每页 18 条,最多补
+// [FilterAutoFillMaxPages] 页兜底,防止无限拉取。
+private const val FilterAutoFillTarget = 12
+private const val FilterAutoFillMaxPages = 4
 
 // 首页分类加载失败自动重试:最多额外重试 MAX_HOME_AUTO_RETRIES 次,
 // 退避 2s/4s/8s。老 TV 盒子开机时 WiFi/路由未就绪很常见,单次失败直接
