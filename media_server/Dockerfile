@@ -1,9 +1,12 @@
-ARG GO_VERSION=1.26.2
-ARG ALPINE_VERSION=3.22.4
+ARG GO_VERSION=1.26.5
+ARG ALPINE_VERSION=3.24.1
 
 FROM golang:${GO_VERSION}-alpine AS builder
 
 WORKDIR /app
+
+ARG GOPROXY
+ENV GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
 
 COPY go.mod go.sum ./
 RUN go mod download
@@ -18,7 +21,8 @@ FROM alpine:${ALPINE_VERSION}
 
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates wget \
+RUN sed -i 's#dl-cdn.alpinelinux.org#mirrors.aliyun.com#g' /etc/apk/repositories \
+    && apk add --no-cache ca-certificates wget \
     && adduser -D -u 10001 appuser \
     && mkdir -p /config /cache /app/data \
     && chown -R appuser:appuser /app /config /cache

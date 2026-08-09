@@ -1,10 +1,10 @@
-ARG PYTHON_VERSION=3.13
+ARG PYTHON_VERSION=3.14.7
 
 FROM python:${PYTHON_VERSION}-alpine
 
 WORKDIR /app
 
-ARG YT_DLP_VERSION=2026.3.17
+ARG YT_DLP_VERSION=2026.07.04
 
 RUN pip install --no-cache-dir --disable-pip-version-check "yt-dlp==${YT_DLP_VERSION}" \
     && addgroup -S app \
