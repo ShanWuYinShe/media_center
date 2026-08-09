@@ -67,3 +67,4 @@ media_server/media_server
 
 # ----- AI 会话临时工作文件 -----
 .superpowers/
+.zcode/
