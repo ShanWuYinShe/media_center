@@ -4,7 +4,7 @@
 
 通用约束（Git 规范、Commit 格式、验证流程、工具链偏好、JDK 配置、Docker 等）以全局 `~/.config/opencode/AGENTS.md` 为准，本文件只做项目特有补充，不得放宽或违背全局约束。
 
- 本目录是 `media_center` 仓库的 git submodule。修改本文件后，需同步更新 `media_center` 仓库根目录的同名文件，否则内外版本会漂移。
+ 本目录是 `media_center` 仓库（`ShanWuYinShe/media_center`），被 `workwork` 仓库以 git submodule 引用（`services/media_center`）。
 
 AI Agent 工作目录：所有 AI agent 工作期间产生的中间文件写入项目根 `.workwork/`（已 `.gitignore`）。
 
@@ -73,7 +73,7 @@ go test -C media_server ./...
 
 ## API 约定
 
-以本仓库 `media_server/API.md` 为准。App 侧只消费 `/api/providers`、`/api/providers/{provider}/categories`、`/api/providers/{provider}/categories/{catID}/videos` 三个目录接口；
+以本仓库 `media_server/API.md` 为准。App 侧目录数据只消费 `/api/providers`、`/api/providers/{provider}/categories`、`/api/providers/{provider}/categories/{catID}/videos` 三个接口；另消费 App 更新接口 `/api/app/update`、`/api/app/download`（路由见 `media_server/AGENTS.md`）。
 播放由 App 端收到 `VideoSummary.id`（nativeId）后按 provider 自行处理。详情页由 App 端本地从 `VideoSummary` 构造，不调 server。
 `VideoSummary` 只有 `id/title/description/thumbnailUrl/durationSeconds` 五个字段。
 

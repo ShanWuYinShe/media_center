@@ -1,6 +1,6 @@
 # Media Center Media Server
 
- 本目录是 `media_center` 仓库的 git submodule。修改本文件后，需同步更新 `media_center` 仓库 `media_server/` 下的同名文件。
+ 本目录（`media_server/`）是 `media_center` 仓库（`ShanWuYinShe/media_center`）的普通子目录，非独立仓库；该仓库被 `workwork` 以 git submodule 引用（`services/media_center`）。
 
 `media_center` 的合规公开视频聚合后端：Go HTTP 服务，对外只提供目录服务。
 
