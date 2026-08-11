@@ -30,7 +30,11 @@ Go 实现的纯目录服务。不调任何上游 API、不做播放地址解析�
 - `MEDIA_SERVER_ALLOWED_HOSTS`：逗号分隔的公网域名白名单，仅当 `MEDIA_SERVER_PUBLIC_URL` 未配置时用于校验下载 Host。
 - `MEDIA_SERVER_APP_API_TOKEN`：凭证接口令牌。为空时 `/api/providers/credentials` 一律 401（App 降级无凭证模式）。App 构建时通过 gradle 属性 `APP_API_TOKEN` 注入同一值。
 - `HOST` / `PORT`：监听地址，默认 `0.0.0.0:8787`。
-- `MEDIA_SERVER_INTERNAL_TOKEN`：内部管理接口令牌，用于 `/internal/catalog/*` 管理接口认证。
+- `MEDIA_SERVER_INTERNAL_TOKEN`：内部管理接口令牌，用于 `/internal/catalog/*` 管理接口认证。为空时整个 `/internal/*` 路由树返回 404（安全默认）。
+- `PROVIDER_CREDENTIALS_FILE`（别名 `MEDIA_SERVER_PROVIDER_CREDENTIALS_FILE`）：provider 凭证 JSON 路径（如 bilibili SESSDATA）。为空时不加载凭证，App 走无凭证模式。
+- `MEDIA_SERVER_APP_UPDATE_MANIFEST`：App 更新清单路径，默认 `/config/app-update.json`。
+- `MEDIA_SERVER_APP_UPDATE_APK`：App 更新 APK 路径，默认 `/config/media-center-app.apk`。
+- `MEDIA_SERVER_CRASH_DIR`：App 崩溃上报落盘目录，默认 `data/crash-reports`。
 
 ## 数据模型
 

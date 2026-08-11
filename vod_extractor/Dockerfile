@@ -23,5 +23,9 @@ ENV HOST=0.0.0.0 \
 
 EXPOSE 8790
 
+# 编排层感知服务假死(yt-dlp 卡死/Python 死锁):/health 端点在 server.py 提供。
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:8790/health || exit 1
+
 USER app
 CMD ["python", "/app/server.py"]

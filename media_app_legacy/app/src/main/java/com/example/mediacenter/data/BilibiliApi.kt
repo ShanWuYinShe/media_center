@@ -2,17 +2,26 @@ package com.example.mediacenter.data
 
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.net.AppHttpClient
+import com.example.mediacenter.ui.config.BiliCdnHeaders
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
+import java.io.IOException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 class BilibiliApiException(message: String) : Exception(message)
 
@@ -71,7 +80,12 @@ class BilibiliApi(
         val allCids = if (pages.isNotEmpty()) pages.map { it.cid }
             else listOf(viewPayload.data?.cid ?: throw BilibiliApiException("无 cid"))
         val totalPages = allCids.size
-        val targetCid = if (pageIndex in allCids.indices) allCids[pageIndex] else allCids.first()
+        // 目录里的 bvid_pN 可能过期(视频被删页):越界时报错,不静默播放第 1 页
+        // (与 media_app 变体行为一致,避免 UI 显示页码与实际播放内容不符)。
+        if (pageIndex !in allCids.indices) {
+            throw BilibiliApiException("页面越界:共 $totalPages 页,请求第 ${pageIndex + 1} 页")
+        }
+        val targetCid = allCids[pageIndex]
         val pageTitles = pages.map { it.part }
         if (totalPages > 1) {
             AppLog.i("Bili", "multi-page video: $bvid has $totalPages pages, requesting cid=$targetCid (page=$pageIndex) quality=$qn")
@@ -141,7 +155,7 @@ class BilibiliApi(
                 label = label,
                 url = first.url,
                 mimeType = "video/mp4",
-                headers = DIRECT_HEADERS,
+                headers = BiliCdnHeaders,
                 qn = qn,
             ),
         )
@@ -243,10 +257,26 @@ class BilibiliApi(
         return cookieFields.entries.joinToString("; ") { "${it.key}=${it.value}" }
     }
 
+    // 对瞬时网络错误(IOException)做一次退避重试:B 站 API 偶发超时/连接重置,
+    // 直接失败会让播放页一次报错;业务错误(BilibiliApiException)与取消不重试。
     private suspend inline fun <reified T> getJson(url: String): T {
+        var attempt = 0
+        while (true) {
+            try {
+                return getJsonOnce<T>(url)
+            } catch (e: IOException) {
+                if (attempt >= MAX_RETRIES) throw e
+                AppLog.w("Bili", "GET $url IO error, retry ${attempt + 1}/$MAX_RETRIES: ${e.message}")
+                delay(RETRY_BACKOFF_MS[attempt])
+                attempt++
+            }
+        }
+    }
+
+    private suspend inline fun <reified T> getJsonOnce(url: String): T {
         val request = Request.Builder()
             .url(url)
-            .apply { DIRECT_HEADERS.forEach { (k, v) -> header(k, v) } }
+            .apply { BiliCdnHeaders.forEach { (k, v) -> header(k, v) } }
             .apply {
                 val cookie = buildCookieHeader()
                 if (cookie.isNotEmpty()) {
@@ -255,13 +285,43 @@ class BilibiliApi(
             }
             .get()
             .build()
-        client.newCall(request).execute().use { response ->
-            val body = response.body()?.string() ?: throw BilibiliApiException("B 站响应体为空")
-            if (!response.isSuccessful) {
-                throw BilibiliApiException("B 站 API ${response.code()}: ${body.take(200)}")
-            }
-            return json.decodeFromString<T>(body)
+        // 用 suspendCancellableCoroutine 包裹:协程取消(切换清晰度/分P/退出播放页)
+        // 时立即 call.cancel(),避免阻塞式 execute() 继续占用 IO 线程与连接
+        // (老盒子 CPU 核数少,未取消的请求会占满 IO 线程拖慢后续解析)。
+        val body = suspendCancellableCoroutine<String> { continuation ->
+            val call = client.newCall(request)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (continuation.isActive) {
+                        continuation.resumeWithException(e)
+                    }
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    try {
+                        response.use {
+                            val text = it.body()?.string()
+                                ?: throw BilibiliApiException("B 站响应体为空")
+                            if (!it.isSuccessful) {
+                                throw BilibiliApiException("B 站 API ${it.code()}: ${text.take(200)}")
+                            }
+                            if (continuation.isActive) {
+                                // 只把原始 body 交给协程,解码放到下面 Default 执行,
+                                // 避免 JSON 解析阻塞 OkHttp 回调线程池。
+                                continuation.resume(text)
+                            }
+                        }
+                    } catch (error: Throwable) {
+                        if (continuation.isActive) {
+                            continuation.resumeWithException(error)
+                        }
+                    }
+                }
+            })
         }
+        // JSON 解码是 CPU 活,放 Default(与 MediaApi 一致),不占 OkHttp 线程。
+        return withContext(Dispatchers.Default) { json.decodeFromString<T>(body) }
     }
 
     companion object {
@@ -270,13 +330,9 @@ class BilibiliApi(
         // 有凭证(如 SESSDATA)时首选清晰度:127 = 4K,B 站自动降级到视频可用的最高质量。
         private const val PREFERRED_QUALITY_WITH_COOKIE = 127
         private const val WBI_KEY_TTL_MILLIS = 10L * 60 * 1000
-
-        // B 站反爬要求:必须带 PC 端 User-Agent + Referer 才能拿到 playurl。
-        private val DIRECT_HEADERS = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer" to "https://www.bilibili.com",
-            "Origin" to "https://www.bilibili.com",
-        )
+        // 瞬时网络错误重试:1 次,800ms 退避(播放解析是用户主动操作,容忍一次重试)。
+        private const val MAX_RETRIES = 1
+        private val RETRY_BACKOFF_MS = longArrayOf(800L)
     }
 }
 

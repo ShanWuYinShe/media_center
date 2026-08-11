@@ -244,8 +244,8 @@ func (s *mediaServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusOK, SearchResponse{Query: "", Total: 0, Items: []VideoSummary{}})
 		return
 	}
-	// 搜索经三列 lower() LIKE '%q%' 全表扫描,无界 query 会放大计算量。128 字符
-	// 足够覆盖真实关键词;超长一律拒绝,避免被滥用拖垮 SQLite 单连接。
+	// 搜索经三列 lower() LIKE '%q%' 全表扫描,无界 query 会放大计算量。128 字节
+	// (UTF-8 中文约 42 字符)足够覆盖真实关键词;超长一律拒绝,避免被滥用拖垮 SQLite 单连接。
 	if len(query) > maxSearchQueryBytes {
 		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "QUERY_TOO_LONG", Message: "搜索关键词过长。"})
 		return

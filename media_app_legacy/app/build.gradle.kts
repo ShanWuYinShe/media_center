@@ -61,6 +61,11 @@ android {
     }
 
     compileOptions {
+        // 启用核心库脱糖:API 19 缺 java.time / 部分 Stream / Optional 等 Java 8+ API,
+        // compileSdk=37 下编译期不报错,但运行期 NoClassDefFoundError 只在真机暴露。
+        // 启用后由 desugar_jdk_libs 在低 API 上提供这些 API 的实现,作为纵深防御
+        // (当前代码刻意用 TimeUnit 等避开了 java.time,但防止后续误用导致静默崩溃)。
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -166,4 +171,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("androidx.multidex:multidex:2.0.1")
+    // Java 8+ 核心 API 脱糖:为 API 19 提供 java.time 等缺失 API 的实现。
+    // 2.1.5 支持 minSdk 19(media_app 同版本)。
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 }

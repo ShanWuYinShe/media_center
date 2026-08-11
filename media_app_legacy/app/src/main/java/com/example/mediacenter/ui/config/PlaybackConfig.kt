@@ -8,6 +8,15 @@ import com.example.mediacenter.data.isTransientHttpStatusCode
 
 const val PlaybackUserAgent =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+// B 站 CDN 反爬要求的 PC 端 headers:playurl 直链请求(BilibiliApi)与播放流请求
+// (ExoPlayer DataSource)共用同一组。单一来源,避免 B 站改反爬规则时多处各改漏改。
+val BiliCdnHeaders: Map<String, String> = mapOf(
+    "User-Agent" to PlaybackUserAgent,
+    "Referer" to "https://www.bilibili.com",
+    "Origin" to "https://www.bilibili.com",
+)
+
 const val MaxPlaybackRetries = 3
 
 const val PlaybackStabilityResetMs = 12_000L

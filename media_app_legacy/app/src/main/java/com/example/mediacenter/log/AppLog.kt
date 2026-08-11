@@ -23,9 +23,10 @@ object AppLog {
     private const val MAX_FILE_BYTES = 512L * 1024
     private val timeFormat = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
 
-    // 敏感查询参数:值一律抹成 ***。覆盖签名代理地址(sig/url)与可能出现的鉴权片段。
+    // 敏感查询参数:值一律抹成 ***。覆盖签名代理地址(sig/url)、鉴权片段(token/secret)
+    // 与 B 站 WBI 签名参数(w_rid 签名值、wts 时间戳)。
     private val sensitiveParam =
-        Regex("(?i)([?&](?:sig|signature|token|key|url|expires|exp|secret)=)[^&\\s\"]*")
+        Regex("(?i)([?&](?:sig|signature|token|key|url|expires|exp|secret|w_rid|wts)=)[^&\\s\"]*")
 
     private val fileExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "AppLog-file").apply { isDaemon = true }

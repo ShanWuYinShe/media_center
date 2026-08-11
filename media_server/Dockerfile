@@ -37,5 +37,9 @@ COPY --from=builder /out/media_server /app/media_server
 VOLUME ["/config", "/cache", "/app/data"]
 EXPOSE 8787
 
+# 编排层感知服务假死(Go 死锁/卡住):/health 端点在 main.go ServeHTTP 提供。
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:8787/health || exit 1
+
 USER appuser
 CMD ["/app/media_server"]
