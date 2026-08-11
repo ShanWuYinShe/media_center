@@ -42,9 +42,10 @@ class MediaCenterApp : Application(), ImageLoaderFactory {
                 "MODEL=${Build.MODEL} " +
                 "DEVICE=${Build.DEVICE}",
         )
-        // 尽早安装 OCSP soft-fail 的 TLS 默认工厂:覆盖 Media3 DefaultHttpDataSource(走
-        // HttpsURLConnection)的播放链路,避免时钟不准的设备在播放时握手失败。须在任何网络请求前。
-        AppHttpClient.installHttpsUrlConnectionDefault()
+        // 尽早安装 Conscrypt 作为首选 JCE Provider:让 OkHttp / HttpsURLConnection /
+        // Media3 DefaultHttpDataSource 统一走 BoringSSL,解决老系统自带 SSL 不支持目标
+        // 站点 TLS 握手的问题。须在任何网络请求前。
+        AppHttpClient.installConscryptProvider()
         installCrashHandler()
         uploadPendingCrashReport()
     }

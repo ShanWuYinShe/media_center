@@ -1,6 +1,6 @@
 # media_center
 
-合规公开视频媒体中心：Android TV 客户端（`media_app`）+ Go 聚合后端（`media_server`）+ 内部点播解析服务（`vod_extractor`）。
+合规公开视频媒体中心：Android TV 客户端（`media_app`）+ Go 聚合后端（`media_server`）+ 独立点播解析服务（`vod_extractor`，当前未启用）。
 
 通用约束（Git 规范、Commit 格式、验证流程、工具链偏好、JDK 配置、Docker 等）以全局 `~/.config/opencode/AGENTS.md` 为准，本文件只做项目特有补充，不得放宽或违背全局约束。
 
@@ -12,7 +12,7 @@ AI Agent 工作目录：所有 AI agent 工作期间产生的中间文件写入�
 
 - `media_app/` — Android TV + Kotlin + Jetpack Compose + Media3 客户端
 - `media_server/` — Go 实现的纯目录服务（provider 列表、分类列表、视频元数据）。不做播放地址解析、不做 asset 代理。
-- `vod_extractor/` — Python + yt-dlp 内部点播解析服务，只供 `media_server` 在 Docker 内网调用
+- `vod_extractor/` — Python + yt-dlp 独立点播解析服务（YouTube 等外站点播直链解析）。**当前未启用**：`media_server` 是纯目录服务、不调用它，App 端也未接入对应 provider 的播放解析。YouTube 源因国内网络访问限制暂不实现，待有代理基础设施后再启用
 
 App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部署方式。默认服务端 URL 是 `https://yinghuoren.com/api/media`。代理 / 部署基础设施在 `workwork` 仓库，通过 git submodule 引用本仓库来构建 `media_server` 和 `vod_extractor`。
 

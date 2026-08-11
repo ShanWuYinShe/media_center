@@ -84,10 +84,10 @@ func (r *statusRecorder) Flush() {
 
 // clientIPFromRequest 解析客户端真实 IP。
 //
-// media_server 部署在 internal_docker 私网,唯一调用方是 nginx(经
-// X-Real-IP / X-Forwarded-For 传入真实客户端 IP)与 admin(直连)。
-// 本服务是纯公开目录 API、无鉴权,client IP 仅作诊断用途,因此按
-// 优先级读取转发头,不做 trusted-proxy 守卫(伪造无安全影响)。
+// 生产部署位于 Cloudflare + nginx 反代之后,进到本服务的 RemoteAddr 恒为反代;
+// 转发头(X-Real-IP / X-Forwarded-For)由可信的反代写入,不会到客户端手里,因此
+// 直接采用、不做 trusted-proxy 守卫。该 IP 同时用于诊断日志和 per-IP 限流 key
+// (凭证端点、崩溃上报),反代层的可信保证了限流不会被伪造头绕过。
 func clientIPFromRequest(r *http.Request) string {
 	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" {
 		return ip

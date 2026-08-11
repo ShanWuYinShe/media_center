@@ -16,7 +16,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -40,6 +42,8 @@ import com.example.mediacenter.ui.theme.TextSecondary
 import com.example.mediacenter.ui.theme.TextTertiary
 import com.example.mediacenter.util.formatDuration
 import com.example.mediacenter.util.formatSeconds
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun DetailScreen(
@@ -85,10 +89,14 @@ fun DetailScreen(
         }
         Spacer(Modifier.height(8.dp))
         // 断点续播提示:上次位置有效时告知将从该处继续(传时长过滤"已看完"记录,
-        // 与播放页 READY 时的恢复判定一致,避免提示了却不恢复)
+        // 与播放页 READY 时的恢复判定一致,避免提示了却不恢复)。SharedPreferences
+        // 首次访问会同步加载 XML,放 IO 调度器异步读,避免主线程进详情页卡顿。
         val context = LocalContext.current
-        val resumePosition = remember(video.id) {
-            PlaybackPositionStore.resumePosition(context, video.id, (video.durationSeconds ?: 0L) * 1000L)
+        var resumePosition by remember(video.id) { mutableLongStateOf(0L) }
+        LaunchedEffect(video.id) {
+            resumePosition = withContext(Dispatchers.IO) {
+                PlaybackPositionStore.resumePosition(context, video.id, (video.durationSeconds ?: 0L) * 1000L)
+            }
         }
         if (resumePosition > 0) {
             Text(

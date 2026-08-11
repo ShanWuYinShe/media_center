@@ -76,8 +76,8 @@ func (l *ipWindowLimiter) allow(key string) bool {
 	return true
 }
 
-// defaultCrashLimiter 返回进程级默认限流器:mediaServer.crashLimiter 未显式
-// 初始化(如某些测试构造路径)时兜底使用。
+// defaultCrashLimiter 是进程级默认限流器:main() 构造 mediaServer 时已显式接线
+// crashLimiter 字段,这里仅作 nil 兜底(便于测试构造省略该字段的场景)。
 var defaultCrashLimiter = newIPWindowLimiter(crashReportPerMinuteLimit, time.Minute)
 
 // handleCrashReport 接收 App 崩溃上报,按 JSONL 追加写入

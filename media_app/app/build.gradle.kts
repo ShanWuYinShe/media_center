@@ -77,6 +77,19 @@ android {
     }
 
     buildToolsVersion = "37.0.0"
+
+    buildTypes {
+        // release 开启 R8 minify + 资源压缩,减小发布包体积(自用包不配签名,
+        // 由 CLI/部署脚本离线签名)。
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+    }
 }
 
 /**
@@ -152,6 +165,10 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:5.4.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    // Conscrypt:作为 JCE Provider 在进程级注入,让 OkHttp / HttpsURLConnection /
+    // Media3 DefaultHttpDataSource 统一走 BoringSSL,解决老系统自带 SSL 不支持目标
+    // 站点 TLS 握手的问题(替代此前自研的 OCSP soft-fail TrustManager)。
+    implementation("org.conscrypt:conscrypt-android:2.5.2")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 
     // Compose BOM + TV Material

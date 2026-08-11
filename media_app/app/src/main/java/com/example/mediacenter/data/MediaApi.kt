@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.Json
+import okhttp3.Cache
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -17,14 +18,22 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import java.io.File
 import java.io.IOException
 import java.time.Duration
 
 class MediaApi(
     val baseUrl: String,
+    cacheDir: File? = null,
     private val client: OkHttpClient = AppHttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(15))
         .readTimeout(Duration.ofSeconds(15))
+        .apply {
+            // 目录接口(/providers、/categories)低频变更,服务端已带 60s Cache-Control;
+            // 配上磁盘缓存后,App 启动/回首页的重复拉取走缓存,省流量更跟手。只缓存 GET,
+            // 崩溃上报(POST)不受影响;视频列表分页 query 不同各自独立缓存。
+            if (cacheDir != null) cache(Cache(cacheDir, API_CACHE_MAX_BYTES))
+        }
         .build(),
     private val json: Json = Json {
         ignoreUnknownKeys = true
@@ -248,5 +257,7 @@ class MediaApi(
     private companion object {
         const val MAX_RETRIES = 2
         val RETRY_BACKOFF_MS = longArrayOf(500L, 1500L)
+        // 目录接口缓存上限:5MB 足够覆盖若干 provider 的分类列表 + 分页视频列表。
+        const val API_CACHE_MAX_BYTES = 5L * 1024 * 1024
     }
 }

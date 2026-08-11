@@ -1,6 +1,7 @@
 package com.example.mediacenter.ui.player
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +13,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -148,9 +151,24 @@ internal fun ControlsOverlay(
                     )
                 }
                 Spacer(Modifier.weight(1f))
-                if (playbackResult.pages.totalPages > 1) {
-                    Text("分P", color = TextSecondary, fontSize = 14.sp)
-                    playbackResult.pages.pageTitles.forEachIndexed { index, pageTitle ->
+            }
+            // 分P 行:独立 LazyRow,B 站几十甚至上百 P 的视频也能横向滚动选择,
+            // 不会把播放按钮挤出屏宽。focusGroup 让 DPad 从上方 Slider/按钮落入更顺滑。
+            if (playbackResult.pages.totalPages > 1) {
+                Spacer(Modifier.height(8.dp))
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusGroup(),
+                ) {
+                    item(key = "label") {
+                        Text("分P", color = TextSecondary, fontSize = 14.sp)
+                    }
+                    itemsIndexed(
+                        items = playbackResult.pages.pageTitles,
+                        key = { index, _ -> index },
+                    ) { index, pageTitle ->
                         SelectChip(
                             label = if (pageTitle.isBlank()) "${index + 1}P" else "${index + 1}P ${pageTitle}",
                             selected = index == playbackResult.pages.currentPage,
@@ -164,6 +182,8 @@ internal fun ControlsOverlay(
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    // focusGroup:清晰度数量有限(<10)保留 Row,但聚合为一组让 DPad 焦点落入更顺滑。
+                    modifier = Modifier.focusGroup(),
                 ) {
                     Text("清晰度", color = TextSecondary, fontSize = 14.sp)
                     playbackResult.availableQualities.forEach { quality ->

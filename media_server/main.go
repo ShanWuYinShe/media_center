@@ -34,6 +34,9 @@ type mediaServer struct {
 // 凭证端点 per-IP 限流:正常 App 每次启动只拉一次凭证,阈值宽松但可挡匿名批量抓取。
 const credentialsPerMinuteLimit = 30
 
+// 搜索关键词最大字节数:超长一律拒绝,避免无界 query 驱动全表 LIKE 扫描。
+const maxSearchQueryBytes = 128
+
 func main() {
 	catalogReview := flag.Bool("catalog-review", false, "审校分类维护数据库的 pending 候选(approve/reject)后退出")
 	catalogReviewCategory := flag.String("catalog-review-category", "", "限定只审校某个分类 ID(默认全部)")
@@ -54,6 +57,7 @@ func main() {
 		config:             config,
 		categories:         content.Categories,
 		categoriesByID:     indexCategories(content.Categories),
+		crashLimiter:       newIPWindowLimiter(crashReportPerMinuteLimit, time.Minute),
 		credentialsLimiter: newIPWindowLimiter(credentialsPerMinuteLimit, time.Minute),
 	}
 
@@ -111,8 +115,11 @@ func main() {
 		Handler:           requestLogMiddleware(server),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		// WriteTimeout 不设:它是「从 request body 读完到写完响应」的硬截止,
+		// 对 http.ServeFile 流式发送的大文件下载(/api/app/download)会在慢客户端
+		// 下被强行截断。API 路由的超时保护改由 ServeHTTP 里的 TimeoutHandler 精确
+		// 施加(下载端点绕过它),避免一刀切。
+		IdleTimeout: 120 * time.Second,
 	}
 	log.Printf("media_server listening on %s", addr)
 
@@ -134,7 +141,24 @@ func main() {
 	}
 }
 
+// apiTimeout 是普通 API 路由的超时上限。http.Server.WriteTimeout 之所以置空,
+// 是为了让大文件下载(/api/app/download)不被砍断;这里用 TimeoutHandler 把超时
+// 保护精确施加在 API 路由上,下载端点在 ServeHTTP 里优先匹配、绕过此包裹。
+const apiTimeout = 60 * time.Second
+
 func (s *mediaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// 大文件下载绕过超时包裹:TimeoutHandler 会缓冲整个响应再写出,对流式发送
+	// 的 APK 下载既没必要又浪费内存,且超时会截断传输。优先匹配后直接交给 handler。
+	if r.Method == http.MethodGet && r.URL.Path == "/api/app/download" {
+		s.handleAppDownload(w, r)
+		return
+	}
+	http.TimeoutHandler(http.HandlerFunc(s.serveAPI), apiTimeout, "服务超时").ServeHTTP(w, r)
+}
+
+// serveAPI 处理除大文件下载外的全部路由。由 ServeHTTP 经 TimeoutHandler 包裹,
+// 单个 API 请求超过 apiTimeout 即返回 503 并中断,防止慢查询/卡住的 handler 拖垮服务。
+func (s *mediaServer) serveAPI(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && (r.URL.Path == "/health" || r.URL.Path == "/api/health"):
 		s.writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -150,8 +174,6 @@ func (s *mediaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleSearch(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/app/update":
 		s.handleAppUpdate(w, r)
-	case r.Method == http.MethodGet && r.URL.Path == "/api/app/download":
-		s.handleAppDownload(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/crash/report":
 		s.handleCrashReport(w, r)
 	default:
@@ -220,6 +242,12 @@ func (s *mediaServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	if query == "" {
 		s.writeJSON(w, http.StatusOK, SearchResponse{Query: "", Total: 0, Items: []VideoSummary{}})
+		return
+	}
+	// 搜索经三列 lower() LIKE '%q%' 全表扫描,无界 query 会放大计算量。128 字符
+	// 足够覆盖真实关键词;超长一律拒绝,避免被滥用拖垮 SQLite 单连接。
+	if len(query) > maxSearchQueryBytes {
+		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "QUERY_TOO_LONG", Message: "搜索关键词过长。"})
 		return
 	}
 	page, pageSize, err := paginationFromRequest(r)

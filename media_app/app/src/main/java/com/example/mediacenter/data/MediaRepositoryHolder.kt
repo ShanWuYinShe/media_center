@@ -19,6 +19,8 @@ object MediaRepositoryHolder {
 
     val repository: MediaRepository by lazy {
         val prefs = appContext?.getSharedPreferences("media_prefs", Context.MODE_PRIVATE)
-        MediaRepository(api = MediaApi(BuildConfig.MEDIA_SERVER_URL), prefs = prefs)
+        // 独立缓存目录:OkHttp Cache 要求独占目录,不能与其他组件共享。
+        val apiCacheDir = appContext?.cacheDir?.resolve("api-cache")
+        MediaRepository(api = MediaApi(BuildConfig.MEDIA_SERVER_URL, cacheDir = apiCacheDir), prefs = prefs)
     }
 }
