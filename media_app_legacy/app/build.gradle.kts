@@ -81,6 +81,21 @@ android {
 
     buildToolsVersion = "37.0.0"
     compileSdkMinor = 0
+
+    buildTypes {
+        // release 开启 R8 minify + 资源压缩,减小发布包体积。
+        // 自用包用 debug keystore 签名,无需维护正式 keystore,
+        // 同时保证 release APK 可直接安装(unsigned APK 无法安装)。
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+    }
 }
 
 /**
