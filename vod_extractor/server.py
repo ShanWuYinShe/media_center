@@ -1,6 +1,9 @@
+import ipaddress
 import json
 import os
 import selectors
+import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -51,6 +54,9 @@ class Handler(BaseHTTPRequestHandler):
             url = payload.get("url")
             if not isinstance(url, str) or not is_http_url(url):
                 self.send_json(400, {"error": "url must be an http(s) URL"})
+                return
+            if not is_safe_target(url):
+                self.send_json(400, {"error": "url target is not allowed"})
                 return
             extracted = extract_vod(url)
         except TimeoutError:
@@ -123,6 +129,57 @@ def is_http_url(value):
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+def is_safe_target(value):
+    """SSRF 防护:拒绝解析到私有/环回/链路本地/保留网段的目标。
+
+    yt-dlp 会以容器身份访问该 URL,若不限制,攻击者可让它打云元数据端点
+    (169.254.169.254)、Docker 内网网关、同 compose 网络的 admin 接口。
+
+    判定策略:
+    - 字面 IP:直接校验,私网/环回/链路本地/保留/组播/未指定一律拒绝。
+    - 域名:解析全部 A/AAAA 记录,**所有地址都命中私网才拒绝**;只要有任一
+      公网地址就放行(CDN 域名常返回混合的 IPv4 公网 + IPv6 占位记录,
+      如 YouTube 在国内返回 2001::1)。DNS 失败时交由 yt-dlp 自行处理。
+    注意:DNS 与实际请求之间存在 TOCTOU,但此处挡掉了纯内网目标。
+    """
+    parsed = urlparse(value)
+    host = parsed.hostname
+    if not host:
+        return False
+    # 先按字面 IP 校验(域名可能是 IP 字面量)
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        # 域名:解析后只要有任一公网地址即放行
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except socket.gaierror:
+            return True
+        has_any_address = False
+        for info in infos:
+            try:
+                ip = ipaddress.ip_address(info[4][0])
+            except (ValueError, IndexError):
+                continue
+            has_any_address = True
+            if not _is_private_or_reserved(ip):
+                return True
+        # 所有解析到的地址都是私网(或完全没解析到地址)→ 拒绝
+        return not has_any_address
+    return not _is_private_or_reserved(ip)
+
+
+def _is_private_or_reserved(ip):
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
 def extract_vod(url):
     if not EXTRACTOR_SEMAPHORE.acquire(blocking=False):
         raise ExtractorBusyError("extractor is busy")
@@ -133,10 +190,13 @@ def extract_vod(url):
 
 
 def run_extractor(url):
+    # start_new_session=True 让 yt-dlp 及其子进程(ffmpeg 等)独占进程组,
+    # stop_process 用 os.killpg 杀整组,避免 SIGKILL 只杀主进程留下孤儿。
     process = subprocess.Popen(
         extractor_command(url),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        start_new_session=True,
     )
     stdout, stderr = read_limited_process_output(process)
     if process.returncode != 0:
@@ -177,7 +237,7 @@ def extractor_cookies_file():
     if os.path.isfile(COOKIES_FILE):
         return COOKIES_FILE
     if COOKIES_FILE_EXPLICIT:
-        raise RuntimeError("configured cookies file is not readable")
+        raise ValueError("configured cookies file is not readable")
     return None
 
 
@@ -228,19 +288,38 @@ def read_limited_process_output(process):
         return bytes(stdout), bytes(stderr)
     finally:
         selector.close()
+        # 显式关闭 pipe fd,不依赖 Popen GC(异常路径下可能滞后回收)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
 
 
 def stop_process(process):
+    # 杀整个进程组(start_new_session=True 创建的),收掉 yt-dlp 派生的 ffmpeg
+    # 等子进程,避免孤儿继续消耗资源。进程组已失效时退回杀单个进程。
     if process.poll() is None:
-        process.kill()
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            process.kill()
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        pass
+        log_internal(f"process {process.pid} did not exit after kill")
 
 
 def main():
+    # 启动期校验:显式配置的 cookies 文件必须存在且可读,否则 fail-fast
+    # (避免运行期每次请求都报错,且静默降级会让登录受限内容解析全失败)。
+    if COOKIES_FILE_EXPLICIT and not os.path.isfile(COOKIES_FILE):
+        print(f"error: configured cookies file not found: {COOKIES_FILE}", file=sys.stderr)
+        sys.exit(1)
+
     server = ThreadingHTTPServer((HOST, PORT), Handler)
+    server.daemon_threads = True
     print(f"vod extractor listening on {HOST}:{PORT}", flush=True)
     server.serve_forever()
 
