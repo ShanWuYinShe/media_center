@@ -168,16 +168,21 @@ dependencies {
     // Conscrypt:作为 JCE Provider 在进程级注入,让 OkHttp / HttpsURLConnection /
     // Media3 DefaultHttpDataSource 统一走 BoringSSL,解决老系统自带 SSL 不支持目标
     // 站点 TLS 握手的问题(替代此前自研的 OCSP soft-fail TrustManager)。
-    implementation("org.conscrypt:conscrypt-android:2.5.2")
+    // 2.6.1:含 #1268(2.5.3 的 JNI 崩溃)修复 + 16KB 页对齐;2.5.3 有崩溃不可用。
+    // 注意:2.6.x 放弃 API 19/20 支持,故 legacy 变体(minSdk 19)仍锁 2.5.2。
+    implementation("org.conscrypt:conscrypt-android:2.6.1")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 
     // Compose BOM + TV Material
-    val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
+    val composeBom = platform("androidx.compose:compose-bom:2025.12.01")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
+    // material3 1.4.0 起不再传递引入 material-icons-core,需显式声明
+    // (项目用 Icons.Filled.Search/Settings、Icons.AutoMirrored.Filled.ArrowBack)。
+    implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.tv:tv-material:1.0.0")
     implementation("androidx.tv:tv-foundation:1.0.0")
     implementation("androidx.activity:activity-compose:1.13.0")
