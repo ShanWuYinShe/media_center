@@ -21,8 +21,11 @@ App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部�
 ```bash
 cd media_app
 # JAVA_HOME 见全局「本机环境」Android Studio JBR 条目（以 ls 验证，变动时用 mdfind 定位）
-JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:assembleDebug
-# 产物: app/build/outputs/apk/debug/app-debug.apk
+# --no-daemon 必加：Gradle/Kotlin Daemon 默认构建后 idle 保留数小时不退出（各 -Xmx2g），
+# AI agent 多次构建会累积多个 java 进程撑爆内存。--no-daemon 让构建完 java 进程立即退出。
+# release（非 debug）：已配 debug 签名（signingConfig=debug）+ R8 minify，体积减半且可直接安装。
+JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:assembleRelease --no-daemon
+# 产物: app/build/outputs/apk/release/app-release.apk
 ```
 
 - 部署 APK：部署时如 `media_app/` 有变更，编译 APK 并上传到服务器的 `.wework/generated/media_center/media-center-app.apk`，同时生成 manifest JSON。
@@ -34,7 +37,7 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
     1. 在 Worktree 内提交代码变更（确保要发布的 commit 已就绪）。
     2. 按变更类型决定下一 SemVer：`major`（破坏性）/`minor`（新功能）/`patch`（bug 修复）。
     3. 合并进主分支后，在主工作树于当前 commit 打 tag 并推送：`git tag vX.Y.Z && git push origin vX.Y.Z && git push origin main`（tag 必须在要发布的 commit 上）。
-    4. 随后构建（`./gradlew :app:assembleDebug` 或 `:app:assembleRelease`）即得到干净版本号（`git describe` 在 tag 上产出 `X.Y.Z`，无 `-dev.N`）。
+    4. 随后构建（`./gradlew :app:assembleRelease --no-daemon`）即得到干净版本号（`git describe` 在 tag 上产出 `X.Y.Z`，无 `-dev.N`）。
     注意：tag 要打在 media_center 仓库（非外层 `workwork` 仓库）；版本号与外层仓库的提交/tag 无关。
   - SHA256 校验和自动计算
   - 命令：`ssh workwork-server "cd service && cat > .wework/generated/media_center/app-update.json << 'EOF' { ... } EOF"`
