@@ -18,7 +18,10 @@
 | HTTP 状态 | code | 含义 |
 |-----------|------|------|
 | 400 | `BAD_REQUEST` | 参数格式不合法 |
-| 404 | `NOT_FOUND` | 分类不存在 |
+| 400 | `QUERY_TOO_LONG` | 搜索关键词超过 128 字节 |
+| 401 | `UNAUTHORIZED` | 凭证接口令牌缺失/不匹配，或服务端未配置令牌 |
+| 404 | `NOT_FOUND` | 资源不存在（分类、路径等） |
+| 429 | `RATE_LIMITED` | 触发 per-IP 限流 |
 | 500 | `INTERNAL_ERROR` | 服务端内部错误 |
 
 ## 数据模型
@@ -44,7 +47,7 @@ type VideoSummary = {
 
 ## Endpoints
 
-### `GET /providers`
+### `GET /api/providers`
 
 返回 catalog 中有 approved 视频的所有视频源。
 
@@ -52,7 +55,7 @@ type VideoSummary = {
 { "items": [{ "id": "bilibili", "name": "B站" }] }
 ```
 
-### `GET /providers/{provider}/categories`
+### `GET /api/providers/{provider}/categories`
 
 返回某视频源下有 approved 视频的分类列表。
 
@@ -60,7 +63,7 @@ type VideoSummary = {
 { "items": [{ "id": "movies", "title": "电影", "description": "院线电影" }] }
 ```
 
-### `GET /providers/{provider}/categories/{categoryId}/videos?page=1&pageSize=20`
+### `GET /api/providers/{provider}/categories/{categoryId}/videos?page=1&pageSize=20`
 
 返回某分类下已审核的视频列表（分页，按 pinned > rank > score 排序）。
 
@@ -76,7 +79,7 @@ type VideoSummary = {
 }
 ```
 
-### `GET /search?q=关键词&provider=bilibili&page=1&pageSize=20`
+### `GET /api/search?q=关键词&provider=bilibili&page=1&pageSize=20`
 
 在已审核（approved）目录中按关键词子串搜索（匹配标题/简介/作者，大小写不敏感，跨分类去重），按 pinned > score > native_id 排序。**不调任何上游**。`q` 为空返回空结果；`provider` 可选，非空时只搜索该视频源（App 端只支持 bilibili 播放时用它排除其他 provider 的结果）。
 
@@ -84,7 +87,7 @@ type VideoSummary = {
 { "query": "流浪地球", "total": 2, "items": [ { "id": "BV1xxx", "title": "流浪地球", ... } ] }
 ```
 
-### `GET /providers/credentials`
+### `GET /api/providers/credentials`
 
 返回 admin 配置的 provider 凭证（如 bilibili SESSDATA），App 端用于请求高分辨率内容。
 
@@ -94,9 +97,12 @@ type VideoSummary = {
 { "credentials": [] }
 ```
 
-### `GET /app/update?versionCode=1`
+### `GET /api/app/update?versionCode=1&variant=normal`
 
 返回 Android TV App 的最新发布版本。已是最新返回 `204 No Content`。
+
+- `versionCode`：当前已安装版本号，服务端仅当 manifest 版本更新时返回 200。
+- `variant`：可选，App 变体（`normal` 或 `legacy`）。非空时读取 `app-update-{variant}.json` 对应变体的发布清单；省略时读默认清单（`app-update.json`）。
 
 ```json
 {
@@ -110,11 +116,11 @@ type VideoSummary = {
 }
 ```
 
-### `GET /app/download`
+### `GET /api/app/download?variant=normal`
 
-下载 admin 发布并审查过的 Android TV App APK。
+下载 admin 发布并审查过的 Android TV App APK。`variant` 语义同上，非空时下载对应变体的 APK。
 
-### `POST /crash/report`
+### `POST /api/crash/report`
 
 接收 App 端崩溃上报，落盘到 `MEDIA_SERVER_CRASH_DIR`（默认 `data/crash-reports/crash.log`，JSONL，超 8MB 滚动）。请求体（JSON，≤512KB）：
 

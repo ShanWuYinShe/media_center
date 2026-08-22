@@ -36,6 +36,9 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 | GET | `/api/providers` | 有哪些视频源 |
 | GET | `/api/providers/{provider}/categories` | 某源的分类 |
 | GET | `/api/providers/{provider}/categories/{catId}/videos` | 某分类视频列表(分页) |
-| GET | `/api/app/update?versionCode=N` | App 更新检查 |
-| GET | `/api/app/download` | App APK 下载 |
+| GET | `/api/search?q=&provider=` | approved 目录关键词搜索(分页) |
+| GET | `/api/providers/credentials` | Provider 凭证下发(需 X-App-Token,限流 30/min/IP) |
+| GET | `/api/app/update?versionCode=N&variant=` | App 更新检查(variant: normal/legacy) |
+| GET | `/api/app/download?variant=` | App APK 下载 |
+| POST | `/api/crash/report` | App 崩溃上报(限流 10/min/IP) |
 | POST | `/internal/catalog/*` | 管理接口(需 X-Internal-Token) |
