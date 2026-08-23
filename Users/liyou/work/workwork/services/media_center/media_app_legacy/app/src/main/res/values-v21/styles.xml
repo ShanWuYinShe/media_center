@@ -1,9 +1,0 @@
-<resources>
-    <!-- API 21+ 维持 Material 主题（与既有视觉一致） -->
-    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
-        <item name="android:windowNoTitle">true</item>
-        <item name="android:windowActionBar">false</item>
-        <item name="android:windowFullscreen">true</item>
-        <item name="android:fontFamily">sans</item>
-    </style>
-</resources>
