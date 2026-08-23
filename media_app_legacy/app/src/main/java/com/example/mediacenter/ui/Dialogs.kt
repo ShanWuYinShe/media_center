@@ -29,7 +29,6 @@ import com.example.mediacenter.ui.components.dp
 import com.example.mediacenter.ui.components.elevationCompat
 import com.example.mediacenter.ui.components.frameMatch
 import com.example.mediacenter.ui.components.label
-import com.example.mediacenter.ui.components.label
 import com.example.mediacenter.ui.components.letterSpacingCompat
 import com.example.mediacenter.ui.components.match
 import com.example.mediacenter.ui.components.linearMatch
@@ -43,6 +42,28 @@ import com.example.mediacenter.ui.components.withTopMargin
 import com.example.mediacenter.ui.theme.Colors
 import com.example.mediacenter.update.AppUpdateResult
 import com.example.mediacenter.update.InstallLaunchResult
+
+// ── 弹窗 overscan 安全区 ──
+// 老 TV/盒子会裁掉画面边缘(overscan)。应用内页面已统一预留 56/40dp 安全区,
+// 但弹窗按 displayMetrics 全幅取比例会顶到物理边缘,边框/关闭按钮可能被切。
+// 统一在此扣除水平 48dp / 垂直 27dp 的双倍(两侧)安全边距。
+private const val DIALOG_SAFE_MARGIN_X_DP = 48
+private const val DIALOG_SAFE_MARGIN_Y_DP = 27
+
+/** 按 overscan 安全区收缩后的比例设置弹窗窗口尺寸;高度传 null 表示 wrap。 */
+internal fun Dialog.applySafeDialogLayout(
+    widthFraction: Float,
+    heightFraction: Float? = null,
+) {
+    val dm = context.resources.displayMetrics
+    val density = (context as? MainActivity)?.tvDensity ?: dm.density
+    val safeX = (DIALOG_SAFE_MARGIN_X_DP * density * 2).toInt()
+    val safeY = (DIALOG_SAFE_MARGIN_Y_DP * density * 2).toInt()
+    window?.setLayout(
+        ((dm.widthPixels - safeX) * widthFraction).toInt(),
+        if (heightFraction != null) ((dm.heightPixels - safeY) * heightFraction).toInt() else ViewGroup.LayoutParams.WRAP_CONTENT,
+    )
+}
 
 internal fun MainActivity.showDescriptionDialog(title: String, description: String) {
         val activity = this
@@ -86,7 +107,7 @@ internal fun MainActivity.showDescriptionDialog(title: String, description: Stri
             card.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(16)))
             setContentView(card)
             window?.setBackgroundDrawableResource(android.R.color.transparent)
-            window?.setLayout((resources.displayMetrics.widthPixels * 0.62f).toInt(), (resources.displayMetrics.heightPixels * 0.72f).toInt())
+            applySafeDialogLayout(0.62f, 0.72f)
             close.post { close.requestFocus() }
         }.show()
     }
@@ -177,7 +198,7 @@ internal fun MainActivity.showSystemInfoDialog() {
             card.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(20)))
             setContentView(card)
             window?.setBackgroundDrawableResource(android.R.color.transparent)
-            window?.setLayout((resources.displayMetrics.widthPixels * 0.62f).toInt(), (resources.displayMetrics.heightPixels * 0.72f).toInt())
+            applySafeDialogLayout(0.62f, 0.72f)
             close.post { close.requestFocus() }
         }.show()
     }
@@ -302,15 +323,28 @@ internal fun MainActivity.showOptionListDialog(
         card.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(16)))
         setContentView(card)
         window?.setBackgroundDrawableResource(android.R.color.transparent)
-        window?.setLayout((resources.displayMetrics.widthPixels * 0.62f).toInt(), (resources.displayMetrics.heightPixels * 0.72f).toInt())
-        // 焦点落到当前项(超出可视区时先滚动过去);无 current 则落到关闭按钮
+        applySafeDialogLayout(0.62f, 0.72f)
+        // 焦点落到当前项;无 current 则落到关闭按钮。
+        // scrollToPosition 后布局未执行,屏外项 findViewHolder 返回 null——
+        // 长列表(200+ 集选集正是用 RV 的场景)会静默退化成焦点落关闭按钮。
+        // 改为 scrollToPositionWithOffset 预定位 + 布局完成后二次重试聚焦。
+        val focusIndex = currentIndex ?: -1
+        if (focusIndex >= 0) {
+            (recycler.layoutManager as? LinearLayoutManager)
+                ?.scrollToPositionWithOffset(focusIndex, recycler.height / 3)
+        }
         recycler.post {
-            val focusIndex = currentIndex ?: -1
-            if (focusIndex >= 0) {
-                recycler.scrollToPosition(focusIndex)
-                recycler.findViewHolderForAdapterPosition(focusIndex)?.itemView?.requestFocus() ?: close.requestFocus()
-            } else {
+            if (focusIndex < 0) {
                 close.requestFocus()
+                return@post
+            }
+            val tryFocus = {
+                val vh = recycler.findViewHolderForAdapterPosition(focusIndex)
+                vh?.itemView?.requestFocus()
+                vh != null
+            }
+            if (!tryFocus()) {
+                recycler.post { if (!tryFocus()) close.requestFocus() }
             }
         }
     }.show()
@@ -360,7 +394,7 @@ internal fun MainActivity.promptInstallUpdate(result: AppUpdateResult.ReadyToIns
             card.addView(actions, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(18)))
             setContentView(card)
             window?.setBackgroundDrawableResource(android.R.color.transparent)
-            window?.setLayout((resources.displayMetrics.widthPixels * 0.48f).toInt(), wrap())
+            applySafeDialogLayout(0.48f)
             install.post { install.requestFocus() }
         }.show()
     }
@@ -395,7 +429,7 @@ internal fun MainActivity.showUpdateMessage(message: String) {
             card.addView(close, LinearLayout.LayoutParams(wrap(), dp(44)).withTopMargin(dp(16)))
             setContentView(card)
             window?.setBackgroundDrawableResource(android.R.color.transparent)
-            window?.setLayout((resources.displayMetrics.widthPixels * 0.42f).toInt(), wrap())
+            applySafeDialogLayout(0.42f)
             close.post { close.requestFocus() }
         }.show()
     }

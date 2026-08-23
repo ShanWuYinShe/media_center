@@ -10,6 +10,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import com.example.mediacenter.ui.theme.AppleBlue
+import com.example.mediacenter.ui.theme.AppleBlueDark
 import com.example.mediacenter.ui.theme.CardGray
 import com.example.mediacenter.ui.theme.TextPrimary
 
@@ -23,7 +24,9 @@ internal fun SelectChip(
         onClick = onClick,
         modifier = Modifier.requiredHeight(48.dp),
         colors = ButtonDefaults.colors(
-            containerColor = if (selected) AppleBlue else CardGray,
+            // selected 非聚焦时用暗蓝：焦点态(Apple Blue)必须是视觉最强状态，
+            // selected 与 focused 同色会让用户分不清“当前选中”和“现在操作的是哪个”。
+            containerColor = if (selected) AppleBlueDark else CardGray,
             focusedContainerColor = AppleBlue,
             contentColor = TextPrimary,
             focusedContentColor = TextPrimary,

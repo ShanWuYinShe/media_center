@@ -125,7 +125,10 @@ class MainActivity : ComponentActivity() {
                         currentState.playing != null -> viewModel.back()
                         currentState.selected != null -> {
                             homeFocusArea = HomeFocusArea.Video
-                            pendingHomeFocus = currentState.items.firstOrNull()?.let { HomeFocusTarget.Video(it.id) }
+                            // 不再钉死到第一个视频：置空 pendingHomeFocus，让
+                            // homeFocusTargetFor 走 rememberedVideoFocusByCategory
+                            // 恢复用户离开前的卡片(滚动位置由 savedGridState 恢复)。
+                            pendingHomeFocus = null
                             viewModel.back()
                         }
                         searchVisible -> {
@@ -264,6 +267,11 @@ class MainActivity : ComponentActivity() {
                 updatePlayerErrorOverlay(state.error)
             }
             state.selected != null -> {
+                // 进详情前保存网格滚动位置，返回时 videoGrid 用它恢复
+                // (此前只有 invalidateUi 会存，直接进详情会丢滚动位置)。
+                if (savedGridState == null) {
+                    savedGridState = homeVideoRecycler?.layoutManager?.onSaveInstanceState()
+                }
                 clearHomeVideoList()
                 resetHomeDetailsPrefetch()
                 releasePlayer()

@@ -9,7 +9,6 @@ import com.example.mediacenter.MainActivity
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.components.centeredLoading
 import com.example.mediacenter.ui.components.dp
-import com.example.mediacenter.ui.components.dp
 import com.example.mediacenter.ui.components.elevationCompat
 import com.example.mediacenter.ui.components.frameMatch
 import com.example.mediacenter.ui.components.label

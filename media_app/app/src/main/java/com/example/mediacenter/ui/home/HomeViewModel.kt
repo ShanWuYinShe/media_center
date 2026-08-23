@@ -52,6 +52,8 @@ class HomeViewModel(
     // VM 生命周期内只检查一次;下载失败/取消后允许再次检查
     private var updateChecked = false
     private var updateDownloading = false
+    // "后台下载":弹窗被用户关掉但下载协程继续;进度回调据此停止回写弹窗状态
+    private var updateDialogHiddenWhileDownloading = false
 
     // 跟踪当前加载任务:切换 provider / 刷新时取消旧任务,
     // 避免慢的旧请求后完成覆盖新状态(旧 provider 内容配新 currentProvider)。
@@ -131,7 +133,9 @@ class HomeViewModel(
             } catch (e: Exception) {
                 // 被取消的任务(CancellationException)不当作错误展示
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                _uiState.value = _uiState.value.copy(isLoading = false, error = e.message)
+                // 原始异常常是英文技术信息,直接上屏对 TV 用户不友好;记日志、给固定文案
+                AppLog.e("Home", "loadHome failed: ${e.message}", e)
+                _uiState.value = _uiState.value.copy(isLoading = false, error = "首页加载失败，请重试")
             }
         }
     }
@@ -166,10 +170,14 @@ class HomeViewModel(
         val manager = updateManager ?: return
         if (updateDownloading) return
         updateDownloading = true
+        updateDialogHiddenWhileDownloading = false
         _updateState.value = UpdateDialogState.Downloading(info, 0f)
         viewModelScope.launch {
             when (val result = manager.download(info) { progress ->
-                _updateState.value = UpdateDialogState.Downloading(info, progress)
+                // 用户已选"后台下载"时不再回写弹窗状态，否则每次进度回调都会把弹窗重新顶出来
+                if (!updateDialogHiddenWhileDownloading) {
+                    _updateState.value = UpdateDialogState.Downloading(info, progress)
+                }
             }) {
                 is UpdateDownloadResult.Ready -> {
                     _updateState.value = null
@@ -198,9 +206,22 @@ class HomeViewModel(
         }
     }
 
-    fun dismissUpdate() {
-        // 下载中不允许关闭,避免任务与 UI 状态脱节(弹窗侧同样约束)
-        if (_updateState.value is UpdateDialogState.Downloading) return
+    /**
+     * 关闭更新弹窗。
+     * 非 Downloading 状态：直接清状态并允许再次检查。
+     * Downloading 且 allowDuringDownload=true：仅隐藏弹窗，后台下载继续；
+     *   完成后仍会拉起安装器，失败则 Failed 弹窗重新出现。不重置
+     *   updateDownloading/updateChecked（任务还活着）。
+     * Downloading 且不允许（默认）：保持原阻塞行为，防止任务与 UI 脱节。
+     */
+    fun dismissUpdate(allowDuringDownload: Boolean = false) {
+        val current = _updateState.value
+        if (current is UpdateDialogState.Downloading) {
+            if (!allowDuringDownload) return
+            updateDialogHiddenWhileDownloading = true
+            _updateState.value = null
+            return
+        }
         _updateState.value = null
         updateDownloading = false
         updateChecked = false

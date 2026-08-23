@@ -9,16 +9,23 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.requiredHeight
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -26,6 +33,7 @@ import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.DividerGray
 import com.example.mediacenter.ui.components.ErrorView
+import com.example.mediacenter.ui.home.VideoCard
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.player.SelectChip
 import com.example.mediacenter.ui.theme.TextPrimary
@@ -55,10 +63,13 @@ fun SearchScreen(
     })
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        // 进入搜索页即聚焦输入框：遥控器第一下 OK 直接弹出 IME，不用先找输入框
+        val searchFocus = remember { FocusRequester() }
+        LaunchedEffect(Unit) { searchFocus.requestFocus() }
         OutlinedTextField(
             value = state.query,
             onValueChange = { viewModel.search(it) },
-            modifier = Modifier.fillMaxWidth().requiredHeight(56.dp),
+            modifier = Modifier.fillMaxWidth().requiredHeight(56.dp).focusRequester(searchFocus),
             placeholder = { Text("搜索视频...", color = TextTertiary) },
             singleLine = true,
             colors = OutlinedTextFieldDefaults.colors(
@@ -100,20 +111,18 @@ fun SearchScreen(
                 )
             }
             else -> {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 海报网格与首页视觉一致(纯文字行在 10ft 下识别度差、观感突兀);
+                // GridCells.Adaptive 让卡片宽度自适应 720p/1080p/4K。
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(280.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(bottom = 32.dp),
+                    // 返回搜索结果时焦点回到原结果卡
+                    modifier = Modifier.fillMaxSize().focusRestorer(),
+                ) {
                     items(state.results, key = { it.id }) { video ->
-                        androidx.tv.material3.Card(
-                            onClick = { onVideoClick(video) },
-                            modifier = Modifier.fillMaxWidth().requiredHeight(48.dp),
-                        ) {
-                            Text(
-                                video.title,
-                                color = TextPrimary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            )
-                        }
+                        VideoCard(video = video, onClick = { onVideoClick(video) })
                     }
                 }
             }

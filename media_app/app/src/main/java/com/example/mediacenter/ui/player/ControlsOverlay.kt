@@ -11,12 +11,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeight
-import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -25,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,8 +40,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.mediacenter.data.PlaybackResult
+import com.example.mediacenter.ui.components.TvIconButton
 import com.example.mediacenter.ui.theme.AppleBlue
-import com.example.mediacenter.ui.theme.CardGray
+import com.example.mediacenter.ui.theme.DividerGray
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.TextSecondary
 import com.example.mediacenter.ui.theme.UiIcons
@@ -81,11 +82,9 @@ internal fun ControlsOverlay(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            IconButton(
-                onClick = onBack,
-                modifier = Modifier.requiredSize(48.dp),
-            ) {
-                Icon(UiIcons.ArrowBack, contentDescription = "返回", tint = TextPrimary)
+            // TvIconButton:遥控器聚焦时有 Apple Blue 高亮背景，纯图标在 10ft 下焦点不可见
+            TvIconButton(onClick = onBack, contentDescription = "返回") {
+                Icon(UiIcons.ArrowBack, contentDescription = null, tint = TextPrimary)
             }
         }
         // 底部:进度 + 播放控制 + 分P + 清晰度
@@ -96,57 +95,73 @@ internal fun ControlsOverlay(
                 .background(Color.Black.copy(alpha = 0.65f))
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
-            // 拖动中的临时进度:拖动期间只更新本地值,松手/按键结束时才真正
-            // seek——避免飞鼠/触屏拖动产生每帧连续 seek 请求。
+            // 进度条与时间同行(Row 内横向 weight)。此前 Slider 在 Column 里用
+            // vertical weight,会把整个底栏撑满全屏高度、遮住整幅画面——已修复。
             var dragPositionMs by remember { mutableStateOf<Float?>(null) }
             val sliderMax = durationMs.toFloat().coerceAtLeast(1f)
-            // 焦点在 Slider 上时,左右键 = 快进/快退 10s(长按连续触发)
-            Slider(
-                value = (dragPositionMs ?: positionMs.toFloat()).coerceIn(0f, sliderMax),
-                onValueChange = { value ->
-                    dragPositionMs = value
-                },
-                onValueChangeFinished = {
-                    dragPositionMs?.let { onSeek(it.toLong()) }
-                    dragPositionMs = null
-                },
-                valueRange = 0f..sliderMax,
-                modifier = Modifier
-                    .weight(1f)
-                    .requiredHeight(48.dp)
-                    .onPreviewKeyEvent { event ->
-                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                        if (event.key != Key.DirectionLeft && event.key != Key.DirectionRight) {
-                            return@onPreviewKeyEvent false
-                        }
-                        val delta = if (event.key == Key.DirectionLeft) -SEEK_STEP_MS else SEEK_STEP_MS
-                        onSeek((positionMs + delta).coerceIn(0L, durationMs.coerceAtLeast(0L)))
-                        true
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // 焦点在 Slider 上时,左右键 = 快进/快退 10s(长按连续触发)
+                Slider(
+                    value = (dragPositionMs ?: positionMs.toFloat()).coerceIn(0f, sliderMax),
+                    onValueChange = { value ->
+                        dragPositionMs = value
                     },
-                colors = SliderDefaults.colors(
-                    thumbColor = AppleBlue,
-                    activeTrackColor = AppleBlue,
-                    inactiveTrackColor = CardGray,
-                ),
-            )
-            Spacer(Modifier.width(12.dp))
-            Text(
-                text = "${formatDuration(positionMs)} / ${formatDuration(durationMs)}",
-                color = TextSecondary,
-                fontSize = 14.sp,
-            )
+                    onValueChangeFinished = {
+                        dragPositionMs?.let { onSeek(it.toLong()) }
+                        dragPositionMs = null
+                    },
+                    valueRange = 0f..sliderMax,
+                    modifier = Modifier
+                        .weight(1f)
+                        .requiredHeight(48.dp)
+                        .onPreviewKeyEvent { event ->
+                            // 与拖动同款两段式：KeyDown 只更新本地预览值，KeyUp 才提交
+                            // 真实 seek。否则长按方向键的连发会产生一串连续 seek 导致卡顿。
+                            val leftRight =
+                                event.key == Key.DirectionLeft || event.key == Key.DirectionRight
+                            when {
+                                event.type == KeyEventType.KeyDown && leftRight -> {
+                                    val delta =
+                                        if (event.key == Key.DirectionLeft) -SEEK_STEP_MS else SEEK_STEP_MS
+                                    val base = dragPositionMs ?: positionMs.toFloat()
+                                    dragPositionMs = base.plus(delta).coerceIn(0f, sliderMax)
+                                    true
+                                }
+                                event.type == KeyEventType.KeyUp && dragPositionMs != null -> {
+                                    val pending = dragPositionMs
+                                    if (pending != null) onSeek(pending.toLong())
+                                    dragPositionMs = null
+                                    true
+                                }
+                                else -> false
+                            }
+                        },
+                    colors = SliderDefaults.colors(
+                        thumbColor = AppleBlue,
+                        activeTrackColor = AppleBlue,
+                        inactiveTrackColor = DividerGray,
+                    ),
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    text = "${formatDuration(positionMs)} / ${formatDuration(durationMs)}",
+                    color = TextSecondary,
+                    fontSize = 16.sp,
+                )
+            }
             Spacer(Modifier.height(8.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                IconButton(
+                TvIconButton(
                     onClick = onTogglePlay,
-                    modifier = Modifier.requiredSize(48.dp).focusRequester(controlsFocus),
+                    contentDescription = if (isPlaying) "暂停" else "播放",
+                    modifier = Modifier.focusRequester(controlsFocus),
                 ) {
                     Icon(
                         imageVector = if (isPlaying) UiIcons.Pause else UiIcons.PlayArrow,
-                        contentDescription = if (isPlaying) "暂停" else "播放",
+                        contentDescription = null,
                         tint = TextPrimary,
                     )
                 }
@@ -156,7 +171,14 @@ internal fun ControlsOverlay(
             // 不会把播放按钮挤出屏宽。focusGroup 让 DPad 从上方 Slider/按钮落入更顺滑。
             if (playbackResult.pages.totalPages > 1) {
                 Spacer(Modifier.height(8.dp))
+                // 控制条出现时把当前 P 滚进可视区(+1 是行首"分P"标签项),
+                // 否则上百 P 的视频当前选中 chip 在屏幕外,用户不知道现在播到哪一集。
+                val pagesListState = rememberLazyListState()
+                LaunchedEffect(playbackResult.pages.currentPage) {
+                    pagesListState.animateScrollToItem(playbackResult.pages.currentPage + 1)
+                }
                 LazyRow(
+                    state = pagesListState,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier

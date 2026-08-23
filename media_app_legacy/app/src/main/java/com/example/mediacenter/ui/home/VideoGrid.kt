@@ -144,7 +144,9 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
         return LinearLayout(this).apply {
             gravity = Gravity.CENTER
             orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(24), 0, dp(24), 0)
+            // 最小高度 48dp：这是可聚焦行，太矮会让焦点指示几乎不可见
+            minimumHeight = dp(48)
+            setPadding(dp(24), dp(8), dp(24), dp(8))
             background = rounded(Colors.GlassFill, 24, 1, Colors.GlassBorder)
             isFocusable = true
             isClickable = true
@@ -319,7 +321,7 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
             private val title = activity.label("", 14f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
                 gravity = Gravity.BOTTOM or Gravity.START
             }
-            private val meta = activity.label("", 11f, Color.argb(170, 255, 255, 255), maxLines = 1)
+            private val meta = activity.label("", 12f, Color.argb(210, 255, 255, 255), maxLines = 1)
             private val focusIndicator = View(activity).apply {
                 background = activity.rounded(Colors.APPLE_BLUE, 999)
                 alpha = 0f
@@ -390,7 +392,9 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
                 boundVideo = video
                 card.tag = HomeFocusTarget.Video(video.id).viewTag()
                 title.text = video.title
+                // 无时长信息时 meta 为空:直接隐藏行,不显示"公开视频"这类无意义占位文案
                 meta.text = videoMeta(video)
+                meta.visibility = if (meta.text.isBlank()) View.GONE else View.VISIBLE
                 initials.text = video.title.take(2).ifBlank { "影" }
                 boundThumbnailUrl = video.thumbnailUrl
                 image.cancelThumbnailLoad()

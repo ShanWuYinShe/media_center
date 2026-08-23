@@ -64,6 +64,10 @@ internal fun PlayerContent(
     var showControls by remember { mutableStateOf(true) }
     var playerError by remember { mutableStateOf<String?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
+    // 缓冲中提示：卡顿不再表现为“画面冻住不知道在干嘛”
+    var isBuffering by remember { mutableStateOf(false) }
+    // 最近一次遥控器按键时间：控制条显示期间有任何操作都重置自动隐藏计时
+    var lastInteractionMs by remember { mutableLongStateOf(0L) }
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
     // 重试计数:URL 未变(签名地址相同)时也能强制重走加载流程
@@ -141,6 +145,7 @@ internal fun PlayerContent(
             }
 
             override fun onPlaybackStateChanged(state: Int) {
+                isBuffering = state == Player.STATE_BUFFERING
                 if (state == Player.STATE_READY && shouldResume) {
                     shouldResume = false
                     val durationMs = controller?.duration?.coerceAtLeast(0L) ?: 0L
@@ -191,12 +196,13 @@ internal fun PlayerContent(
     }
 
     // 进度轮询;播放中每 5 秒持久化一次,崩溃/杀进程也能恢复。
-    // 暂停时停止轮询(每帧读 currentPosition + 写状态是无效开销)，恢复播放即重启本 effect。
-    // 覆盖层隐藏时跳过 positionMs/durationMs 写入:这两个状态只被覆盖层消费,
+    // 暂停且控制条隐藏时才完全停止轮询;暂停但控制条可见时继续刷新——
+    // 否则遥控器按键 seek 后进度条/时间纹丝不动,用户得不到任何反馈。
+    // 覆盖层隐藏且播放中时跳过 positionMs/durationMs 写入:这两个状态只被覆盖层消费,
     // 隐藏时无读者,写了也是无效开销(持久化照常,崩溃恢复不依赖 UI 可见)。
-    LaunchedEffect(isPlaying) {
-        if (!isPlaying) {
-            // 暂停瞬间刷一次位置 + 时长用于覆盖层显示，之后不再轮询。
+    LaunchedEffect(isPlaying, showControls) {
+        if (!isPlaying && !showControls) {
+            // 暂停瞬间刷一次位置 + 时长用于下次显示，之后不再轮询。
             positionMs = controller?.currentPosition?.coerceAtLeast(0L) ?: 0L
             durationMs = controller?.duration?.coerceAtLeast(0L) ?: 0L
             return@LaunchedEffect
@@ -210,7 +216,7 @@ internal fun PlayerContent(
                 durationMs = dur
             }
             tick++
-            if (tick % 10 == 0) {
+            if (isPlaying && tick % 10 == 0) {
                 PlaybackPositionStore.save(context, videoId, pos)
             }
             delay(500)
@@ -264,8 +270,9 @@ internal fun PlayerContent(
         }
     }
 
-    // 播放中自动隐藏控制条
-    LaunchedEffect(showControls, isPlaying) {
+    // 播放中自动隐藏控制条；显示期间任何按键(浏览分P/清晰度等)都会通过
+    // lastInteractionMs 重启本 effect，重新计满 4s——不会在操作中途突然消失。
+    LaunchedEffect(showControls, isPlaying, lastInteractionMs) {
         if (showControls && isPlaying) {
             delay(AUTO_HIDE_DELAY_MS)
             showControls = false
@@ -301,6 +308,7 @@ internal fun PlayerContent(
     if (playerError != null) {
         ErrorView(
             message = playerError!!,
+            autoFocusRetry = true,
             onRetry = {
                 playerError = null
                 loadEpoch++
@@ -318,7 +326,12 @@ internal fun PlayerContent(
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 if (event.key in CONTROL_KEYS && !showControls) {
                     showControls = true
+                    lastInteractionMs = System.currentTimeMillis()
                     return@onPreviewKeyEvent true
+                }
+                if (event.key in CONTROL_KEYS && showControls) {
+                    // 控制条已显示：本次按键用于操作，重置自动隐藏计时
+                    lastInteractionMs = System.currentTimeMillis()
                 }
                 false
             },
@@ -333,7 +346,20 @@ internal fun PlayerContent(
             update = { view -> view.player = controller },
             modifier = Modifier.fillMaxSize(),
         )
-        if (showControls) {
+        // 缓冲指示：画面未停但流没跟上时给出“正在加载”反馈
+        if (isBuffering) {
+            LoadingIndicator(modifier = Modifier.fillMaxSize())
+        }
+        // 控制条与解析失败错误层互斥渲染：错误层盖在控制条上时，
+        // 焦点可能落在被遮挡的控件上（看不见却拿到焦点）。
+        if (overlayError != null) {
+            ErrorView(
+                message = overlayError,
+                onRetry = onRetryResolve,
+                autoFocusRetry = true,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else if (showControls) {
             ControlsOverlay(
                 videoTitle = videoTitle,
                 playbackResult = playbackResult,
@@ -348,14 +374,6 @@ internal fun PlayerContent(
                 onSelectQuality = onSelectQuality,
                 onSelectPage = onSelectPage,
                 onBack = onBack,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-        // 解析失败覆盖层(切清晰度/分P失败,旧流已暂停,不影响画面)
-        if (overlayError != null) {
-            ErrorView(
-                message = overlayError,
-                onRetry = onRetryResolve,
                 modifier = Modifier.fillMaxSize(),
             )
         }

@@ -7,6 +7,7 @@ import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.parsePageId
+import com.example.mediacenter.log.AppLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -66,7 +67,9 @@ class PlayerViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            _uiState.value = _uiState.value.copy(isLoading = false, error = e.message)
+            // 原始异常可能是英文技术信息;记日志、给固定友好文案(与分类页一致)
+            AppLog.e("Player", "resolvePlayback failed: ${e.message}", e)
+            _uiState.value = _uiState.value.copy(isLoading = false, error = "播放地址解析失败，请重试")
         }
     }
 }

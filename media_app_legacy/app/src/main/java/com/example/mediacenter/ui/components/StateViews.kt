@@ -98,7 +98,7 @@ internal fun MainActivity.errorInline(message: String, onRetry: () -> Unit): Vie
             setPadding(0, dp(12), 0, 0)
         }
         row.addView(label(message, 14f, Colors.TEXT_DANGER, maxLines = 2), LinearLayout.LayoutParams(0, wrap(), 1f))
-        row.addView(pill("重试", selected = false, heightDp = 38, horizontalPaddingDp = 18, onClick = onRetry), LinearLayout.LayoutParams(wrap(), dp(38)).withStartMargin(dp(12)))
+        row.addView(pill("重试", selected = false, heightDp = 48, horizontalPaddingDp = 18, onClick = onRetry), LinearLayout.LayoutParams(wrap(), dp(48)).withStartMargin(dp(12)))
         return row
     }
 
@@ -111,7 +111,7 @@ internal fun MainActivity.homeInlineError(message: String): View {
         }
     }
 
-internal fun MainActivity.emptyState(message: String): View {
+internal fun MainActivity.emptyState(message: String, action: Pair<String, (() -> Unit)>? = null): View {
         val card = LinearLayout(this).apply {
             gravity = Gravity.CENTER
             orientation = LinearLayout.VERTICAL
@@ -120,6 +120,14 @@ internal fun MainActivity.emptyState(message: String): View {
         }
         card.addView(label(message, 18f, Colors.TEXT_TERTIARY, bold = true, maxLines = 1), linearWrap())
         card.addView(label("换个分类或关键词试试", 13f, Colors.TEXT_TERTIARY, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withTopMargin(dp(8)))
+        // 空态恢复动作(如"清除筛选")：给用户一个可聚焦的直接出口，
+        // 不用靠猜"按上键回到筛选栏"。
+        if (action != null) {
+            card.addView(
+                pill(action.first, selected = false, heightDp = 48, horizontalPaddingDp = 24, onClick = action.second),
+                LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(16)),
+            )
+        }
         return centeredCard(card)
     }
 

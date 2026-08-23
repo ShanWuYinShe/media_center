@@ -23,6 +23,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -34,6 +36,7 @@ import androidx.tv.material3.ButtonDefaults
 import coil.compose.AsyncImage
 import com.example.mediacenter.data.PlaybackPositionStore
 import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.ui.components.TvScrollableText
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.CardGray
 import com.example.mediacenter.ui.theme.ErrorRed
@@ -130,9 +133,13 @@ fun DetailScreen(
             }
         }
         Spacer(Modifier.height(24.dp))
+        // 主操作(播放)获得进入时焦点：简介溢出时上方还有"查看完整简介"按钮，
+        // 不指定焦点路径遥控器会先落在那里，多按一次才能到播放。
+        val playFocus = remember { FocusRequester() }
+        LaunchedEffect(video.id) { playFocus.requestFocus() }
         Button(
             onClick = onPlay,
-            modifier = Modifier.requiredHeight(56.dp).fillMaxWidth(),
+            modifier = Modifier.requiredHeight(56.dp).fillMaxWidth().focusRequester(playFocus),
             colors = ButtonDefaults.colors(containerColor = AppleBlue),
         ) {
             Text("播放", color = TextPrimary, fontSize = 18.sp)
@@ -158,16 +165,18 @@ private fun FullDescriptionDialog(
             )
         },
         text = {
-            Text(
-                description,
+            // 遥控器可滚动的长文：普通 verticalScroll 对 D-pad 无效
+            TvScrollableText(
+                text = description,
                 color = TextSecondary,
-                modifier = Modifier
-                    .verticalScroll(rememberScrollState())
-                    .fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth(),
             )
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            // 主按钮获得进入焦点(项目约定)，读简介时再按上键进入正文滚动
+            val closeFocus = remember { FocusRequester() }
+            LaunchedEffect(Unit) { closeFocus.requestFocus() }
+            TextButton(onClick = onDismiss, modifier = Modifier.focusRequester(closeFocus)) {
                 Text("关闭", color = TextPrimary)
             }
         },

@@ -138,7 +138,7 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
         }
         val infoScroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
-            overScrollMode = 2 // OVERSCROLL_NEVER
+            overScrollMode = View.OVER_SCROLL_NEVER
             clipChildren = false
             clipToPadding = false
         }

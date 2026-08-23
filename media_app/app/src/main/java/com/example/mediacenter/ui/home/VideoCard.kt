@@ -57,7 +57,8 @@ fun VideoCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp)
+                    // 两行标题(2×~20sp)+内边距需要 ~72dp 渐变遮罩，52dp 会盖不住第二行
+                    .height(72.dp)
                     .align(Alignment.BottomStart)
                     .background(
                         Brush.verticalGradient(

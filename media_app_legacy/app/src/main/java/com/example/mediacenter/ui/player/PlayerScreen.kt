@@ -35,7 +35,6 @@ import com.example.mediacenter.ui.showOptionListDialog
 import com.example.mediacenter.ui.components.dp
 import com.example.mediacenter.ui.components.elevationCompat
 import com.example.mediacenter.ui.components.formatTime
-import com.example.mediacenter.ui.components.dp
 import com.example.mediacenter.ui.components.letterSpacingCompat
 import com.example.mediacenter.ui.components.linearWrap
 import com.example.mediacenter.ui.components.withEndMargin
@@ -326,14 +325,24 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
                         showOverlay()
                         true
                     }
-                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                    // MEDIA_PREVIOUS/NEXT:专用键,直通。
+                    KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
                         viewModel.playPrevious()
                         showOverlay()
                         true
                     }
-                    KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT -> {
+                    KeyEvent.KEYCODE_MEDIA_NEXT -> {
                         viewModel.playNext()
                         showOverlay()
+                        true
+                    }
+                    // DPAD_UP/DOWN:误按率最高——双击确认(长按连发也不连续切)。
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        if (event.repeatCount == 0) guardedVideoSwitch(false) { viewModel.playPrevious(); showOverlay() }
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        if (event.repeatCount == 0) guardedVideoSwitch(true) { viewModel.playNext(); showOverlay() }
                         true
                     }
                     // MENU/INFO 键:多清晰度视频弹清晰度选择;只有一种清晰度时
@@ -378,6 +387,8 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
         // 避免控制层淡出后用户以为卡死。
         val bufferingSpinner = ProgressBar(this).apply {
             isIndeterminate = true
+            // TalkBack:纯图形进度件需要可朗读的状态说明
+            contentDescription = "缓冲中"
             // indeterminateTintList 是 API 21+,API 19 上调用会 NoSuchMethodError。
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 indeterminateTintList = ColorStateList.valueOf(Colors.APPLE_BLUE)
@@ -410,6 +421,32 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
         screen.requestFocus()
         showOverlay()
     }
+
+// UP/DOWN 切集的双击确认状态(文件级单例,进程内存活;见 guardedVideoSwitch)
+private var pendingSwitchIsNext = false
+private var pendingSwitchAtMs = 0L
+
+/**
+ * DPAD_UP/DOWN 切上一/下一集的双击确认：这两个键在遥控器上最容易误按，
+ * 直接切会打断播放并触发网络加载。第一次只 Toast 提示，2.5s 内同方向再按
+ * 才真正切换。MEDIA_PREVIOUS/NEXT 专用键语义明确，不经此确认直通。
+ */
+internal fun MainActivity.guardedVideoSwitch(isNext: Boolean, action: () -> Unit): Boolean {
+    val now = android.os.SystemClock.elapsedRealtime()
+    val confirmed = pendingSwitchIsNext == isNext && now - pendingSwitchAtMs < 2500L
+    pendingSwitchIsNext = isNext
+    pendingSwitchAtMs = now
+    if (confirmed) {
+        action()
+    } else {
+        android.widget.Toast.makeText(
+            this,
+            if (isNext) "再按一次下键切换下一集" else "再按一次上键切换上一集",
+            android.widget.Toast.LENGTH_SHORT,
+        ).show()
+    }
+    return true
+}
 
 internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlayer, state: MediaUiState): FrameLayout {
         val playingIndex = state.playingVideo
@@ -452,7 +489,7 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
         val statusText = label("", 15f, Colors.TEXT_SECONDARY, bold = true, maxLines = 1)
         // 快捷键提示(发现性):仅在当前场景下相关时显示。
         val hints = buildList {
-            if (hasPrevious || hasNext) add("▲▼ 切换视频")
+            if (hasPrevious || hasNext) add("连按两次上下键 切换视频")  // 双击确认防误切;不用 ▲▼ Unicode 字形(老盒子字体栈可能缺字)
             if (state.availableQualities.size > 1) add("MENU 键切换清晰度")
         }
         val statusRow = LinearLayout(this).apply {

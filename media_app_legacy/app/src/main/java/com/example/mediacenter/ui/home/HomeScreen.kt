@@ -125,6 +125,10 @@ internal fun MainActivity.renderHome(state: MediaUiState) {
                         state.durationFilter != DurationFilter.ALL -> "当前筛选下暂无内容"
                         else -> "当前分类暂无内容"
                     },
+                    // 筛选导致空结果时给一键出口，不用自己摸索回到筛选栏
+                    action = if (state.durationFilter != DurationFilter.ALL) {
+                        "清除筛选" to { viewModel.selectDurationFilter(DurationFilter.ALL) }
+                    } else null,
                 ),
                 frameMatch(),
             )
@@ -176,6 +180,7 @@ internal fun MainActivity.homeTopBar(
 
         val searchButton = circleIconButton(
             icon = PillIcon.Search,
+            contentDescription = "搜索",
             onClick = {
                 cancelPendingCategorySelect()
                 homeFocusArea = HomeFocusArea.Search
@@ -224,7 +229,7 @@ internal fun MainActivity.homeTopBar(
             val chip = pill(
                 text = category.title,
                 selected = category.id == selectedId,
-                heightDp = 44,
+                heightDp = 48,
                 horizontalPaddingDp = 22,
                 onClick = {
                     cancelPendingCategorySelect()
@@ -289,7 +294,7 @@ internal fun MainActivity.homeTopBar(
                 }
             }
             registerFocusTarget(HomeFocusTarget.Category(category.id), chip)
-            chipRow.addView(chip, LinearLayout.LayoutParams(wrap(), dp(44)).withEndMargin(dp(12)))
+            chipRow.addView(chip, LinearLayout.LayoutParams(wrap(), dp(48)).withEndMargin(dp(12)))
         }
 
         // 分类加载失败(categories 为空)时分类栏也要有可聚焦元素:
@@ -358,7 +363,7 @@ internal fun MainActivity.homeFilterBar(
             val chip = pill(
                 text = filter.label,
                 selected = filter == current,
-                heightDp = 40,
+                heightDp = 48,
                 horizontalPaddingDp = 18,
                 onClick = { viewModel.selectDurationFilter(filter) },
                 onFocusChange = { focused ->
@@ -393,7 +398,7 @@ internal fun MainActivity.homeFilterBar(
                 }
             }
             registerFocusTarget(HomeFocusTarget.Filter(filter.id), chip)
-            row.addView(chip, LinearLayout.LayoutParams(wrap(), dp(40)).withEndMargin(dp(10)))
+            row.addView(chip, LinearLayout.LayoutParams(wrap(), dp(48)).withEndMargin(dp(10)))
         }
         return row
     }
@@ -591,7 +596,7 @@ internal fun MainActivity.searchPanel(state: MediaUiState): View {
             clipToPadding = false
         }
         SEARCH_HOT_KEYWORDS.forEach { keyword ->
-            val chip = pill(keyword, selected = false, heightDp = 44, horizontalPaddingDp = 20) {
+            val chip = pill(keyword, selected = false, heightDp = 48, horizontalPaddingDp = 20) {
                 submitSearch(keyword)
             }.apply {
                 setOnKeyListener { _, keyCode, event ->

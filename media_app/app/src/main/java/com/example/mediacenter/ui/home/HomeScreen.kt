@@ -49,7 +49,9 @@ fun HomeScreen(
     updateState?.let { dialogState ->
         UpdateDialog(
             state = dialogState,
-            onDismiss = viewModel::dismissUpdate,
+            onDismiss = { viewModel.dismissUpdate(allowDuringDownload = true) },
+            // 下载由 HomeViewModel 持有,弹窗关闭/离开首页返回后继续,可“后台下载”
+            allowDismissDuringDownload = true,
             onStartDownload = {
                 (dialogState as? UpdateDialogState.Available)?.let { viewModel.startUpdateDownload(it.info) }
             },

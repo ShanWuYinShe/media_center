@@ -87,6 +87,7 @@ internal fun MainActivity.circleIconButton(
         icon: PillIcon,
         onClick: () -> Unit,
         onFocusChange: ((Boolean) -> Unit)? = null,
+        contentDescription: String? = null,
     ): FrameLayout {
         val button = FrameLayout(this).apply {
             minimumWidth = dp(54)
@@ -94,6 +95,8 @@ internal fun MainActivity.circleIconButton(
             isFocusable = true
             isClickable = true
             setOnClickListener { onClick() }
+            // 纯图标按钮必须给 TalkBack 一个可朗读的名称
+            if (contentDescription != null) this.contentDescription = contentDescription
         }
         val iconView = PillIconView(this, icon).apply {
             setIconColor(Colors.TEXT_PRIMARY)
@@ -202,17 +205,26 @@ internal fun MainActivity.applyPillFocus(
         }
     }
 
+    // 三态背景按 view 记忆(WeakHashMap 不阻止回收):遥控器快速划过几十个 chip 时,
+    // 每次焦点切换不再新建 GradientDrawable——弱核 API19 盒子上这正是 GC 卡顿点。
+    private val pillFocusDrawables = java.util.WeakHashMap<View, Array<android.graphics.drawable.GradientDrawable>>()
+
 internal fun MainActivity.applyPillFocus(
         view: View,
         selected: Boolean,
         onFocusChange: ((Boolean) -> Unit)? = null,
         setContentColor: (Int) -> Unit,
     ) {
+        val states = pillFocusDrawables[view] ?: arrayOf(
+            rounded(Colors.GlassFill, 999, 1, Colors.GlassBorder),
+            rounded(Colors.GlassFillStrong, 999, 2, Colors.APPLE_BLUE),
+            rounded(Colors.APPLE_BLUE, 999, 3, Colors.GLASS_BORDER_FOCUSED),
+        ).also { pillFocusDrawables[view] = it }
         fun update(focused: Boolean) {
             view.background = when {
-                focused -> rounded(Colors.APPLE_BLUE, 999, 3, Colors.GLASS_BORDER_FOCUSED)
-                selected -> rounded(Colors.GlassFillStrong, 999, 2, Colors.APPLE_BLUE)
-                else -> rounded(Colors.GlassFill, 999, 1, Colors.GlassBorder)
+                focused -> states[2]
+                selected -> states[1]
+                else -> states[0]
             }
             view.elevationCompat(if (focused) dp(8).toFloat() else 0f)
             setContentColor(

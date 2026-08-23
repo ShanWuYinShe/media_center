@@ -1,5 +1,8 @@
 <resources>
-    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+    <!-- 基底用 Holo：Theme.Material 是 API 21 才引入的，真 4.4.2 设备上
+         用 Material 会在 setContentView 直接 Resources.NotFoundException。
+         API 21+ 由 values-v21/styles.xml 覆盖回 Material，视觉不变。 -->
+    <style name="AppTheme" parent="android:style/Theme.Holo.NoActionBar">
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowActionBar">false</item>
         <item name="android:windowFullscreen">true</item>

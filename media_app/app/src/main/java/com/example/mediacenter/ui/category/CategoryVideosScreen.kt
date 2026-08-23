@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -22,9 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -35,16 +34,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mediacenter.data.VideoSummary
+import androidx.tv.material3.Button
+import androidx.tv.material3.ButtonDefaults
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.home.VideoCard
 import com.example.mediacenter.ui.player.SelectChip
+import com.example.mediacenter.ui.components.TvIconButton
 import com.example.mediacenter.ui.theme.AppleBlue
+import com.example.mediacenter.ui.theme.CardGray
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.util.NetworkRestoreEffect
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -103,11 +107,8 @@ fun CategoryVideosScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(
-                onClick = onBack,
-                modifier = Modifier.requiredSize(48.dp),
-            ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "\u8FD4\u56DE", tint = TextPrimary)
+            TvIconButton(onClick = onBack, contentDescription = "\u8FD4\u56DE") {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = TextPrimary)
             }
             Text(
                 text = state.title.ifEmpty { title },
@@ -180,7 +181,8 @@ private fun CategoryGrid(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.fillMaxSize(),
+        // 返回时焦点回到离开前的卡片（配合滚动位置保存）
+        modifier = Modifier.fillMaxSize().focusRestorer(),
     ) {
         items(items, key = { it.id }) { video ->
             VideoCard(video = video, onClick = { onVideoClick(video) }, modifier = Modifier.fillMaxWidth())
@@ -193,8 +195,23 @@ private fun CategoryGrid(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (loadMoreFailed) {
-                        OutlinedButton(onClick = onRetryLoadMore, modifier = Modifier.requiredWidth(200.dp)) {
-                            Text("\u52A0\u8F7D\u66F4\u591A\u5931\u8D25\uFF0C\u70B9\u51FB\u91CD\u8BD5", color = TextPrimary)
+                        // 统一 TV 焦点态(Apple Blue 底/白字),与 ErrorView 重试一致
+                        Button(
+                            onClick = onRetryLoadMore,
+                            modifier = Modifier.requiredWidth(200.dp).requiredHeight(48.dp),
+                            colors = ButtonDefaults.colors(
+                                containerColor = CardGray,
+                                focusedContainerColor = AppleBlue,
+                                contentColor = TextPrimary,
+                                focusedContentColor = TextPrimary,
+                            ),
+                        ) {
+                            Text(
+                                "\u91CD\u8BD5\u52A0\u8F7D",
+                                color = TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     } else {
                         CircularProgressIndicator(

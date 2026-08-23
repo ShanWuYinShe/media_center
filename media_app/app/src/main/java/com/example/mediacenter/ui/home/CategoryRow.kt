@@ -15,6 +15,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.mediacenter.data.VideoSummary
@@ -66,6 +67,9 @@ fun CategoryRow(
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
+                // 焦点恢复：从详情/播放页返回时焦点落回离开前的那张卡片，
+                // 而不是行首（TV 上丢失浏览位置是高频烦恼）。
+                modifier = Modifier.focusRestorer(),
             ) {
                 items(videos, key = { it.id }) { video ->
                     // LazyRow item 横/纵轴均无界:必须固定卡片宽度,aspectRatio 才能
