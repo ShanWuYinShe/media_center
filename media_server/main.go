@@ -7,12 +7,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -25,10 +27,48 @@ type mediaServer struct {
 	categories     []ContentCategory
 	categoriesByID map[string]ContentCategory
 	catalog        *Catalog
-	credentials    []ProviderCredential
 	crashLimiter   *ipWindowLimiter
 	// 凭证端点 per-IP 限流(独立于崩溃上报限流器)。
 	credentialsLimiter *ipWindowLimiter
+
+	// 凭证热加载:admin 生成 providerCredentials.json 后无需重启本服务。
+	// credentialsMu 保护 (credentials, credsStat) 二元组;读路径先原子快照,
+	// 仅在文件 mtime/size 变化时才重新解析(每请求最多一次 stat,解析失败
+	// 保留旧值,下次变更再试)。
+	credentialsMu   sync.Mutex
+	credentials     []ProviderCredential
+	credsStat       fs.FileInfo
+	credentialsPath string
+}
+
+// currentCredentials 返回凭证快照;文件变化时懒重载。
+func (s *mediaServer) currentCredentials() []ProviderCredential {
+	s.credentialsMu.Lock()
+	defer s.credentialsMu.Unlock()
+	if s.credentialsPath == "" {
+		return s.credentials
+	}
+	st, err := os.Stat(s.credentialsPath)
+	if err != nil || sameFileStat(st, s.credsStat) {
+		return s.credentials
+	}
+	creds, err := loadCredentials(s.credentialsPath)
+	if err != nil {
+		// 解析失败保留旧凭证(admin 侧原子写保证无半写文件,这里兜底
+		// 网络文件系统的极端时序)。
+		return s.credentials
+	}
+	s.credentials = creds
+	s.credsStat = st
+	log.Printf("reloaded %d provider credential(s) from %s", len(creds), s.credentialsPath)
+	return s.credentials
+}
+
+func sameFileStat(a, b fs.FileInfo) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.ModTime().Equal(b.ModTime()) && a.Size() == b.Size()
 }
 
 // 凭证端点 per-IP 限流:正常 App 每次启动只拉一次凭证,阈值宽松但可挡匿名批量抓取。
@@ -66,8 +106,12 @@ func main() {
 			log.Printf("warning: load credentials %q failed: %v", config.CredentialsPath, err)
 		} else {
 			server.credentials = creds
+			if st, err := os.Stat(config.CredentialsPath); err == nil {
+				server.credsStat = st
+			}
 			log.Printf("loaded %d provider credential(s) from %s", len(creds), config.CredentialsPath)
 		}
+		server.credentialsPath = config.CredentialsPath
 	}
 
 	if config.CatalogDBPath != "" {
@@ -223,7 +267,7 @@ func (s *mediaServer) handleProviderCredentials(w http.ResponseWriter, r *http.R
 		s.writeError(w, &apiError{Status: http.StatusUnauthorized, Code: "UNAUTHORIZED", Message: "凭证接口未授权。"})
 		return
 	}
-	creds := s.credentials
+	creds := s.currentCredentials()
 	if creds == nil {
 		creds = []ProviderCredential{}
 	}
