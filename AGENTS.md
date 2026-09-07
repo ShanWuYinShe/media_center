@@ -2,7 +2,7 @@
 
 合规公开视频媒体中心：Android TV 客户端（`media_app`）+ Go 聚合后端（`media_server`）+ 独立点播解析服务（`vod_extractor`，当前未启用）。
 
-通用约束（Git 规范、Commit 格式、验证流程、工具链偏好、JDK 配置、Docker 等）以全局 `~/.config/opencode/AGENTS.md` 为准，本文件只做项目特有补充，不得放宽或违背全局约束。
+通用约束（Git 规范、Commit 格式、验证流程、工具链偏好、JDK 配置、Docker 等）以全局 `~/AGENTS.md` 为准（各 AI 工具的全局指令文件均链接到该文件），本文件只做项目特有补充，不得放宽或违背全局约束。
 
  本目录是 `media_center` 仓库（`ShanWuYinShe/media_center`），被 `workwork` 仓库以 git submodule 引用（`services/media_center`）。
 
