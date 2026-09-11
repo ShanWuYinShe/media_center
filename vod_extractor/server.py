@@ -27,6 +27,9 @@ COOKIES_FILE = COOKIES_FILE_ENV or DEFAULT_COOKIES_FILE
 COOKIES_FILE_EXPLICIT = bool(COOKIES_FILE_ENV)
 EXTRACTOR_ARGS = os.environ.get("VOD_EXTRACTOR_EXTRACTOR_ARGS", "").strip()
 EXTRACTOR_SEMAPHORE = threading.BoundedSemaphore(MAX_CONCURRENT)
+MAX_QUERY_BYTES = 128
+DEFAULT_SEARCH_LIMIT = 20
+MAX_SEARCH_LIMIT = 30
 
 
 class ExtractorBusyError(RuntimeError):
@@ -45,20 +48,24 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.started_at = time.monotonic()
-        if self.path != "/extract":
+        if self.path not in {"/extract", "/search"}:
             self.send_json(404, {"error": "not found"})
             return
 
         try:
             payload = self.read_json_body()
-            url = payload.get("url")
-            if not isinstance(url, str) or not is_http_url(url):
-                self.send_json(400, {"error": "url must be an http(s) URL"})
-                return
-            if not is_safe_target(url):
-                self.send_json(400, {"error": "url target is not allowed"})
-                return
-            extracted = extract_vod(url)
+            if self.path == "/extract":
+                url = payload.get("url")
+                if not isinstance(url, str) or not is_http_url(url):
+                    self.send_json(400, {"error": "url must be an http(s) URL"})
+                    return
+                if not is_safe_target(url):
+                    self.send_json(400, {"error": "url target is not allowed"})
+                    return
+                extracted = extract_vod(url)
+            else:
+                query, limit = parse_search_payload(payload)
+                extracted = search_youtube(query, limit)
         except TimeoutError:
             self.send_json(504, {"error": "extractor timed out"})
             return
@@ -70,6 +77,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         except RuntimeError as error:
             self.send_json(502, {"error": str(error)})
+            return
+        except Exception as error:  # 兜底:不让 handler 崩溃成空响应
+            log_internal(f"unhandled error: {error}")
+            self.send_json(500, {"error": "internal error"})
             return
 
         self.send_json(200, extracted)
@@ -184,16 +195,41 @@ def extract_vod(url):
     if not EXTRACTOR_SEMAPHORE.acquire(blocking=False):
         raise ExtractorBusyError("extractor is busy")
     try:
-        return run_extractor(url)
+        return run_extractor(url, single_video=True)
     finally:
         EXTRACTOR_SEMAPHORE.release()
 
 
-def run_extractor(url):
+def parse_search_payload(payload):
+    """校验 /search 请求体,返回 (query, limit)。非法时抛 ValueError(→400)。"""
+    query = payload.get("query")
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("query is required")
+    query = query.strip()
+    if len(query.encode("utf-8")) > MAX_QUERY_BYTES:
+        raise ValueError("query is too long")
+    limit = payload.get("limit", DEFAULT_SEARCH_LIMIT)
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > MAX_SEARCH_LIMIT:
+        raise ValueError(f"limit must be an integer in [1, {MAX_SEARCH_LIMIT}]")
+    return query, limit
+
+
+def search_youtube(query, limit):
+    """YouTube 搜索:走 yt-dlp 的 ytsearch 伪播放列表(--flat-playlist 只抓
+    搜索结果页,不逐个解析视频),与观众浏览器同一条公开前端路径,无 Data API 配额。"""
+    if not EXTRACTOR_SEMAPHORE.acquire(blocking=False):
+        raise ExtractorBusyError("extractor is busy")
+    try:
+        return run_extractor(f"ytsearch{limit}:{query}", single_video=False)
+    finally:
+        EXTRACTOR_SEMAPHORE.release()
+
+
+def run_extractor(url, single_video=True):
     # start_new_session=True 让 yt-dlp 及其子进程(ffmpeg 等)独占进程组,
     # stop_process 用 os.killpg 杀整组,避免 SIGKILL 只杀主进程留下孤儿。
     process = subprocess.Popen(
-        extractor_command(url),
+        extractor_command(url, single_video),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,
@@ -220,14 +256,19 @@ def log_internal(message):
     print(json.dumps(entry, ensure_ascii=False), file=sys.stdout, flush=True)
 
 
-def extractor_command(url):
-    command = [EXTRACTOR_BIN, "--dump-single-json", "--no-playlist", "--no-warnings"]
+def extractor_command(target, single_video=True):
+    command = [EXTRACTOR_BIN, "--dump-single-json", "--no-warnings"]
+    if single_video:
+        command.append("--no-playlist")
+    else:
+        # 搜索结果是一个"播放列表":flat 模式只抓列表页(快),绝不逐个解析视频。
+        command.append("--flat-playlist")
     if EXTRACTOR_ARGS:
         command.extend(["--extractor-args", EXTRACTOR_ARGS])
     cookies_file = extractor_cookies_file()
     if cookies_file:
         command.extend(["--cookies", cookies_file])
-    command.append(url)
+    command.append(target)
     return command
 
 

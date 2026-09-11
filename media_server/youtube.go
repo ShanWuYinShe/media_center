@@ -8,227 +8,142 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// youtube.go — youtube provider 的两个实时上游通道:
+// youtube.go — youtube provider 的两个实时上游通道,全部经由内网的
+// vod_extractor(yt-dlp)完成:
 //
-//	search  : YouTube Data API v3(search.list 取结果,videos.list 补时长)
-//	resolve : 播放解析代理 → vod_extractor(yt-dlp --dump-single-json) → 挑选可播放格式
+//	search  : POST /search → yt-dlp `ytsearch{N}:query`(--flat-playlist 只抓
+//	          搜索结果页,不逐个解析视频)。与观众浏览器走同一条 YouTube 公开
+//	          前端,无 Data API 每日配额;单次耗时秒级,且同样依赖 cookies。
+//	resolve : POST /extract → yt-dlp `--dump-single-json` 解析播放直链,挑选
+//	          可播放格式(prepgressive mp4 优先、HLS 补高清档)。
 //
-// media_server 其余部分保持纯目录服务;这两个端点是 youtube provider 的专用能力。
-// 均要求 X-App-Token(与凭证端点同一令牌)并独立限流:Data API 有每日硬配额,
-// yt-dlp 解析慢(秒级)且 vod_extractor 并发有限,都不能暴露给匿名流量。
+// media_server 其余部分保持目录服务职责。两个端点均要求 X-App-Token(与凭证
+// 端点同一令牌)并独立限流:每次调用都要拉起 yt-dlp 进程(vod_extractor 并发
+// 上限 2),不能暴露给匿名流量。
 
-// YouTube 视频搜索/解析限流(per-IP,每分钟)。搜索受 Data API 每日配额约束
-// (search.list 每日限 100 次调用),阈值必须显著小于配额;解析每次拉起一个
-// yt-dlp 进程(vod_extractor 并发上限 2、单次超时 30s),也要挡住批量抓取。
+// 搜索/解析限流(per-IP,每分钟)。搜索比解析更重(抓搜索结果页),阈值更保守。
 const (
 	youtubeSearchPerMinuteLimit  = 8
 	youtubeResolvePerMinuteLimit = 20
-	// pageToken 是 YouTube 返回的不透明翻页令牌,限制长度防滥用。
-	maxYouTubePageTokenBytes = 128
 	// resolve 响应(yt-dlp JSON)读取上限。完整 JSON 通常数百 KB(含全部格式
 	// 与清单),20MB 与 vod_extractor 的 VOD_EXTRACTOR_MAX_OUTPUT_BYTES 对齐。
 	maxYouTubeExtractBytes = 20 << 20
 	// 解析 youtube 视频的 watch URL 前缀。
 	youtubeWatchURL = "https://www.youtube.com/watch?v="
+	// 搜索每页条数(TV 搜索每键即时出结果,单页足够)。
+	youtubeSearchLimit = 20
 )
 
 // resolve 端到端超时:vod_extractor 自身 30s 超时,留 10s 余量给网络与 JSON 解析。
 const youtubeResolveTimeout = 40 * time.Second
 
-// search 端点单请求超时(Data API 通常 <2s)。
-const youtubeSearchTimeout = 15 * time.Second
+// search 端到端超时:yt-dlp flat 模式抓搜索结果页通常数秒,30s 覆盖慢网。
+const youtubeSearchTimeout = 30 * time.Second
 
-// ytClient 封装 YouTube Data API v3 与 vod_extractor 的 HTTP 调用。
-// http.Client 不设总超时,由每个请求的 context 控制(两类调用超时差异大)。
+// ytClient 封装 vod_extractor 的 HTTP 调用(搜索与播放解析同源)。
+// http.Client 不设总超时,由每个请求的 context 控制。
 type ytClient struct {
-	apiKey          string
 	vodExtractorURL string
 	http            *http.Client
 }
 
-func newYTClient(apiKey, vodExtractorURL string) *ytClient {
+func newYTClient(vodExtractorURL string) *ytClient {
 	return &ytClient{
-		apiKey:          apiKey,
 		vodExtractorURL: strings.TrimRight(vodExtractorURL, "/"),
 		http:            &http.Client{},
 	}
 }
 
-// ---- YouTube Data API v3 ----
+// ---- vod_extractor(yt-dlp)搜索代理 ----
 
-type ytThumbnails struct {
-	Default ytThumbnail `json:"default"`
-	Medium  ytThumbnail `json:"medium"`
-	High    ytThumbnail `json:"high"`
+// ytdlpEntry 是 --flat-playlist 搜索结果里的一条视频。duration 在直播/待播
+// 条目上可能为 null,用指针接住。
+type ytdlpEntry struct {
+	ID         string   `json:"id"`
+	Title      string   `json:"title"`
+	Channel    string   `json:"channel"`
+	Duration   *float64 `json:"duration"`
+	Thumbnail  string   `json:"thumbnail"`
+	Thumbnails []struct {
+		URL    string `json:"url"`
+		Height int    `json:"height"`
+		Width  int    `json:"width"`
+	} `json:"thumbnails"`
 }
 
-func (t ytThumbnails) bestURL() string {
-	switch {
-	case t.High.URL != "":
-		return t.High.URL
-	case t.Medium.URL != "":
-		return t.Medium.URL
-	default:
-		return t.Default.URL
-	}
+type ytdlpSearchResult struct {
+	Type    string       `json:"_type"`
+	Entries []ytdlpEntry `json:"entries"`
 }
 
-type ytThumbnail struct {
-	URL string `json:"url"`
-}
-
-type ytSearchItem struct {
-	ID struct {
-		VideoID string `json:"videoId"`
-	} `json:"id"`
-	Snippet struct {
-		Title        string       `json:"title"`
-		Description  string       `json:"description"`
-		ChannelTitle string       `json:"channelTitle"`
-		Thumbnails   ytThumbnails `json:"thumbnails"`
-	} `json:"snippet"`
-}
-
-type ytSearchResponse struct {
-	NextPageToken string      `json:"nextPageToken"`
-	Error         *ytAPIError `json:"error"`
-	PageInfo      struct {
-		TotalResults int64 `json:"totalResults"`
-	} `json:"pageInfo"`
-	Items []ytSearchItem `json:"items"`
-}
-
-type ytVideosResponse struct {
-	Error *ytAPIError `json:"error"`
-	Items []struct {
-		ID             string `json:"id"`
-		ContentDetails struct {
-			Duration string `json:"duration"`
-		} `json:"contentDetails"`
-	} `json:"items"`
-}
-
-type ytAPIError struct {
-	Code   int `json:"code"`
-	Errors []struct {
-		Reason string `json:"reason"`
-	} `json:"errors"`
-}
-
-func (e *ytAPIError) reason() string {
-	for _, item := range e.Errors {
-		if item.Reason != "" {
-			return item.Reason
+// bestThumbnailURL 从 flat 条目的缩略图字段里挑最高分辨率:thumbnails 列表
+// 按 yt-dlp 惯例从低到高排列,取最后一个非空项;退化到单值 thumbnail 字段。
+func bestThumbnailURL(e ytdlpEntry) string {
+	for i := len(e.Thumbnails) - 1; i >= 0; i-- {
+		if e.Thumbnails[i].URL != "" {
+			return e.Thumbnails[i].URL
 		}
 	}
-	return ""
+	return e.Thumbnail
 }
 
-// searchVideos 调 search.list(type=video)取一页结果,再调 videos.list 批量补时长。
-// 返回 VideoSummary 列表与翻页令牌;调用方负责把内部错误转成日志 + 固定文案。
-func (c *ytClient) searchVideos(ctx context.Context, query, pageToken string) ([]VideoSummary, string, int64, error) {
-	params := url.Values{}
-	params.Set("part", "snippet")
-	params.Set("type", "video")
-	params.Set("videoEmbeddable", "true")
-	params.Set("safeSearch", "moderate")
-	params.Set("maxResults", "20")
-	params.Set("q", query)
-	params.Set("key", c.apiKey)
-	if pageToken != "" {
-		params.Set("pageToken", pageToken)
-	}
-	proxyPath := "https://www.googleapis.com/youtube/v3/search?" + params.Encode()
-	var searchResp ytSearchResponse
-	if err := c.getJSON(ctx, youtubeSearchTimeout, proxyPath, &searchResp); err != nil {
-		return nil, "", 0, err
-	}
-	if searchResp.Error != nil {
-		return nil, "", 0, fmt.Errorf("youtube search api: %s (code=%d)", searchResp.Error.reason(), searchResp.Error.Code)
-	}
-
-	durations := make(map[string]int64, len(searchResp.Items))
-	if ids := videoIDs(searchResp.Items); len(ids) > 0 {
-		vparams := url.Values{}
-		vparams.Set("part", "contentDetails")
-		vparams.Set("id", strings.Join(ids, ","))
-		vparams.Set("key", c.apiKey)
-		var videosResp ytVideosResponse
-		if err := c.getJSON(ctx, youtubeSearchTimeout, "https://www.googleapis.com/youtube/v3/videos?"+vparams.Encode(), &videosResp); err != nil {
-			// 时长是增强信息,失败不否决整个搜索,只降级为无时长。
-			log.Printf("youtube videos.list: %v", err)
-		} else if videosResp.Error != nil {
-			log.Printf("youtube videos.list api: %s (code=%d)", videosResp.Error.reason(), videosResp.Error.Code)
-		} else {
-			for _, item := range videosResp.Items {
-				if seconds := parseISODuration(item.ContentDetails.Duration); seconds > 0 {
-					durations[item.ID] = seconds
-				}
-			}
-		}
-	}
-
-	summaries := make([]VideoSummary, 0, len(searchResp.Items))
-	for _, item := range searchResp.Items {
-		if item.ID.VideoID == "" {
-			continue
-		}
-		title := item.Snippet.Title
-		if item.Snippet.ChannelTitle != "" {
-			title = item.Snippet.ChannelTitle + ": " + title
-		}
-		summaries = append(summaries, VideoSummary{
-			ID:              item.ID.VideoID,
-			Title:           title,
-			Description:     item.Snippet.Description,
-			ThumbnailURL:    item.Snippet.Thumbnails.bestURL(),
-			DurationSeconds: durations[item.ID.VideoID],
-		})
-	}
-	return summaries, searchResp.NextPageToken, searchResp.PageInfo.TotalResults, nil
-}
-
-func videoIDs(items []ytSearchItem) []string {
-	ids := make([]string, 0, len(items))
-	for _, item := range items {
-		if item.ID.VideoID != "" {
-			ids = append(ids, item.ID.VideoID)
-		}
-	}
-	return ids
-}
-
-// getJSON 执行 GET 并把响应解码到 out。非 2xx 时返回包含状态码的错误;
-// 响应体限长,防止异常上游拖垮内存。
-func (c *ytClient) getJSON(ctx context.Context, timeout time.Duration, rawURL string, out any) error {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+// searchVideos 调 vod_extractor 的 /search(yt-dlp ytsearch)做实时搜索。
+// 结果不写 catalog,仅供 App 即时展示与播放;调用方负责把内部错误转成日志 +
+// 固定文案。
+func (c *ytClient) searchVideos(ctx context.Context, query string) ([]VideoSummary, error) {
+	payload, err := json.Marshal(map[string]any{"query": query, "limit": youtubeSearchLimit})
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return nil, fmt.Errorf("encode search request: %w", err)
 	}
+	ctx, cancel := context.WithTimeout(ctx, youtubeSearchTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.vodExtractorURL+"/search", bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("build search request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("upstream request: %w", err)
+		return nil, fmt.Errorf("search request: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxYouTubeExtractBytes))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxYouTubeExtractBytes))
 	if err != nil {
-		return fmt.Errorf("read upstream body: %w", err)
+		return nil, fmt.Errorf("read search body: %w", err)
 	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("upstream status %d: %s", resp.StatusCode, truncateBody(body))
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("search status %d: %s", resp.StatusCode, truncateBody(raw))
 	}
-	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("decode upstream json: %w", err)
+	var result ytdlpSearchResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("decode search json: %w", err)
 	}
-	return nil
+	summaries := make([]VideoSummary, 0, len(result.Entries))
+	for _, e := range result.Entries {
+		if e.ID == "" {
+			continue
+		}
+		title := e.Title
+		if e.Channel != "" {
+			title = e.Channel + ": " + title
+		}
+		var duration int64
+		if e.Duration != nil && *e.Duration > 0 {
+			duration = int64(*e.Duration)
+		}
+		summaries = append(summaries, VideoSummary{
+			ID:              e.ID,
+			Title:           title,
+			ThumbnailURL:    bestThumbnailURL(e),
+			DurationSeconds: duration,
+		})
+	}
+	return summaries, nil
 }
 
 func truncateBody(body []byte) string {
@@ -237,54 +152,6 @@ func truncateBody(body []byte) string {
 		return string(body[:max])
 	}
 	return string(body)
-}
-
-// parseISODuration 解析 ISO 8601 时长(YouTube contentDetails.duration,如
-// "PT4M13S"、"PT1H2M10S"、"P1DT2H")。YouTube 视频不会超过天级,但按规范
-// 完整解析天/时/分/秒;格式非法返回 0。
-func parseISODuration(raw string) int64 {
-	if raw == "" || !strings.HasPrefix(raw, "P") {
-		return 0
-	}
-	total := int64(0)
-	number := int64(0)
-	hasNumber := false
-	for _, ch := range raw[1:] {
-		switch {
-		case ch >= '0' && ch <= '9':
-			number = number*10 + int64(ch-'0')
-			hasNumber = true
-		case ch == 'D':
-			if !hasNumber {
-				return 0
-			}
-			total += number * 86400
-			number, hasNumber = 0, false
-		case ch == 'H':
-			if !hasNumber {
-				return 0
-			}
-			total += number * 3600
-			number, hasNumber = 0, false
-		case ch == 'M':
-			if !hasNumber {
-				return 0
-			}
-			total += number * 60
-			number, hasNumber = 0, false
-		case ch == 'S':
-			if !hasNumber {
-				return 0
-			}
-			total += number
-			number, hasNumber = 0, false
-		case ch == 'T':
-			// 时间段开始,忽略
-		default:
-			return 0
-		}
-	}
-	return total
 }
 
 // ---- vod_extractor(yt-dlp)解析代理 ----
@@ -427,9 +294,9 @@ func buildYouTubePlayback(info ytdlpInfo) PlaybackResultResponse {
 			bestByHeight[f.Height] = f
 		}
 	}
-	// progressive 覆盖同高度的 HLS 代表。
+	// progressive 覆盖同高度的 HLS 代表(平局或更高 fps 时才顶掉)。
 	for _, f := range progressive {
-		if cur, ok := bestByHeight[f.Height]; !ok || isProgressive(f) && f.FPS >= cur.FPS {
+		if cur, ok := bestByHeight[f.Height]; !ok || f.FPS >= cur.FPS {
 			bestByHeight[f.Height] = f
 		}
 	}
@@ -514,8 +381,9 @@ func (s *mediaServer) requireAppToken(w http.ResponseWriter, r *http.Request) bo
 	return true
 }
 
-// handleYouTubeSearch 实现 GET /api/providers/youtube/search?q=&pageToken=
-// 实时搜索 YouTube(Data API v3),结果不写 catalog,仅供 App 即时展示与播放。
+// handleYouTubeSearch 实现 GET /api/providers/youtube/search?q=
+// 实时搜索 YouTube(经 vod_extractor 的 yt-dlp ytsearch,与观众浏览器同一
+// 公开前端,无 Data API 配额),结果不写 catalog,仅供 App 即时展示与播放。
 func (s *mediaServer) handleYouTubeSearch(w http.ResponseWriter, r *http.Request) {
 	if !s.youtubeSearchLimiter.allow(clientIPFromRequest(r)) {
 		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "搜索过于频繁,请稍后再试。"})
@@ -524,8 +392,8 @@ func (s *mediaServer) handleYouTubeSearch(w http.ResponseWriter, r *http.Request
 	if !s.requireAppToken(w, r) {
 		return
 	}
-	if s.yt.apiKey == "" {
-		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "NOT_CONFIGURED", Message: "服务端未配置 YouTube API Key,搜索不可用。"})
+	if s.yt.vodExtractorURL == "" {
+		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "NOT_CONFIGURED", Message: "服务端未启用视频解析服务,搜索不可用。"})
 		return
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
@@ -537,22 +405,16 @@ func (s *mediaServer) handleYouTubeSearch(w http.ResponseWriter, r *http.Request
 		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "QUERY_TOO_LONG", Message: "搜索关键词过长。"})
 		return
 	}
-	pageToken := r.URL.Query().Get("pageToken")
-	if len(pageToken) > maxYouTubePageTokenBytes {
-		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "pageToken 参数不合法。"})
-		return
-	}
-	items, nextPageToken, total, err := s.yt.searchVideos(r.Context(), query, pageToken)
+	items, err := s.yt.searchVideos(r.Context(), query)
 	if err != nil {
 		log.Printf("youtube search %q: %v", query, err)
 		s.writeError(w, &apiError{Status: http.StatusBadGateway, Code: "UPSTREAM_ERROR", Message: "YouTube 搜索暂不可用,请稍后再试。"})
 		return
 	}
 	s.writeJSON(w, http.StatusOK, SearchResponse{
-		Query:         query,
-		Total:         total,
-		Items:         items,
-		NextPageToken: nextPageToken,
+		Query: query,
+		Total: int64(len(items)),
+		Items: items,
 	})
 }
 

@@ -10,6 +10,11 @@ Internal HTTP wrapper around `yt-dlp` for resolving public VOD playback metadata
 
 - `GET /health`
 - `POST /extract` with JSON body `{ "url": "https://..." }`
+- `POST /search` with JSON body `{ "query": "...", "limit": 20 }` — YouTube search via
+  yt-dlp `ytsearch{N}` with `--flat-playlist` (search results page only, no per-video
+  extraction). Shares the Data-API-free public frontend path with regular viewers, so
+  there is no quota; costs a few seconds per call and requires cookies just like /extract.
+  Response is the raw yt-dlp playlist JSON (`entries[]`).
 
 ## Runtime limits
 

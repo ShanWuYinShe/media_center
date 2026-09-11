@@ -9,34 +9,6 @@ import (
 	"time"
 )
 
-// ---- parseISODuration ----
-
-func TestParseISODuration(t *testing.T) {
-	cases := []struct {
-		raw  string
-		want int64
-	}{
-		{"PT4M13S", 253},
-		{"PT1H2M10S", 3730},
-		{"PT30S", 30},
-		{"PT15M", 900},
-		{"PT2H", 7200},
-		{"P1DT2H", 93600},
-		{"PT0S", 0},
-		{"", 0},
-		{"PT", 0},      // 无数字
-		{"PT4M", 240},  // 只有分钟
-		{"xyz", 0},     // 非 ISO 前缀
-		{"PT4X13S", 0}, // 非法单位
-		{"PTM13S", 0},  // 数字缺失
-	}
-	for _, tc := range cases {
-		if got := parseISODuration(tc.raw); got != tc.want {
-			t.Errorf("parseISODuration(%q) = %d, want %d", tc.raw, got, tc.want)
-		}
-	}
-}
-
 // ---- isValidYouTubeVideoID ----
 
 func TestIsValidYouTubeVideoID(t *testing.T) {
@@ -94,11 +66,11 @@ func TestBuildYouTubePlaybackMixedFormats(t *testing.T) {
 			// progressive mp4:22=720p30、18=360p30
 			mkFormat("22", "https://x/720", "mp4", 720, 30, "avc1.64001F", "mp4a.40.2", "https"),
 			mkFormat("18", "https://x/360", "mp4", 360, 30, "avc1.42001E", "mp4a.40.2", "https"),
-			// HLS:1080p60、1080p30(取 60)、720p60(被 progressive 720p 覆盖?不——fps 更高保留)
+			// HLS:1080p60、1080p30(取 60)、720p60(fps 高于 progressive 720p30,保留)
 			mkFormat("308", "https://x/1080p60", "mp4", 1080, 60, "avc1.64002a", "none", "m3u8_native"),
 			mkFormat("303", "https://x/1080p30", "mp4", 1080, 30, "avc1.64002a", "none", "m3u8_native"),
 			mkFormat("335", "https://x/720p60", "mp4", 720, 60, "avc1.64002a", "none", "m3u8_native"),
-			// 同高度重复 HLS 的 1080p65(fps 大于 60,应取代 308)
+			// 同高度 fps 更高的 HLS 应取代 308
 			mkFormat("999", "https://x/1080p65", "mp4", 1080, 65, "avc1.64002a", "none", "m3u8"),
 		},
 	}
@@ -160,11 +132,11 @@ func TestBuildYouTubePlaybackNoPlayableFormats(t *testing.T) {
 
 // ---- handler 端到端(httptest mock 上游) ----
 
-func newYouTubeTestServer(t *testing.T, apiKey, extractorURL string) *mediaServer {
+func newYouTubeTestServer(t *testing.T, extractorURL string) *mediaServer {
 	t.Helper()
 	return &mediaServer{
 		config:                AppConfig{AppAPIToken: "test-token"},
-		yt:                    newYTClient(apiKey, extractorURL),
+		yt:                    newYTClient(extractorURL),
 		youtubeSearchLimiter:  newIPWindowLimiter(youtubeSearchPerMinuteLimit, time.Minute),
 		youtubeResolveLimiter: newIPWindowLimiter(youtubeResolvePerMinuteLimit, time.Minute),
 	}
@@ -180,85 +152,64 @@ func getWithToken(t *testing.T, s *mediaServer, path string) *httptest.ResponseR
 }
 
 func TestHandleYouTubeSearch(t *testing.T) {
-	visitedPaths := map[string]bool{}
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		visitedPaths[r.URL.Path] = true
-		switch r.URL.Path {
-		case "/youtube/v3/search":
-			if r.URL.Query().Get("key") != "test-key" {
-				t.Errorf("missing api key, got %q", r.URL.Query().Get("key"))
-			}
-			if r.URL.Query().Get("type") != "video" {
-				t.Error("type must be video")
-			}
-			_, _ = w.Write([]byte(`{
-				"pageInfo": {"totalResults": 42},
-				"nextPageToken": "CAUQAA",
-				"items": [
-					{"id": {"videoId": "jNQXAC9IVRw"}, "snippet": {
-						"title": "Me at the zoo",
-						"description": "first video",
-						"channelTitle": "jawed",
-						"thumbnails": {"medium": {"url": "https://i/medium.jpg"}, "high": {"url": "https://i/high.jpg"}}
-					}},
-					{"id": {}, "snippet": {}}
-				]}`))
-		case "/youtube/v3/videos":
-			if r.URL.Query().Get("id") != "jNQXAC9IVRw" {
-				t.Errorf("videos.list id = %q", r.URL.Query().Get("id"))
-			}
-			_, _ = w.Write([]byte(`{"items": [
-				{"id": "jNQXAC9IVRw", "contentDetails": {"duration": "PT19S"}}
-			]}`))
-		default:
+	var gotPayload struct {
+		Query string `json:"query"`
+		Limit int    `json:"limit"`
+	}
+	extractor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/search" {
 			http.NotFound(w, r)
+			return
 		}
+		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
+			t.Errorf("decode search body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{
+			"_type": "playlist",
+			"entries": [
+				{"_type": "url", "id": "jNQXAC9IVRw", "title": "Me at the zoo", "channel": "jawed",
+				 "duration": 19.4, "thumbnails": [
+				   {"url": "https://i/default.jpg", "width": 120},
+				   {"url": "https://i/maxres.jpg", "width": 1280}]},
+				{"_type": "url", "id": "", "title": "no id, skipped"},
+				{"_type": "url", "id": "abc12345678", "title": "live now", "duration": null,
+				 "thumbnail": "https://i/fallback.jpg"}
+			]
+		}`))
 	}))
-	defer upstream.Close()
+	defer extractor.Close()
 
-	s := newYouTubeTestServer(t, "test-key", "")
-	// 把 googleapis 基址替换成 httptest server。
-	s.yt.http = &http.Client{Transport: googleapisBaseOverride{base: upstream.URL}}
-
+	s := newYouTubeTestServer(t, extractor.URL)
 	rec := getWithToken(t, s, "/api/providers/youtube/search?q=zoo")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if !visitedPaths["/youtube/v3/search"] || !visitedPaths["/youtube/v3/videos"] {
-		t.Fatalf("upstream paths visited = %v, want search+videos", visitedPaths)
+	if gotPayload.Query != "zoo" || gotPayload.Limit != youtubeSearchLimit {
+		t.Fatalf("extractor payload = %+v", gotPayload)
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
 		`"query":"zoo"`,
-		`"total":42`,
-		`"nextPageToken":"CAUQAA"`,
+		`"total":2`,
 		`"id":"jNQXAC9IVRw"`,
 		`"title":"jawed: Me at the zoo"`,
-		`"thumbnailUrl":"https://i/high.jpg"`,
+		`"thumbnailUrl":"https://i/maxres.jpg"`,
 		`"durationSeconds":19`,
+		`"id":"abc12345678"`,
+		`"thumbnailUrl":"https://i/fallback.jpg"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("response missing %s:\n%s", want, body)
 		}
 	}
-}
-
-// googleapisBaseOverride 把绝对 URL 重写到测试基址(仅改 scheme+host,保留 path)。
-type googleapisBaseOverride struct {
-	base string
-}
-
-func (o googleapisBaseOverride) RoundTrip(req *http.Request) (*http.Response, error) {
-	out := req.Clone(req.Context())
-	out.URL.Scheme = "http"
-	out.URL.Host = strings.TrimPrefix(o.base, "http://")
-	return http.DefaultTransport.RoundTrip(out)
+	if strings.Contains(body, "nextPageToken") {
+		t.Errorf("ytsearch has no pagination token, response should omit it:\n%s", body)
+	}
 }
 
 func TestHandleYouTubeSearchGuards(t *testing.T) {
-	s := newYouTubeTestServer(t, "test-key", "")
-
 	// 缺 token → 401
+	s := newYouTubeTestServer(t, "http://extractor.invalid")
 	req := httptest.NewRequest(http.MethodGet, "/api/providers/youtube/search?q=zoo", nil)
 	rec := httptest.NewRecorder()
 	s.serveAPI(rec, req)
@@ -275,26 +226,22 @@ func TestHandleYouTubeSearchGuards(t *testing.T) {
 		t.Fatalf("empty q body = %s", rec.Body.String())
 	}
 
-	// 未配置 key → 503
-	s2 := newYouTubeTestServer(t, "", "")
+	// 未配置 vod_extractor → 503
+	s2 := newYouTubeTestServer(t, "")
 	rec = getWithToken(t, s2, "/api/providers/youtube/search?q=zoo")
 	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("no key: status = %d", rec.Code)
+		t.Fatalf("no extractor: status = %d", rec.Code)
 	}
-
-	// 未配置 vod_extractor 的 server:search 仍可用(key 配置了),这里只验证搜索不依赖 extractor。
-	// (resolve 的 NOT_CONFIGURED 在 TestHandleYouTubeResolveGuards 覆盖)
 }
 
 func TestHandleYouTubeSearchUpstreamError(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(`{"error": {"code": 403, "errors": [{"reason": "quotaExceeded"}]}}`))
+	extractor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error": "extractor failed"}`))
 	}))
-	defer upstream.Close()
+	defer extractor.Close()
 
-	s := newYouTubeTestServer(t, "test-key", "")
-	s.yt.http = &http.Client{Transport: googleapisBaseOverride{base: upstream.URL}}
+	s := newYouTubeTestServer(t, extractor.URL)
 	rec := getWithToken(t, s, "/api/providers/youtube/search?q=zoo")
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -331,7 +278,7 @@ func TestHandleYouTubeResolve(t *testing.T) {
 	}))
 	defer extractor.Close()
 
-	s := newYouTubeTestServer(t, "", extractor.URL)
+	s := newYouTubeTestServer(t, extractor.URL)
 	rec := getWithToken(t, s, "/api/providers/youtube/resolve?id=jNQXAC9IVRw")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -354,7 +301,7 @@ func TestHandleYouTubeResolve(t *testing.T) {
 }
 
 func TestHandleYouTubeResolveGuards(t *testing.T) {
-	s := newYouTubeTestServer(t, "", "")
+	s := newYouTubeTestServer(t, "")
 
 	// 未配置 extractor → 503
 	rec := getWithToken(t, s, "/api/providers/youtube/resolve?id=jNQXAC9IVRw")
@@ -363,7 +310,7 @@ func TestHandleYouTubeResolveGuards(t *testing.T) {
 	}
 
 	// 非法 id → 400
-	s3 := newYouTubeTestServer(t, "", "http://extractor.invalid")
+	s3 := newYouTubeTestServer(t, "http://extractor.invalid")
 	rec = getWithToken(t, s3, "/api/providers/youtube/resolve?id=../../etc")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad id: status = %d", rec.Code)
@@ -375,7 +322,7 @@ func TestHandleYouTubeResolveGuards(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error": "extractor failed"}`))
 	}))
 	defer failing.Close()
-	s4 := newYouTubeTestServer(t, "", failing.URL)
+	s4 := newYouTubeTestServer(t, failing.URL)
 	rec = getWithToken(t, s4, "/api/providers/youtube/resolve?id=jNQXAC9IVRw")
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("extractor fail: status = %d", rec.Code)
@@ -384,7 +331,7 @@ func TestHandleYouTubeResolveGuards(t *testing.T) {
 
 func TestYouTubeRoutesAreProviderScoped(t *testing.T) {
 	// 非 youtube provider 不应命中 search/resolve。
-	s := newYouTubeTestServer(t, "key", "")
+	s := newYouTubeTestServer(t, "")
 	req := httptest.NewRequest(http.MethodGet, "/api/providers/bilibili/search?q=zoo", nil)
 	req.Header.Set("X-App-Token", "test-token")
 	rec := httptest.NewRecorder()

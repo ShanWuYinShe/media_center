@@ -105,12 +105,9 @@ func main() {
 		categoriesByID:        indexCategories(content.Categories),
 		crashLimiter:          newIPWindowLimiter(crashReportPerMinuteLimit, time.Minute),
 		credentialsLimiter:    newIPWindowLimiter(credentialsPerMinuteLimit, time.Minute),
-		yt:                    newYTClient(config.YouTubeAPIKey, config.VODExtractorURL),
+		yt:                    newYTClient(config.VODExtractorURL),
 		youtubeSearchLimiter:  newIPWindowLimiter(youtubeSearchPerMinuteLimit, time.Minute),
 		youtubeResolveLimiter: newIPWindowLimiter(youtubeResolvePerMinuteLimit, time.Minute),
-	}
-	if config.YouTubeAPIKey != "" {
-		log.Printf("youtube search enabled (Data API key configured)")
 	}
 	if config.VODExtractorURL != "" {
 		log.Printf("youtube resolve enabled (vod extractor at %s)", config.VODExtractorURL)

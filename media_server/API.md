@@ -23,7 +23,7 @@
 | 404 | `NOT_FOUND` | 资源不存在（分类、路径等） |
 | 429 | `RATE_LIMITED` | 触发 per-IP 限流 |
 | 500 | `INTERNAL_ERROR` | 服务端内部错误 |
-| 502 | `UPSTREAM_ERROR` / `RESOLVE_FAILED` | youtube 实时端点：Data API / vod_extractor 上游失败 |
+| 502 | `UPSTREAM_ERROR` / `RESOLVE_FAILED` | youtube 实时端点：vod_extractor(yt-dlp) 上游失败 |
 | 503 | `NOT_CONFIGURED` | youtube 实时端点：服务端未配置 API key / 解析服务 |
 
 ## 数据模型
@@ -99,11 +99,11 @@ type VideoSummary = {
 { "credentials": [] }
 ```
 
-### `GET /api/providers/youtube/search?q=关键词&pageToken=`
+### `GET /api/providers/youtube/search?q=关键词`
 
-YouTube **实时搜索**（YouTube Data API v3，`search.list` type=video + `videos.list` 补时长）。结果不写 catalog，仅供 App 即时展示与播放——审核关卡只约束进入分类列表的 catalog 数据，此端点不绕过它（不产生任何入库）。
+YouTube **实时搜索**：经 vod_extractor 的 yt-dlp `ytsearch`（flat 模式抓搜索结果页）。与观众浏览器走同一条 YouTube 公开前端，**无 Data API 每日配额**；代价是单次搜索耗时秒级，且与播放解析同样依赖 cookies。结果不写 catalog，仅供 App 即时展示与播放——审核关卡只约束进入分类列表的 catalog 数据，此端点不绕过它（不产生任何入库）。
 
-**鉴权/限流**：同凭证接口的 `X-App-Token` 要求；同一 IP 每分钟 8 次。`pageToken` 为上次响应的 `nextPageToken`（可选）。
+**鉴权/限流**：同凭证接口的 `X-App-Token` 要求；同一 IP 每分钟 8 次。单页固定 20 条，无翻页令牌（TV 搜索每键即时出结果，够用）。
 
 ```json
 {
@@ -116,7 +116,7 @@ YouTube **实时搜索**（YouTube Data API v3，`search.list` type=video + `vid
 }
 ```
 
-- 未配置 `YOUTUBE_API_KEY` 返回 503 `NOT_CONFIGURED`；Data API 失败/超配额返回 502 `UPSTREAM_ERROR`。
+- 未配置 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 返回 503 `NOT_CONFIGURED`；yt-dlp 失败（cookies 失效、风控等）返回 502 `UPSTREAM_ERROR`。
 
 ### `GET /api/providers/youtube/resolve?id=<11字符视频ID>`
 
@@ -186,8 +186,7 @@ YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返�
 
 - `MEDIA_SERVER_PUBLIC_URL`（建议必填）：对外可见的 API 基址（如 `https://yinghuoren.com/api/media`）。位于反代后面时必须设置；未设置时下载地址由 Host 推导，仅接受 `MEDIA_SERVER_ALLOWED_HOSTS` 白名单或本地网段（防 Host 头投毒）。
 - `MEDIA_SERVER_APP_API_TOKEN`：凭证接口与 youtube 实时端点的令牌，与 App 构建时注入的 `APP_API_TOKEN` 一致；为空则这些接口 401。
-- `YOUTUBE_API_KEY`：YouTube Data API v3 key；为空时 `/api/providers/youtube/search` 返回 503。
-- `MEDIA_SERVER_VOD_EXTRACTOR_URL`：vod_extractor 内网基址（如 `http://vod_extractor:8790`）；为空时 `/api/providers/youtube/resolve` 返回 503。
+- `MEDIA_SERVER_VOD_EXTRACTOR_URL`：vod_extractor 内网基址（如 `http://vod_extractor:8790`）；为空时 youtube 的搜索/解析端点均返回 503。
 - `contentCategories.json` 定义分类 ID 到标题/描述的映射。sources 字段保留解析（向后兼容旧配置）但不再使用。
 
 ## App 侧必须遵守

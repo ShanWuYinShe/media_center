@@ -31,11 +31,8 @@ type AppConfig struct {
 	// 允许作为 App 更新下载 Host 的公网域名(逗号分隔)。仅当 PublicBaseURL 未配置
 	// 时用于校验 Host 头,防止 Host 头投毒把 apkUrl 指向攻击者域名。
 	AllowedPublicHosts []string
-	// YouTube Data API v3 key(/api/providers/youtube/search 需要)。为空时搜索端点
-	// 返回 NOT_CONFIGURED;解析端点不依赖它。
-	YouTubeAPIKey string
 	// vod_extractor(yt-dlp HTTP 封装)内网基址,如 http://vod_extractor:8790。
-	// 为空时 /api/providers/youtube/resolve 返回 NOT_CONFIGURED。
+	// 为空时 youtube 的搜索/解析端点均返回 NOT_CONFIGURED。
 	VODExtractorURL string
 }
 
@@ -80,7 +77,6 @@ func loadAppConfig() (AppConfig, error) {
 		CrashReportDir:        getenv("MEDIA_SERVER_CRASH_DIR", "data/crash-reports"),
 		AppAPIToken:           strings.TrimSpace(os.Getenv("MEDIA_SERVER_APP_API_TOKEN")),
 		AllowedPublicHosts:    splitList(os.Getenv("MEDIA_SERVER_ALLOWED_HOSTS")),
-		YouTubeAPIKey:         strings.TrimSpace(os.Getenv("YOUTUBE_API_KEY")),
 		VODExtractorURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("MEDIA_SERVER_VOD_EXTRACTOR_URL")), "/"),
 	}
 	return cfg, nil

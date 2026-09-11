@@ -20,7 +20,7 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 ## 架构
 
 - `main.go`：路由、handler、分页
-- `youtube.go`：youtube provider 实时通道——Data API v3 搜索（`YOUTUBE_API_KEY`）与 vod_extractor 解析代理（`MEDIA_SERVER_VOD_EXTRACTOR_URL`），均需 `X-App-Token` + 独立限流
+- `youtube.go`：youtube provider 实时通道——搜索与播放解析均代理 vod_extractor/yt-dlp（`MEDIA_SERVER_VOD_EXTRACTOR_URL`；搜索走 ytsearch flat 模式，无 Data API 配额），均需 `X-App-Token` + 独立限流
 - `catalog.go`：SQLite 分类维护数据库（system of record），纯 modernc.org/sqlite 无 cgo
 - `catalog_serve.go`：CatalogVideo → VideoSummary 转换
 - `config.go`：环境变量配置加载
@@ -39,7 +39,7 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 | GET | `/api/providers/{provider}/categories/{catId}/videos` | 某分类视频列表(分页) |
 | GET | `/api/search?q=&provider=` | approved 目录关键词搜索(分页) |
 | GET | `/api/providers/credentials` | Provider 凭证下发(需 X-App-Token,限流 30/min/IP) |
-| GET | `/api/providers/youtube/search?q=&pageToken=` | YouTube 实时搜索(需 X-App-Token,限流 8/min/IP) |
+| GET | `/api/providers/youtube/search?q=` | YouTube 实时搜索(需 X-App-Token,限流 8/min/IP) |
 | GET | `/api/providers/youtube/resolve?id=` | YouTube 播放解析(需 X-App-Token,限流 20/min/IP) |
 | GET | `/api/app/update?versionCode=N&variant=` | App 更新检查(variant: normal/legacy) |
 | GET | `/api/app/download?variant=` | App APK 下载 |
