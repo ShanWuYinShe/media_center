@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -306,11 +307,15 @@ func TestHandleYouTubeResolve(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		if err := r.ParseForm(); err != nil {
-			t.Errorf("parse form: %v", err)
+		// vod_extractor 契约:JSON body {"url": ...}(form 编码会被它 400 拒绝)。
+		var payload struct {
+			URL string `json:"url"`
 		}
-		if got := r.FormValue("url"); got != "https://www.youtube.com/watch?v=jNQXAC9IVRw" {
-			t.Errorf("extract url = %q", got)
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode extractor body: %v", err)
+		}
+		if payload.URL != "https://www.youtube.com/watch?v=jNQXAC9IVRw" {
+			t.Errorf("extract url = %q", payload.URL)
 		}
 		_, _ = w.Write([]byte(`{
 			"id": "jNQXAC9IVRw",

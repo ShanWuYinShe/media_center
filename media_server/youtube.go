@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -309,17 +310,19 @@ type ytdlpInfo struct {
 }
 
 // resolveVideo 调 vod_extractor 解析视频,返回可播放的完整结果(流选项+清晰度列表)。
+// 请求体为 JSON {"url": ...}(见 vod_extractor/README.md)。
 func (c *ytClient) resolveVideo(ctx context.Context, videoID string) (PlaybackResultResponse, error) {
-	params := url.Values{}
-	params.Set("url", youtubeWatchURL+videoID)
-	body := strings.NewReader(params.Encode())
+	payload, err := json.Marshal(map[string]string{"url": youtubeWatchURL + videoID})
+	if err != nil {
+		return PlaybackResultResponse{}, fmt.Errorf("encode extractor request: %w", err)
+	}
 	ctx, cancel := context.WithTimeout(ctx, youtubeResolveTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.vodExtractorURL+"/extract", body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.vodExtractorURL+"/extract", bytes.NewReader(payload))
 	if err != nil {
 		return PlaybackResultResponse{}, fmt.Errorf("build extractor request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return PlaybackResultResponse{}, fmt.Errorf("extractor request: %w", err)
