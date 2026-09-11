@@ -55,15 +55,20 @@ data class VideosResponse(
 )
 
 // /api/search 的响应:在 approved 目录中按关键词搜索(服务端排序与去重)。
+// YouTube 实时搜索(/api/providers/youtube/search)复用本结构;
+// nextPageToken 仅 youtube 端点返回(TV 搜索每键即时出结果,当前未消费)。
 @Serializable
 data class SearchResponse(
     val query: String = "",
     val total: Int = 0,
     val items: List<VideoSummary>? = null,
+    val nextPageToken: String? = null,
 )
 
-// PlaybackOption 表示一条真实可播放的流(BilibiliApi 按指定 qn 解析后产出)。
-// 每个选项的 url 都是对应 qn 的实际流地址;切清晰度需按新 qn 重新解析,而非复用旧 url。
+// PlaybackOption 表示一条真实可播放的流(BilibiliApi 按指定 qn 解析后产出;
+// YouTube 由 server 解析后一次返回全部清晰度档位,见 YouTubeApi)。
+// 每个选项的 url 都是对应 qn 的实际流地址;B 站切清晰度需按新 qn 重新解析,
+// YouTube 则直接在 options 内本地换源。
 @Serializable
 data class PlaybackOption(
     val id: String,
@@ -87,7 +92,9 @@ data class PlaybackPages(
     val currentPageDurationSeconds: Long? get() = pageDurations.getOrNull(currentPage)
 }
 
-// 视频可切换的清晰度列表(标签 + qn 编码),由 playurl 响应的 accept_quality 派生。
+// 视频可切换的清晰度列表(标签 + qn 编码),由 playurl 响应的 accept_quality 派生
+// (bilibili);youtube 时 qn 为视频高度、由 server 随解析结果一并返回。
+@Serializable
 data class QualityOption(
     val qn: Int,
     val label: String,

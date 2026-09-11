@@ -156,7 +156,8 @@ class MediaApi(
         throw IOException(friendlyNetworkMessage(category), lastError)
     }
 
-    private fun buildRequest(
+    // YouTubeApi 复用同一路径构建(api 前缀判断等),保持 URL 逻辑单源。
+    internal fun buildRequest(
         pathSegments: List<String>,
         query: Map<String, String>,
         headers: Map<String, String> = emptyMap(),

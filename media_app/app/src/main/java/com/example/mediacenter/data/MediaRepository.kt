@@ -9,6 +9,7 @@ import com.example.mediacenter.log.AppLog
 class MediaRepository(
     private val api: MediaApi,
     private val bilibiliApi: BilibiliApi = BilibiliApi(),
+    private val youtubeApi: YouTubeApi = YouTubeApi(api),
     prefs: SharedPreferences? = null,
 ) {
     // 当前选中的 provider(默认 bilibili)。首次加载 providers 后自动选第一个,
@@ -81,12 +82,22 @@ class MediaRepository(
         api.search(query, currentProvider).items.orEmpty()
 
     /**
+     * YouTube 实时搜索:不走 catalog,直接调 server 的 YouTube 通道(Data API)。
+     * 与 [search] 分开是为了让搜索层按 provider 显式选择通道,失败时仍可回退
+     * 本地 catalog 过滤(能搜到已入库的少量内容)。
+     */
+    suspend fun youtubeSearch(query: String): SearchResponse = youtubeApi.search(query)
+
+    /**
      * 解析播放地址:按当前 provider 分发。bilibili 走 WBI 签名 + view + playurl
-     * (bvid 支持 "bvid_pN" 多P分条格式);其他 provider 无本地解析器时给出明确错误。
+     * (bvid 支持 "bvid_pN" 多P分条格式);youtube 交给 server 的解析代理
+     * (一次返回全部清晰度档,切档由播放器本地换源,qn 参数被忽略)。
+     * 其他 provider 无本地解析器时给出明确错误。
      */
     suspend fun resolvePlayback(videoId: String, qn: Int? = null): PlaybackResult = when (currentProvider) {
         "bilibili" ->
             if (qn == null) bilibiliApi.resolvePlayback(videoId) else bilibiliApi.resolvePlayback(videoId, qn)
+        "youtube" -> youtubeApi.resolvePlayback(videoId)
         else ->
             throw Exception("「${currentProvider}」视频源暂不支持在线播放")
     }

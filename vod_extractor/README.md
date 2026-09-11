@@ -2,7 +2,9 @@
 
 Internal HTTP wrapper around `yt-dlp` for resolving public VOD playback metadata.
 
-`media_server` calls `POST /extract` on the internal Docker network. Keeping `yt-dlp` here avoids shipping Python and extractor dependencies in the main media API image.
+`media_server` calls `POST /extract` on the internal Docker network (via `GET /api/providers/youtube/resolve`, see `media_server/youtube.go`) when resolving YouTube playback URLs for the app. Keeping `yt-dlp` here avoids shipping Python and extractor dependencies in the main media API image.
+
+**Deployment requirement**: YouTube serves bot-check failures ("Sign in to confirm you're not a bot") to datacenter IPs on every player client, so server deployments MUST provide a YouTube cookies file (see `VOD_EXTRACTOR_COOKIES_FILE` below). Without cookies, every extraction fails regardless of `VOD_EXTRACTOR_EXTRACTOR_ARGS`.
 
 ## API
 

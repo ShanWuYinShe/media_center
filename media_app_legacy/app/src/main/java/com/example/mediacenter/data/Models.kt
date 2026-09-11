@@ -111,6 +111,8 @@ data class PlaybackResult(
 )
 
 // 一个可选清晰度:qn 为 B 站 playurl 的清晰度编码,label 为显示文本(如 "1080P")。
+// youtube provider 时由 server 随解析结果返回(qn 为视频高度),故需可序列化。
+@Serializable
 data class PlaybackQuality(
     val qn: Int,
     val label: String,

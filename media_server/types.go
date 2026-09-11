@@ -51,11 +51,14 @@ type VideosResponse struct {
 }
 
 // SearchResponse 是 /api/search 的响应:在已审核(approved)目录数据中按关键词
-// 子串匹配(标题/简介/作者),跨分类去重。
+// 子串匹配(标题/简介/作者),跨分类去重。youtube 实时搜索端点
+// (/api/providers/youtube/search)复用本结构;Total 为 int64 是因为该端点透传
+// YouTube 的 pageInfo.totalResults,本地目录搜索的 total 在传入处做转换。
 type SearchResponse struct {
-	Query string         `json:"query"`
-	Total int            `json:"total"`
-	Items []VideoSummary `json:"items"`
+	Query         string         `json:"query"`
+	Total         int64          `json:"total"`
+	Items         []VideoSummary `json:"items"`
+	NextPageToken string         `json:"nextPageToken,omitempty"`
 }
 
 type apiErrorBody struct {

@@ -162,6 +162,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.11.0")
     implementation("androidx.media3:media3-exoplayer:$media3Version")
+    // HLS 模块:YouTube 高清档位(>720p)只提供 m3u8 播放列表,progressive mp4 播不到。
+    // DefaultMediaSourceFactory 在 classpath 上发现该模块后自动支持 application/x-mpegurl。
+    implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
     implementation("androidx.media3:media3-ui:$media3Version")
     implementation("androidx.media3:media3-session:$media3Version")
     implementation("com.squareup.okhttp3:okhttp:5.4.0")

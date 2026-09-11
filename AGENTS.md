@@ -1,6 +1,6 @@
 # media_center
 
-合规公开视频媒体中心：Android TV 客户端（`media_app`）+ Go 聚合后端（`media_server`）+ 独立点播解析服务（`vod_extractor`，当前未启用）。
+合规公开视频媒体中心：Android TV 客户端（`media_app`）+ Go 聚合后端（`media_server`）+ 独立点播解析服务（`vod_extractor`，为 `youtube` provider 提供播放直链解析）。
 
 通用约束（Git 规范、Commit 格式、验证流程、工具链偏好、JDK 配置、Docker 等）以全局 `~/AGENTS.md` 为准（各 AI 工具的全局指令文件均链接到该文件），本文件只做项目特有补充，不得放宽或违背全局约束。
 
@@ -11,8 +11,10 @@ AI Agent 工作目录：所有 AI agent 工作期间产生的中间文件写入�
 ## 仓库结构
 
 - `media_app/` — Android TV + Kotlin + Jetpack Compose + Media3 客户端
-- `media_server/` — Go 实现的纯目录服务（provider 列表、分类列表、视频元数据）。不做播放地址解析、不做 asset 代理。
-- `vod_extractor/` — Python + yt-dlp 独立点播解析服务（YouTube 等外站点播直链解析）。**当前未启用**：`media_server` 是纯目录服务、不调用它，App 端也未接入对应 provider 的播放解析。YouTube 源因国内网络访问限制暂不实现，待有代理基础设施后再启用
+- `media_server/` — Go 目录服务（provider 列表、分类列表、视频元数据）+ youtube provider 的实时通道（Data API 搜索、vod_extractor 解析代理，见 `media_server/youtube.go`）。
+- `vod_extractor/` — Python + yt-dlp 独立点播解析服务（YouTube 播放直链解析）。由 `workwork` compose 部署在 internal_docker 内网，`media_server` 经 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 调用其 `POST /extract`。
+  - **硬前提**：YouTube 对数据中心 IP 的所有 player_client 都触发 "Sign in to confirm you're not a bot"，服务器部署必须放置 YouTube cookies（Netscape 格式）到 `.wework/vod_extractor/youtube-cookies.txt`（容器只读挂载为 `/config/youtube-cookies.txt`），否则解析一律失败。
+  - 部署该服务时优先通过 `VOD_EXTRACTOR_EXTRACTOR_ARGS`（如 `youtube:player_client=tv`）与 cookies 双管齐下；cookies 过期后需重新导出。
 
 App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部署方式。默认服务端 URL 是 `https://yinghuoren.com/api/media`。代理 / 部署基础设施在 `workwork` 仓库，通过 git submodule 引用本仓库来构建 `media_server` 和 `vod_extractor`。
 
@@ -54,14 +56,14 @@ go test -C media_server ./...
 
 - 技术栈：Go；HTTP 服务监听 `PORT`（容器内默认 8787）。
 - 内容分类：`media_server/src/contentCategories.json`；线上由 `workwork` 的 admin 生成运行时分类配置注入。
-- 分类数据（catalog，SQLite，system-of-record）：分类视频列表由 `media_server/catalog.go` 用纯 Go 的 `modernc.org/sqlite`（无需 cgo）落地维护库；分类浏览只读该库的 `approved` 数据（见 `catalog_serve.go` 与 `catalog.go` 的 `SearchApproved`）；服务端绝不做实时上游搜索 / 采集；没有 `approved` 数据时返回空列表 / 空搜索结果。
+- 分类数据（catalog，SQLite，system-of-record）：分类视频列表由 `media_server/catalog.go` 用纯 Go 的 `modernc.org/sqlite`（无需 cgo）落地维护库；分类浏览只读该库的 `approved` 数据（见 `catalog_serve.go` 与 `catalog.go` 的 `SearchApproved`）；没有 `approved` 数据时返回空列表 / 空搜索结果。
   - 候选不提交仓库：候选（外部 / AI 收集汇总）是中间状态，不纳入版本管理；最终数据以 catalog.db（system-of-record）为准，可通过 `/internal/catalog/export` 导出。各分类的收集格式与审核标准见 `media_server/CATEGORY_CURATION_GUIDE.md`。
   - 流程：外部收集候选 → 导入 pending → 人工 + AI 审核 → 上线 approved。候选经 `/internal/catalog/import` 导入为 `pending`（重复导入只新增，绝不覆盖已有审核决定）；在 admin 页面由人工 + AI 模型审核 approve / reject，可选 `pinned` / `rank`（经 `/internal/catalog/*`，也可用 `-catalog-review` 交互命令或任意 SQLite 工具）；客户端的分类浏览与搜索只命中该库 `approved` 清单（顺序 `pinned` > `rank` > `score`）。
-  - 审核是唯一的质量关口：聚合视频未经审核普遍标题与内容不符、大量无法播放，因此服务端不提供任何实时 / 未审核数据；相关性、可播放性等筛选一律交给 admin 的人工 + AI 审核，代码侧不做实时搜索 / 采集。
+  - 审核是唯一的质量关口：聚合视频未经审核普遍标题与内容不符、大量无法播放，相关性、可播放性等筛选一律交给 admin 的人工 + AI 审核。**youtube 实时搜索是这个原则的受控例外**：`/api/providers/youtube/search` 直通 Data API 只为 App 即时展示/播放，结果不写 catalog、不进分类列表，审核关卡不被绕过。
 - 只存原始数据：catalog 只存上游原始字段(缩略图为原始地址)。
 - 数据库文件不提交:catalog 库写到 `MEDIA_SERVER_CATALOG_DB`(默认 `data/catalog.db`,含 `-wal`/`-shm` 旁文件,已 gitignore);线上由 `workwork` 挂卷生成。
   - 相关环境变量:`MEDIA_SERVER_CATALOG_DB`(默认 `data/catalog.db`,置空则关闭 catalog,分类浏览与搜索返回空)。
-- 播放解析：App 端按 provider 自行处理——bilibili 用 `BilibiliApi`（WBI 签名 + view + playurl）本地解析；server 端只做目录服务。
+- 播放解析：App 端按 provider 处理——bilibili 用 `BilibiliApi`（WBI 签名 + view + playurl）本地解析；youtube 走 server 端解析（`/api/providers/youtube/resolve` 代理 `vod_extractor`，App 拿到全部清晰度档后在播放器内本地换源）。解析集中在服务端的原因：YouTube 风控对抗依赖 yt-dlp 及时更新，服务器容器重建即可全端生效，TV App 无需发版。
 - 部署：`workwork` 以 git submodule 引用本仓库，docker-compose 从 `services/media_center/media_server` 构建。
 
 ## UI/UX 设计约定
@@ -76,8 +78,8 @@ go test -C media_server ./...
 
 ## API 约定
 
-以本仓库 `media_server/API.md` 为准。App 侧目录数据只消费 `/api/providers`、`/api/providers/{provider}/categories`、`/api/providers/{provider}/categories/{catID}/videos` 三个接口；另消费 App 更新接口 `/api/app/update`、`/api/app/download`（路由见 `media_server/AGENTS.md`）。
-播放由 App 端收到 `VideoSummary.id`（nativeId）后按 provider 自行处理。详情页由 App 端本地从 `VideoSummary` 构造，不调 server。
+以本仓库 `media_server/API.md` 为准。App 侧目录数据只消费 `/api/providers`、`/api/providers/{provider}/categories`、`/api/providers/{provider}/categories/{catID}/videos` 三个接口；另消费 App 更新接口 `/api/app/update`、`/api/app/download`、凭证接口 `/api/providers/credentials`；youtube provider 额外消费实时端点 `/api/providers/youtube/search` 与 `/api/providers/youtube/resolve`（均要求 `X-App-Token`，见 `media_server/youtube.go` 与 API.md）。
+播放由 App 端收到 `VideoSummary.id`（nativeId）后按 provider 处理：bilibili 本地解析、youtube 调 server 解析端点。详情页由 App 端本地从 `VideoSummary` 构造，不调 server。
 `VideoSummary` 只有 `id/title/description/thumbnailUrl/durationSeconds` 五个字段。
 
 ## 约束

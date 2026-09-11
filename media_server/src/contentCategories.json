@@ -234,6 +234,29 @@
         "对局",
         "高分局"
       ]
+    },
+    {
+      "id": "youtube-picks",
+      "title": "YouTube 精选",
+      "description": "YouTube 上的精选公开视频：纪录片、演讲、科技评测与音乐现场。需配置 YouTube cookies 后方可播放。",
+      "searchQueries": [
+        "documentary full",
+        "classic movie full",
+        "concert live full",
+        "tech review",
+        "lecture full"
+      ],
+      "keywords": [
+        "YouTube",
+        "documentary",
+        "4K",
+        "full movie",
+        "live concert",
+        "演讲",
+        "纪录片",
+        "科技评测",
+        "音乐现场"
+      ]
     }
   ]
 }

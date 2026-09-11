@@ -31,9 +31,9 @@ data class SearchUiState(
 )
 
 /**
- * 搜索实现说明:server 只提供目录数据(approved 清单),没有实时搜索接口。
- * 因此这里把当前 provider 各分类的 approved 视频列表**拉取到本地缓存**,
- * 再按标题做客户端过滤。
+ * 搜索实现说明:优先走服务端搜索(bilibili:approved 目录子串匹配;youtube:
+ * Data API 实时搜索),失败时回退——把当前 provider 各分类的 approved 视频列表
+ * **拉取到本地缓存**,再按标题做客户端过滤。
  *
  * 惰性策略:首搜只等前 [FAST_PAGES] 页(秒回),剩余页在后台补全。
  * 旧实现一次性拉满 5 页 × 全分类才出结果，冷启动首搜很慢且占内存。
@@ -153,6 +153,23 @@ class SearchViewModel(
             return
         }
         _uiState.value = _uiState.value.copy(isSearching = true, error = null)
+        // YouTube 实时搜索:优先调 server 的 YouTube 通道(Data API),不查本地
+        // catalog(YouTube 内容不要求先入库)。失败仍落到下方本地目录过滤——
+        // 至少能搜到已审核入库的 YouTube 内容。
+        if (repository.currentProvider == "youtube") {
+            val remote = try {
+                repository.youtubeSearch(query).items.orEmpty()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.w("Search", "youtube search failed, fallback to local catalog: ${e.message}", e)
+                null
+            }
+            if (remote != null) {
+                _uiState.value = _uiState.value.copy(isSearching = false, results = remote, error = null)
+                return
+            }
+        }
         // 优先服务端搜索:跨全部分类页、按置顶/分数排序,一次请求出全量结果。
         // 旧版 server 没有 /api/search 或瞬时网络失败时回退本地目录过滤。
         val serverResults = try {

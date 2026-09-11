@@ -5,6 +5,7 @@ import com.example.mediacenter.log.AppLog
 class MediaRepository(
     private val api: MediaApi,
     private val bilibiliApi: BilibiliApi = BilibiliApi(),
+    private val youtubeApi: YouTubeApi = YouTubeApi(api),
 ) {
     // 当前选中的 provider(默认 bilibili)。loadProviders 取到列表后自动选第一个。
     @Volatile var currentProvider: String = "bilibili"
@@ -49,19 +50,32 @@ class MediaRepository(
 
     suspend fun categories(provider: String): List<ContentCategory> = api.categories(provider).items.orEmpty()
 
-    // 服务端无 search endpoint;分类浏览用 categoryVideos,关键词搜索在已加载的
+    // 服务端无全局 search endpoint;分类浏览用 categoryVideos,关键词搜索在已加载的
     // 分类数据上做客户端标题/简介过滤。query 非空时拉取多页(最多 SEARCH_MAX_PAGES)
     // 以扩大命中范围,过滤后分页返回;query 为空则原样返回服务端分页。
+    //
+    // 例外:youtube provider 的关键词搜索走实时上游通道(Data API,见 YouTubeApi)——
+    // YouTube 内容不要求先入库,分类内过滤搜不到实时内容;此时忽略 categoryId。
     suspend fun search(
         query: String,
         categoryId: String?,
         page: Int = 1,
         pageSize: Int = 18,
     ): SearchResponse {
+        val trimmed = query.trim()
+        if (currentProvider == "youtube" && trimmed.isNotEmpty()) {
+            val resp = youtubeApi.search(trimmed)
+            return SearchResponse(
+                query = query,
+                page = 1,
+                pageSize = resp.items.orEmpty().size,
+                total = resp.items.orEmpty().size,
+                items = resp.items.orEmpty(),
+            )
+        }
         if (categoryId == null) {
             return SearchResponse(query = query, page = page, pageSize = pageSize)
         }
-        val trimmed = query.trim()
         if (trimmed.isEmpty()) {
             // 纯分类浏览:直接转发服务端分页
             val resp = api.categoryVideos(currentProvider, categoryId, page, pageSize)
@@ -113,18 +127,25 @@ class MediaRepository(
         )
     }
 
-    // 解析播放地址:返回播放选项+多P信息。当前所有视频来自 bilibili catalog。
-    suspend fun playbackOptions(video: VideoDetails): PlaybackResult {
-        return bilibiliApi.resolvePlayback(video.id)
+    // 解析播放地址:按 provider 分发。bilibili 走 WBI 签名 + view + playurl;
+    // youtube 交给 server 的解析代理(一次返回全部清晰度档,切档由播放层换源)。
+    suspend fun playbackOptions(video: VideoDetails): PlaybackResult = when (currentProvider) {
+        "youtube" -> youtubeApi.resolvePlayback(video.id)
+        else -> bilibiliApi.resolvePlayback(video.id)
     }
 
-    // 指定清晰度解析播放地址。
-    suspend fun playbackOptions(video: VideoDetails, qn: Int): PlaybackResult {
-        return bilibiliApi.resolvePlayback(video.id, qn)
+    // 指定清晰度解析播放地址。youtube 端 qn 被忽略(server 忽略该参数,返回全档)。
+    suspend fun playbackOptions(video: VideoDetails, qn: Int): PlaybackResult = when (currentProvider) {
+        "youtube" -> youtubeApi.resolvePlayback(video.id)
+        else -> bilibiliApi.resolvePlayback(video.id, qn)
     }
 
-    // 解析多P视频指定分页的播放地址。
+    // 解析多P视频指定分页的播放地址。多P是 bilibili catalog 的概念
+    // (youtube 恒单页,正常流程不会走到这里,守卫防误用)。
     suspend fun resolvePagePlayback(bvid: String, pageIndex: Int): List<PlaybackOption> {
+        if (currentProvider != "bilibili") {
+            throw IllegalStateException("「${currentProvider}」视频源不支持多P切换")
+        }
         return bilibiliApi.resolvePagePlayback(bvid, pageIndex)
     }
 }

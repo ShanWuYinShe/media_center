@@ -2,7 +2,7 @@
 
  本目录（`media_server/`）是 `media_center` 仓库（`ShanWuYinShe/media_center`）的普通子目录，非独立仓库；该仓库被 `workwork` 以 git submodule 引用（`services/media_center`）。
 
-`media_center` 的合规公开视频聚合后端：Go HTTP 服务，对外只提供目录服务。
+`media_center` 的合规公开视频聚合后端：Go HTTP 服务，以目录服务为主（catalog SQLite 为 system of record）；`youtube` provider 的搜索/解析走受控实时通道（见 `youtube.go`）。
 
 API 契约见 @API.md。
 
@@ -20,6 +20,7 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 ## 架构
 
 - `main.go`：路由、handler、分页
+- `youtube.go`：youtube provider 实时通道——Data API v3 搜索（`YOUTUBE_API_KEY`）与 vod_extractor 解析代理（`MEDIA_SERVER_VOD_EXTRACTOR_URL`），均需 `X-App-Token` + 独立限流
 - `catalog.go`：SQLite 分类维护数据库（system of record），纯 modernc.org/sqlite 无 cgo
 - `catalog_serve.go`：CatalogVideo → VideoSummary 转换
 - `config.go`：环境变量配置加载
@@ -38,6 +39,8 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 | GET | `/api/providers/{provider}/categories/{catId}/videos` | 某分类视频列表(分页) |
 | GET | `/api/search?q=&provider=` | approved 目录关键词搜索(分页) |
 | GET | `/api/providers/credentials` | Provider 凭证下发(需 X-App-Token,限流 30/min/IP) |
+| GET | `/api/providers/youtube/search?q=&pageToken=` | YouTube 实时搜索(需 X-App-Token,限流 8/min/IP) |
+| GET | `/api/providers/youtube/resolve?id=` | YouTube 播放解析(需 X-App-Token,限流 20/min/IP) |
 | GET | `/api/app/update?versionCode=N&variant=` | App 更新检查(variant: normal/legacy) |
 | GET | `/api/app/download?variant=` | App APK 下载 |
 | POST | `/api/crash/report` | App 崩溃上报(限流 10/min/IP) |

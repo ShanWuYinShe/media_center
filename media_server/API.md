@@ -1,6 +1,6 @@
 # Media Server API
 
-本文档描述 Android TV App 对接的公开 API。server 端是纯目录服务——只返回视频元数据（id、标题、简介、封面），不提供播放地址解析。播放由 App 端按 provider 自行处理（bilibili → BilibiliApi 本地解析）。
+本文档描述 Android TV App 对接的公开 API。server 以目录服务为主——从已审核（`approved`）的 catalog 返回视频元数据（id、标题、简介、封面）。播放按 provider 分发：bilibili 由 App 端本地解析（`BilibiliApi`）；youtube 由 server 端解析（实时端点，见下），App 拿直链后自行播放。
 
 ## 当前契约
 
@@ -23,6 +23,8 @@
 | 404 | `NOT_FOUND` | 资源不存在（分类、路径等） |
 | 429 | `RATE_LIMITED` | 触发 per-IP 限流 |
 | 500 | `INTERNAL_ERROR` | 服务端内部错误 |
+| 502 | `UPSTREAM_ERROR` / `RESOLVE_FAILED` | youtube 实时端点：Data API / vod_extractor 上游失败 |
+| 503 | `NOT_CONFIGURED` | youtube 实时端点：服务端未配置 API key / 解析服务 |
 
 ## 数据模型
 
@@ -97,6 +99,48 @@ type VideoSummary = {
 { "credentials": [] }
 ```
 
+### `GET /api/providers/youtube/search?q=关键词&pageToken=`
+
+YouTube **实时搜索**（YouTube Data API v3，`search.list` type=video + `videos.list` 补时长）。结果不写 catalog，仅供 App 即时展示与播放——审核关卡只约束进入分类列表的 catalog 数据，此端点不绕过它（不产生任何入库）。
+
+**鉴权/限流**：同凭证接口的 `X-App-Token` 要求；同一 IP 每分钟 8 次。`pageToken` 为上次响应的 `nextPageToken`（可选）。
+
+```json
+{
+  "query": "经典电影",
+  "total": 1000000,
+  "items": [
+    { "id": "jNQXAC9IVRw", "title": "频道: 标题", "description": "…", "thumbnailUrl": "https://i.ytimg.com/...", "durationSeconds": 19 }
+  ],
+  "nextPageToken": "CAUQAA"
+}
+```
+
+- 未配置 `YOUTUBE_API_KEY` 返回 503 `NOT_CONFIGURED`；Data API 失败/超配额返回 502 `UPSTREAM_ERROR`。
+
+### `GET /api/providers/youtube/resolve?id=<11字符视频ID>`
+
+YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返回该视频全部可播放清晰度档位（progressive mp4 优先，其次 HLS；按高度降序）。App 端一次拿到全部档位，切清晰度在播放器内本地换源，不需要重新解析。
+
+**鉴权/限流**：`X-App-Token` 同上；同一 IP 每分钟 20 次。端到端超时 40s（yt-dlp 解析需秒级时间）。
+
+```json
+{
+  "options": [
+    { "id": "yt-jNQXAC9IVRw-22", "kind": "vod", "label": "720P", "url": "https://…googlevideo.com/…",
+      "mimeType": "video/mp4", "headers": {}, "qn": 720 },
+    { "id": "yt-jNQXAC9IVRw-308", "kind": "vod", "label": "1080P60", "url": "https://…/playlist.m3u8",
+      "mimeType": "application/x-mpegurl", "headers": {}, "qn": 1080 }
+  ],
+  "availableQualities": [ { "qn": 1080, "label": "1080P60" }, { "qn": 720, "label": "720P" } ],
+  "durationSeconds": 19
+}
+```
+
+- `options` 按清晰度从高到低排列，App 取首项播放；`mimeType` 为 `application/x-mpegurl` 时按 HLS 加载。
+- 未配置 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 返回 503 `NOT_CONFIGURED`；解析失败（视频受限、cookies 失效、无可用格式）返回 502 `RESOLVE_FAILED`。
+- **部署硬前提**：`.wework/vod_extractor/youtube-cookies.txt` 必须存在，否则 YouTube 对数据中心 IP 的解析一律返回 bot 检测失败。
+
 ### `GET /api/app/update?versionCode=1&variant=normal`
 
 返回 Android TV App 的最新发布版本。已是最新返回 `204 No Content`。
@@ -141,11 +185,13 @@ type VideoSummary = {
 ## 部署相关
 
 - `MEDIA_SERVER_PUBLIC_URL`（建议必填）：对外可见的 API 基址（如 `https://yinghuoren.com/api/media`）。位于反代后面时必须设置；未设置时下载地址由 Host 推导，仅接受 `MEDIA_SERVER_ALLOWED_HOSTS` 白名单或本地网段（防 Host 头投毒）。
-- `MEDIA_SERVER_APP_API_TOKEN`：凭证接口令牌，与 App 构建时注入的 `APP_API_TOKEN` 一致；为空则凭证接口 401。
+- `MEDIA_SERVER_APP_API_TOKEN`：凭证接口与 youtube 实时端点的令牌，与 App 构建时注入的 `APP_API_TOKEN` 一致；为空则这些接口 401。
+- `YOUTUBE_API_KEY`：YouTube Data API v3 key；为空时 `/api/providers/youtube/search` 返回 503。
+- `MEDIA_SERVER_VOD_EXTRACTOR_URL`：vod_extractor 内网基址（如 `http://vod_extractor:8790`）；为空时 `/api/providers/youtube/resolve` 返回 503。
 - `contentCategories.json` 定义分类 ID 到标题/描述的映射。sources 字段保留解析（向后兼容旧配置）但不再使用。
 
 ## App 侧必须遵守
 
-1. `VideoSummary.id` 是 catalog 的 nativeId（如 BV1xxx），不是 server 加密 ID。App 直接用它调用本地解析器。
-2. App 端支持 provider 切换 UI（首页顶栏，`/api/providers` 返回多个时显示）。播放解析按 provider 分发：目前仅 `bilibili` 有实现（`BilibiliApi`：WBI 签名 + view + playurl 拿真实播放直链）；其他 provider 在 App 端返回"暂不支持在线播放"的明确错误，等对应解析器接入后再放开。
-3. 缩略图 URL 是上游原始地址（如 B 站 CDN 链接），App 直连时需带 `Referer: https://www.bilibili.com` 请求头。
+1. `VideoSummary.id` 是 catalog 的 nativeId（如 BV1xxx 或 YouTube 11 字符视频 ID）。App 按 provider 分发：bilibili 调本地解析器，youtube 调 `/api/providers/youtube/resolve`。
+2. App 端支持 provider 切换 UI（首页顶栏，`/api/providers` 返回多个时显示）；当前 `bilibili` 与 `youtube` 有播放实现，其他 provider 返回"暂不支持在线播放"的明确错误。
+3. bilibili 缩略图 URL 是 B 站 CDN 链接，App 直连时需带 `Referer: https://www.bilibili.com` 请求头；YouTube 缩略图（i.ytimg.com）无需特殊请求头。

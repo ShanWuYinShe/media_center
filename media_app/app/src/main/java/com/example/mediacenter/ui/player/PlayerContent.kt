@@ -60,7 +60,9 @@ internal fun PlayerContent(
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
-    val url = playbackResult.options.first().url
+    // 当前流:YouTube 的选项带 mimeType(HLS m3u8 无扩展名,必须显式声明
+    // 才能命中 HLS 媒体源;progressive mp4 靠 URL 推断也可,统一带上最稳)。
+    val stream = playbackResult.options.first()
     var showControls by remember { mutableStateOf(true) }
     var playerError by remember { mutableStateOf<String?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
@@ -171,15 +173,19 @@ internal fun PlayerContent(
         }
     }
 
-    // url 变化(切清晰度/分P)或重试时加载流;controller 连接成功后才会真正执行
-    LaunchedEffect(controller, url, loadEpoch) {
+    // stream 变化(切清晰度/分P)或重试时加载流;controller 连接成功后才会真正执行
+    LaunchedEffect(controller, stream, loadEpoch) {
         val c = controller ?: return@LaunchedEffect
         playerError = null
         // 单P视频:新流 READY 后尝试恢复断点续播(多P分页位置不能跨流恢复)
         shouldResume = canResume
         c.stop()
         c.clearMediaItems()
-        c.setMediaItem(MediaItem.fromUri(url))
+        val item = MediaItem.Builder()
+            .setUri(stream.url)
+            .apply { stream.mimeType?.let { setMimeType(it) } }
+            .build()
+        c.setMediaItem(item)
         c.prepare()
         c.play()
     }

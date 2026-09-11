@@ -38,8 +38,25 @@ class PlayerViewModel(
 
     fun resolvePlayback() = launch { resolve(currentQn, currentPage) }
 
-    /** 切换清晰度:按新 qn 重新解析真实播放流。 */
+    /**
+     * 切换清晰度:目标档已在解析结果的 options 中(YouTube 由 server 一次返回
+     * 全部档位)时本地换源——把选中档提前到 options 首位,PlayerContent 检测到
+     * url 变化即重载,免去再次解析(YouTube 解析是服务端秒级操作且有频控)。
+     * 未命中(如 bilibili,每次解析只含当前档一条流)仍按新 qn 重新解析。
+     */
     fun selectQuality(qn: Int) {
+        val current = _uiState.value.playbackResult
+        val active = current?.options?.firstOrNull()
+        val match = current?.options?.firstOrNull { it.qn == qn }
+        if (current != null && active != null && match != null && match.url != active.url) {
+            currentQn = qn
+            _uiState.value = _uiState.value.copy(
+                playbackResult = current.copy(
+                    options = listOf(match) + current.options.filter { it.url != match.url },
+                ),
+            )
+            return
+        }
         currentQn = qn
         launch { resolve(qn, currentPage) }
     }
@@ -59,9 +76,14 @@ class PlayerViewModel(
         // 保留旧播放结果:清晰度/分P切换期间播放器不中断,新流就绪后无缝切换
         _uiState.value = _uiState.value.copy(isLoading = true, error = null)
         try {
-            // catalog id 可能本身带 "_pN" 后缀,重新拼出目标分页的 id
-            val (bvid, _) = parsePageId(videoId)
-            val targetId = if (pageIndex > 0) "${bvid}_p${pageIndex + 1}" else bvid
+            // "_pN" 分P后缀是 bilibili catalog 的约定;限定 bilibili 才解析/拼接,
+            // YouTube 视频 ID 字符集虽含 "_",但其 11 字符 ID 必须原样透传。
+            val targetId = if (repository.currentProvider == "bilibili") {
+                val (bvid, _) = parsePageId(videoId)
+                if (pageIndex > 0) "${bvid}_p${pageIndex + 1}" else bvid
+            } else {
+                videoId
+            }
             val result = repository.resolvePlayback(targetId, qn)
             _uiState.value = _uiState.value.copy(playbackResult = result, isLoading = false)
         } catch (e: CancellationException) {

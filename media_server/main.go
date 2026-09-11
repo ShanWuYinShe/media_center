@@ -19,9 +19,11 @@ import (
 	"time"
 )
 
-// mediaServer 是纯目录服务:只从 catalog(SQLite)提供 provider 列表、分类列表、
-// 视频列表。不调任何上游 API、不做播放地址解析、不做 asset 代理——播放完全由
-// App 端根据 provider 自行处理(bilibili 调 B 站 API,youtube 等 future provider 同理)。
+// mediaServer 是目录服务:从 catalog(SQLite)提供 provider 列表、分类列表、
+// 视频列表。播放地址解析与上游调用原则上由 App 端按 provider 自行处理(bilibili
+// 调 B 站 API);唯一例外是 youtube provider 的两个实时端点(见 youtube.go):
+// 搜索走 Data API、解析代理 vod_extractor——YouTube 风控对抗依赖服务端集中
+// 更新 yt-dlp,不适合下沉到 App。
 type mediaServer struct {
 	config         AppConfig
 	categories     []ContentCategory
@@ -30,6 +32,10 @@ type mediaServer struct {
 	crashLimiter   *ipWindowLimiter
 	// 凭证端点 per-IP 限流(独立于崩溃上报限流器)。
 	credentialsLimiter *ipWindowLimiter
+	// youtube 实时端点客户端与独立限流(Data API 配额/yt-dlp 进程资源,见 youtube.go)。
+	yt                    *ytClient
+	youtubeSearchLimiter  *ipWindowLimiter
+	youtubeResolveLimiter *ipWindowLimiter
 
 	// 凭证热加载:admin 生成 providerCredentials.json 后无需重启本服务。
 	// credentialsMu 保护 (credentials, credsStat) 二元组;读路径先原子快照,
@@ -94,11 +100,20 @@ func main() {
 		log.Fatalf("load categories: %v", err)
 	}
 	server := &mediaServer{
-		config:             config,
-		categories:         content.Categories,
-		categoriesByID:     indexCategories(content.Categories),
-		crashLimiter:       newIPWindowLimiter(crashReportPerMinuteLimit, time.Minute),
-		credentialsLimiter: newIPWindowLimiter(credentialsPerMinuteLimit, time.Minute),
+		config:                config,
+		categories:            content.Categories,
+		categoriesByID:        indexCategories(content.Categories),
+		crashLimiter:          newIPWindowLimiter(crashReportPerMinuteLimit, time.Minute),
+		credentialsLimiter:    newIPWindowLimiter(credentialsPerMinuteLimit, time.Minute),
+		yt:                    newYTClient(config.YouTubeAPIKey, config.VODExtractorURL),
+		youtubeSearchLimiter:  newIPWindowLimiter(youtubeSearchPerMinuteLimit, time.Minute),
+		youtubeResolveLimiter: newIPWindowLimiter(youtubeResolvePerMinuteLimit, time.Minute),
+	}
+	if config.YouTubeAPIKey != "" {
+		log.Printf("youtube search enabled (Data API key configured)")
+	}
+	if config.VODExtractorURL != "" {
+		log.Printf("youtube resolve enabled (vod extractor at %s)", config.VODExtractorURL)
 	}
 
 	if config.CredentialsPath != "" {
@@ -313,7 +328,7 @@ func (s *mediaServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 	for _, cv := range items {
 		summaries = append(summaries, s.summaryFromCatalogVideo(cv))
 	}
-	s.writeJSON(w, http.StatusOK, SearchResponse{Query: query, Total: total, Items: summaries})
+	s.writeJSON(w, http.StatusOK, SearchResponse{Query: query, Total: int64(total), Items: summaries})
 }
 
 // handleProviderRoute 按 /api/providers/{provider}/... 后续路径分发。
@@ -331,6 +346,11 @@ func (s *mediaServer) handleProviderRoute(w http.ResponseWriter, r *http.Request
 		s.handleProviderCategories(w, r, provider)
 	case len(parts) == 4 && parts[1] == "categories" && parts[3] == "videos":
 		s.handleProviderCategoryVideos(w, r, provider, parts[2])
+	// youtube 实时端点:搜索(Data API)与播放解析(vod_extractor 代理),见 youtube.go。
+	case provider == "youtube" && len(parts) == 2 && parts[1] == "search":
+		s.handleYouTubeSearch(w, r)
+	case provider == "youtube" && len(parts) == 2 && parts[1] == "resolve":
+		s.handleYouTubeResolve(w, r)
 	default:
 		s.writeError(w, &apiError{Status: http.StatusNotFound, Code: "NOT_FOUND", Message: "请求的资源不存在。"})
 	}
