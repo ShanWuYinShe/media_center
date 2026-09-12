@@ -42,7 +42,7 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
     4. 随后构建（`./gradlew :app:assembleRelease --no-daemon`）即得到干净版本号（`git describe` 在 tag 上产出 `X.Y.Z`，无 `-dev.N`）。
     注意：tag 要打在 media_center 仓库（非外层 `workwork` 仓库）；版本号与外层仓库的提交/tag 无关。
   - SHA256 校验和自动计算
-  - 命令：`ssh workwork-server "cd service && cat > .wework/generated/media_center/app-update.json << 'EOF' { ... } EOF"`
+  - 命令：`ssh workwork-server "cd workwork && cat > .wework/generated/media_center/app-update.json << 'EOF' { ... } EOF"`
 - 技术栈：Compose + TV Material + Media3 ExoPlayer；网络：OkHttp；序列化：kotlinx-serialization；图片：Coil。
 - 服务端地址：默认 `https://yinghuoren.com/api/media`；如需覆盖，设置 `MEDIA_SERVER_URL`。
 
