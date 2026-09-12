@@ -269,14 +269,15 @@ func (s *mediaServer) handleProviders(w http.ResponseWriter) {
 // 安全:凭证是共享账号的会话 cookie,泄露即整体轮换。端点要求请求携带与
 // MEDIA_SERVER_APP_API_TOKEN 匹配的 X-App-Token(常量时间比较),并叠加 per-IP
 // 限流;未配置 token 时一律 401(安全默认,App 端降级为无凭证模式)。
+// 鉴权先于限流:401 不消耗配额,避免无 token 请求烧光合法 App 的配额。
 func (s *mediaServer) handleProviderCredentials(w http.ResponseWriter, r *http.Request) {
-	if !s.credentialsLimiter.allow(clientIPFromRequest(r)) {
-		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "请求过于频繁,请稍后再试。"})
-		return
-	}
 	expected := s.config.AppAPIToken
 	if expected == "" || !constantTimeEqual(r.Header.Get("X-App-Token"), expected) {
 		s.writeError(w, &apiError{Status: http.StatusUnauthorized, Code: "UNAUTHORIZED", Message: "凭证接口未授权。"})
+		return
+	}
+	if !s.credentialsLimiter.allow(clientIPFromRequest(r)) {
+		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "请求过于频繁,请稍后再试。"})
 		return
 	}
 	creds := s.currentCredentials()

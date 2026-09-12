@@ -208,8 +208,13 @@ func (s *mediaServer) readAppUpdateManifest(r *http.Request, variant string) (Ap
 }
 
 func (s *mediaServer) appUpdateAPKPath(manifest AppUpdateManifest, variant string) string {
+	// filepath.Base("..") 仍返回 ".."，".." 穿透后 Join 得到上级目录，
+	// http.ServeFile 会输出目录列表；APK 文件名只可能是合法文件名，
+	// 这里校验非 ".." 且必须 .apk 结尾（manifest 位于 admin 只读卷，
+	// 属纵深防御——写坏/被滥用的 manifest 不应扩大为任意文件读取）。
 	name := filepath.Base(strings.TrimSpace(manifest.APKFilename))
-	if name == "." || name == string(filepath.Separator) || name == "" {
+	if name == "." || name == ".." || name == string(filepath.Separator) || name == "" ||
+		!strings.EqualFold(filepath.Ext(name), ".apk") {
 		return s.appUpdateAPKManifestPath(variant)
 	}
 	return filepath.Join(filepath.Dir(s.config.AppUpdateAPKPath), name)

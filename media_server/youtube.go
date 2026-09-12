@@ -385,11 +385,13 @@ func (s *mediaServer) requireAppToken(w http.ResponseWriter, r *http.Request) bo
 // 实时搜索 YouTube(经 vod_extractor 的 yt-dlp ytsearch,与观众浏览器同一
 // 公开前端,无 Data API 配额),结果不写 catalog,仅供 App 即时展示与播放。
 func (s *mediaServer) handleYouTubeSearch(w http.ResponseWriter, r *http.Request) {
-	if !s.youtubeSearchLimiter.allow(clientIPFromRequest(r)) {
-		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "搜索过于频繁,请稍后再试。"})
+	// 鉴权先于限流：无 token 的请求不消耗 per-IP 配额，否则攻击者可用
+	// 401 高频请求烧光同一出口 IP 上合法 App 的配额（定向限流 DoS）。
+	if !s.requireAppToken(w, r) {
 		return
 	}
-	if !s.requireAppToken(w, r) {
+	if !s.youtubeSearchLimiter.allow(clientIPFromRequest(r)) {
+		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "搜索过于频繁,请稍后再试。"})
 		return
 	}
 	if s.yt.vodExtractorURL == "" {
@@ -421,11 +423,12 @@ func (s *mediaServer) handleYouTubeSearch(w http.ResponseWriter, r *http.Request
 // handleYouTubeResolve 实现 GET /api/providers/youtube/resolve?id=
 // 代理 vod_extractor 解析播放地址,返回 App 端 PlaybackResult 结构。
 func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Request) {
-	if !s.youtubeResolveLimiter.allow(clientIPFromRequest(r)) {
-		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "解析请求过于频繁,请稍后再试。"})
+	// 鉴权先于限流（同 handleYouTubeSearch）。
+	if !s.requireAppToken(w, r) {
 		return
 	}
-	if !s.requireAppToken(w, r) {
+	if !s.youtubeResolveLimiter.allow(clientIPFromRequest(r)) {
+		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "解析请求过于频繁,请稍后再试。"})
 		return
 	}
 	if s.yt.vodExtractorURL == "" {
