@@ -35,6 +35,13 @@ const crashReportPerMinuteLimit = 10
 // crashLogLock 串行化崩溃日志写入(多进程容器内同一路径追加)。
 var crashLogLock sync.Mutex
 
+// maxLimiterEntries 是限流表条目上限。走 Cloudflare 时 clientIP 是真实客户端
+// IPv6,攻击者可用海量源地址制造新 key;惰性清理只删过期条目,新鲜攻击 IP
+// 会让 entries 无界增长(容器 256M 内存可被 50 字节/条的 map 撬动)。超过上限
+// 后新 key 直接按限流拒绝(已有条目判定不受影响),与 workwork 仓库 admin
+// 侧 maxRateLimitEntries 同款守卫。
+const maxLimiterEntries = 100000
+
 // ipWindowLimiter 是 per-IP 固定窗口限流器(崩溃上报/凭证端点共用)。
 type ipWindowLimiter struct {
 	mu      sync.Mutex
@@ -58,15 +65,19 @@ func (l *ipWindowLimiter) allow(key string) bool {
 	now := time.Now()
 	w, ok := l.entries[key]
 	if !ok || now.Sub(w.start) >= l.window {
-		l.entries[key] = &ipWindow{start: now, count: 1}
-		// 惰性清理过期条目,防止长期运行下 map 无限增长
-		if len(l.entries) > 1024 {
+		// 容量守卫:表满时先清理过期条目,仍满则拒绝新 key(不影响已有
+		// 条目的判定),消除 IPv6 源地址旋转下的无界内存增长。
+		if len(l.entries) >= maxLimiterEntries {
 			for k, e := range l.entries {
 				if now.Sub(e.start) >= l.window {
 					delete(l.entries, k)
 				}
 			}
+			if len(l.entries) >= maxLimiterEntries {
+				return false
+			}
 		}
+		l.entries[key] = &ipWindow{start: now, count: 1}
 		return true
 	}
 	if w.count >= l.limit {
