@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  media-server:
+    name: Media Server (Go)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+          cache: true
+          cache-dependency-path: media_server/go.sum
+
+      - name: gofmt
+        run: test -z "$(gofmt -l media_server/)"
+      - name: go vet
+        run: go vet ./...
+        working-directory: media_server
+      - name: go build
+        run: go build -o /dev/null .
+        working-directory: media_server
+      - name: go test
+        run: go test -count=1 ./...
+        working-directory: media_server
+
+  vod-extractor:
+    name: VOD Extractor (Python)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: syntax check
+        run: python3 -m py_compile vod_extractor/server.py
