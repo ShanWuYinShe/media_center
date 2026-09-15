@@ -5,12 +5,19 @@ FROM python:${PYTHON_VERSION}-alpine
 WORKDIR /app
 
 ARG YT_DLP_VERSION=2026.07.04
+# GIT_VERSION 由编排层传入(仓库 git describe),写入 /app/version 供 /health
+# 暴露;未传时为 "dev"。
+ARG GIT_VERSION=dev
+RUN echo "${GIT_VERSION}" > /app/version
 
 RUN pip install --no-cache-dir --disable-pip-version-check "yt-dlp==${YT_DLP_VERSION}" \
     && addgroup -S app \
     && adduser -S -G app app
 
 COPY server.py .
+
+LABEL org.opencontainers.image.revision="${GIT_VERSION}"
+LABEL org.opencontainers.image.version.yt-dlp="${YT_DLP_VERSION}"
 
 ENV HOST=0.0.0.0 \
     PORT=8790 \

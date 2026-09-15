@@ -31,6 +31,25 @@ MAX_QUERY_BYTES = 128
 DEFAULT_SEARCH_LIMIT = 20
 MAX_SEARCH_LIMIT = 30
 
+# 版本自报:GIT_VERSION 由镜像构建期写入 /app/version(仓库 git describe);
+# yt-dlp 版本启动时取一次——YouTube 风控对抗依赖 yt-dlp 版本,排障必查。
+try:
+    with open("/app/version", encoding="utf-8") as f:
+        SERVICE_VERSION = f.read().strip() or "dev"
+except OSError:
+    SERVICE_VERSION = "dev"
+
+
+def _ytdlp_version():
+    try:
+        out = subprocess.run(
+            [EXTRACTOR_BIN, "--version"], capture_output=True, text=True, timeout=10
+        )
+        return out.stdout.strip() or "unknown"
+    except Exception as error:  # 版本探测失败不影响服务
+        log_internal(f"yt-dlp --version failed: {error}")
+        return "unknown"
+
 
 class ExtractorBusyError(RuntimeError):
     pass
@@ -42,7 +61,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.started_at = time.monotonic()
         if self.path == "/health":
-            self.send_json(200, {"ok": True})
+            self.send_json(200, {"ok": True, "version": SERVICE_VERSION, "ytdlp": YTDLP_VERSION})
             return
         self.send_json(404, {"error": "not found"})
 
@@ -353,6 +372,8 @@ def stop_process(process):
 
 
 def main():
+    global YTDLP_VERSION
+    YTDLP_VERSION = _ytdlp_version()
     # 启动期校验:显式配置的 cookies 文件必须存在且可读,否则 fail-fast
     # (避免运行期每次请求都报错,且静默降级会让登录受限内容解析全失败)。
     if COOKIES_FILE_EXPLICIT and not os.path.isfile(COOKIES_FILE):
@@ -361,7 +382,7 @@ def main():
 
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
-    print(f"vod extractor listening on {HOST}:{PORT}", flush=True)
+    print(f"vod extractor {SERVICE_VERSION} (yt-dlp {YTDLP_VERSION}) listening on {HOST}:{PORT}", flush=True)
     server.serve_forever()
 
 

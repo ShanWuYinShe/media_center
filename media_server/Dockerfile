@@ -15,7 +15,11 @@ COPY *.go ./
 # TARGETARCH 由 BuildKit 自动注入(buildx --platform),arm64 主机也能构建;
 # 无注入时回退 amd64。
 ARG TARGETARCH=amd64
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/media_server .
+# GIT_VERSION 由编排层传入(仓库 git describe),烙进二进制并经 /health 与
+# 启动日志暴露;未传时二进制内为 "dev"。
+ARG GIT_VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -trimpath \
+    -ldflags="-s -w -X main.version=${GIT_VERSION}" -o /out/media_server .
 
 FROM alpine:${ALPINE_VERSION}
 
@@ -33,6 +37,11 @@ ENV HOST=0.0.0.0 \
     MEDIA_SERVER_CATALOG_DB=/app/data/catalog.db
 
 COPY --from=builder /out/media_server /app/media_server
+
+# OCI 标准 Revision 标签:docker image inspect 可查构建源版本。
+# ARG 按阶段作用域:最终阶段需重新声明才能用于 LABEL。
+ARG GIT_VERSION=dev
+LABEL org.opencontainers.image.revision="${GIT_VERSION}"
 
 VOLUME ["/config", "/cache", "/app/data"]
 EXPOSE 8787

@@ -19,6 +19,10 @@ import (
 	"time"
 )
 
+// version 由构建期注入(-ldflags -X main.version,值为仓库 git describe),
+// 经 /health 与启动日志暴露,未注入时为 "dev"。
+var version = "dev"
+
 // mediaServer 是目录服务:从 catalog(SQLite)提供 provider 列表、分类列表、
 // 视频列表。播放地址解析与上游调用原则上由 App 端按 provider 自行处理(bilibili
 // 调 B 站 API);唯一例外是 youtube provider 的两个实时端点(见 youtube.go):
@@ -177,7 +181,7 @@ func main() {
 		// 施加(下载端点绕过它),避免一刀切。
 		IdleTimeout: 120 * time.Second,
 	}
-	log.Printf("media_server listening on %s", addr)
+	log.Printf("media_server %s listening on %s", version, addr)
 
 	// 优雅停机:收到 SIGTERM/SIGINT 后停止接收新连接,给进行中的请求最多
 	// 10 秒收尾(否则 compose stop/重启会直接砍断在途请求)。
@@ -217,7 +221,7 @@ func (s *mediaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *mediaServer) serveAPI(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && (r.URL.Path == "/health" || r.URL.Path == "/api/health"):
-		s.writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		s.writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version})
 	case strings.HasPrefix(r.URL.Path, "/internal/"):
 		s.handleInternal(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/providers":
