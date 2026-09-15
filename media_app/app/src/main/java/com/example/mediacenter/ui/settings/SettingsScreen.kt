@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -72,14 +73,19 @@ fun SettingsScreen(onBack: () -> Unit) {
     // ── 手动检查更新 ──
     // 与首页启动时的自动检查共用 AppUpdateManager / UpdateDialog；区别在于
     // 这里是用户主动触发，无论结果如何都给出明确反馈（含"已是最新版本"）。
+    val api = remember { MediaApi(BuildConfig.MEDIA_SERVER_URL) }
     val updateManager = remember {
-        AppUpdateManager(
-            context.applicationContext,
-            MediaApi(BuildConfig.MEDIA_SERVER_URL),
-        )
+        AppUpdateManager(context.applicationContext, api)
     }
     var updateState by remember { mutableStateOf<UpdateDialogState?>(null) }
     var checkingUpdate by remember { mutableStateOf(false) }
+
+    // ── 服务端版本 ──
+    // 排障时用户可直接报出线上服务端构建版本(/health 公开端点)。
+    var serverVersion by remember { mutableStateOf("获取中…") }
+    LaunchedEffect(Unit) {
+        serverVersion = api.serverVersion() ?: "无法获取"
+    }
 
     fun checkForUpdate() {
         if (checkingUpdate || updateState != null) return
@@ -220,6 +226,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 SectionTitle("关于")
                 InfoRow("版本", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
                 InfoRow("服务端", BuildConfig.MEDIA_SERVER_URL)
+                InfoRow("服务端版本", serverVersion)
             }
             item {
                 SectionTitle("版本更新")

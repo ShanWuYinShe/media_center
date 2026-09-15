@@ -22,6 +22,10 @@ import java.io.File
 import java.io.IOException
 import java.time.Duration
 
+/** /health 响应:status 固定 "ok",version 为服务端构建版本(仓库 git describe)。 */
+@kotlinx.serialization.Serializable
+data class ServerHealth(val status: String? = null, val version: String? = null)
+
 class MediaApi(
     val baseUrl: String,
     cacheDir: File? = null,
@@ -74,6 +78,17 @@ class MediaApi(
             "provider" to provider,
         ),
     )
+
+    /**
+     * 服务端版本(设置页展示用)。/health 为公开端点,无需令牌;
+     * 失败返回 null(展示场景快速失败,不走重试放大延迟)。
+     */
+    suspend fun serverVersion(): String? = try {
+        get<ServerHealth>(pathSegments = listOf("health")).version
+    } catch (error: Exception) {
+        AppLog.w("Api", "server version: ${error.message}")
+        null
+    }
 
     suspend fun appUpdate(currentVersionCode: Int): AppUpdateInfo? {
         val body = getOptionalBody(
