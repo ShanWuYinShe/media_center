@@ -4,7 +4,7 @@
 
 `media_center` 的合规公开视频聚合后端：Go HTTP 服务，以目录服务为主（catalog SQLite 为 system of record）；`youtube` provider 的搜索/解析走受控实时通道（见 `youtube.go`）。
 
-API 契约见 @API.md。
+API 契约见 `API.md`。
 
 ## 构建 & 测试
 

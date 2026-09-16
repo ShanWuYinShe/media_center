@@ -11,8 +11,8 @@ AI Agent 工作目录：所有 AI agent 工作期间产生的中间文件写入�
 ## 仓库结构
 
 - `media_app/` — Android TV + Kotlin + Jetpack Compose + Media3 客户端
-- `media_server/` — Go 目录服务（provider 列表、分类列表、视频元数据）+ youtube provider 的实时通道（Data API 搜索、vod_extractor 解析代理，见 `media_server/youtube.go`）。
-- `vod_extractor/` — Python + yt-dlp 独立点播解析服务（YouTube 播放直链解析）。由 `workwork` compose 部署在 internal_docker 内网，`media_server` 经 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 调用其 `POST /extract`。
+- `media_server/` — Go 目录服务（provider 列表、分类列表、视频元数据）+ youtube provider 的实时通道（yt-dlp ytsearch 实时搜索，无 Data API 配额；vod_extractor 解析代理，见 `media_server/youtube.go`）。
+- `vod_extractor/` — Python + yt-dlp 独立点播解析服务（YouTube 播放直链解析）。由 `workwork` compose 部署在 internal_docker 内网，`media_server` 经 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 调用其 `POST /search`（实时搜索）与 `POST /extract`（播放直链解析）。
   - **硬前提**：YouTube 对数据中心 IP 的所有 player_client 都触发 "Sign in to confirm you're not a bot"，服务器部署必须放置 YouTube cookies（Netscape 格式）到 `.wework/vod_extractor/youtube-cookies.txt`（容器只读挂载为 `/config/youtube-cookies.txt`），否则解析与搜索一律失败。
   - 部署该服务时优先通过 `VOD_EXTRACTOR_EXTRACTOR_ARGS`（如 `youtube:player_client=tv`）与 cookies 双管齐下；cookies 过期后需重新导出。
 
@@ -59,7 +59,7 @@ go test -C media_server ./...
 - 分类数据（catalog，SQLite，system-of-record）：分类视频列表由 `media_server/catalog.go` 用纯 Go 的 `modernc.org/sqlite`（无需 cgo）落地维护库；分类浏览只读该库的 `approved` 数据（见 `catalog_serve.go` 与 `catalog.go` 的 `SearchApproved`）；没有 `approved` 数据时返回空列表 / 空搜索结果。
   - 候选不提交仓库：候选（外部 / AI 收集汇总）是中间状态，不纳入版本管理；最终数据以 catalog.db（system-of-record）为准，可通过 `/internal/catalog/export` 导出。各分类的收集格式与审核标准见 `media_server/CATEGORY_CURATION_GUIDE.md`。
   - 流程：外部收集候选 → 导入 pending → 人工 + AI 审核 → 上线 approved。候选经 `/internal/catalog/import` 导入为 `pending`（重复导入只新增，绝不覆盖已有审核决定）；在 admin 页面由人工 + AI 模型审核 approve / reject，可选 `pinned` / `rank`（经 `/internal/catalog/*`，也可用 `-catalog-review` 交互命令或任意 SQLite 工具）；客户端的分类浏览与搜索只命中该库 `approved` 清单（顺序 `pinned` > `rank` > `score`）。
-  - 审核是唯一的质量关口：聚合视频未经审核普遍标题与内容不符、大量无法播放，相关性、可播放性等筛选一律交给 admin 的人工 + AI 审核。**youtube 实时搜索是这个原则的受控例外**：`/api/providers/youtube/search` 直通 Data API 只为 App 即时展示/播放，结果不写 catalog、不进分类列表，审核关卡不被绕过。
+  - 审核是唯一的质量关口：聚合视频未经审核普遍标题与内容不符、大量无法播放，相关性、可播放性等筛选一律交给 admin 的人工 + AI 审核。**youtube 实时搜索是这个原则的受控例外**：`/api/providers/youtube/search` 经 vod_extractor 用 yt-dlp ytsearch 实时搜索（无 Data API 配额），只为 App 即时展示/播放，结果不写 catalog、不进分类列表，审核关卡不被绕过。
 - 只存原始数据：catalog 只存上游原始字段(缩略图为原始地址)。
 - 数据库文件不提交:catalog 库写到 `MEDIA_SERVER_CATALOG_DB`(默认 `data/catalog.db`,含 `-wal`/`-shm` 旁文件,已 gitignore);线上由 `workwork` 挂卷生成。
   - 相关环境变量:`MEDIA_SERVER_CATALOG_DB`(默认 `data/catalog.db`,置空则关闭 catalog,分类浏览与搜索返回空)。

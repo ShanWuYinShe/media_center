@@ -4,7 +4,7 @@
 
 内部点播解析服务：Python stdlib HTTP server + yt-dlp。设计上在 Docker `internal_docker` 网络中供其它服务内网调用（不暴露公网端口）。
 
-**当前状态：未启用。** `media_server` 是纯目录服务、当前无任何代码调用 `vod_extractor`；该服务为 YouTube 等外站点播解析预留，因国内网络访问限制暂不启用，待有代理基础设施后再接入。
+**当前状态：已启用。** `media_server` 的 youtube 实时通道调用本服务：`POST /search`（yt-dlp `ytsearch` 实时搜索，无 Data API 配额）与 `POST /extract`（播放直链解析）；`GET /health` 供 compose 健康检查。调用方经 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 寻址（compose 内 `http://vod_extractor:8790`）。
 
 ## 约束
 
