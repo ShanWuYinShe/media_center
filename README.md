@@ -4,7 +4,7 @@
 
 - `media_app`：Android TV + Kotlin + Jetpack Compose + Media3 客户端，针对遥控器焦点、电视安全边距和 2 米观看距离优化。
 - `media_server`：Go 实现的纯目录服务，提供 provider 列表、分类列表、视频元数据。不做上游 API 调用、不做 asset 代理。播放由 App 端按 provider 自行处理。
-- `vod_extractor`：Python + yt-dlp 内部点播解析服务（当前未使用，保留可能用于不可直连源）。
+- `vod_extractor`：Python + yt-dlp 内部点播解析服务，供 media_server 的 YouTube 实时搜索与播放解析调用（`/api/providers/youtube/search|resolve`，需宿主机放置 cookies）。
 
 App 只需要一个服务端地址，默认是 `https://yinghuoren.com/api/media`，也可以通过 `MEDIA_SERVER_URL` 覆盖。代理 / 部署基础设施（nginx、xray、admin 面板等）在 `workwork` 仓库，并通过 git submodule 引用本仓库来构建 `media_server`。
 

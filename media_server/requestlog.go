@@ -84,23 +84,49 @@ func (r *statusRecorder) Flush() {
 
 // clientIPFromRequest 解析客户端真实 IP。
 //
-// 生产部署位于 Cloudflare + nginx 反代之后,进到本服务的 RemoteAddr 恒为反代;
-// 转发头(X-Real-IP / X-Forwarded-For)由可信的反代写入,不会到客户端手里,因此
-// 直接采用、不做 trusted-proxy 守卫。该 IP 同时用于诊断日志和 per-IP 限流 key
-// (凭证端点、崩溃上报),反代层的可信保证了限流不会被伪造头绕过。
+// 生产部署位于 Cloudflare + nginx 反代之后,进到本服务的 RemoteAddr 恒为反代,
+// 转发头(X-Real-IP / X-Forwarded-For)由可信的反代写入。该 IP 同时用于诊断
+// 日志和 per-IP 限流 key(凭证端点、崩溃上报)。转发头只在直连方是内网/回环
+// 地址(nginx 所在的 Docker bridge)时才采信:若服务被误配置到公网可达,
+// 任意外部客户端伪造 X-Real-IP 即可旋转限流键绕过 per-IP 限流。取值顺序与
+// music_server 保持一致。
 func clientIPFromRequest(r *http.Request) string {
-	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" {
+	remote := remoteIP(r.RemoteAddr)
+	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" && isTrustedProxyIP(remote) {
 		return ip
 	}
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" && isTrustedProxyIP(remote) {
 		if idx := strings.IndexByte(xff, ','); idx >= 0 {
 			return strings.TrimSpace(xff[:idx])
 		}
 		return strings.TrimSpace(xff)
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	return remote
+}
+
+// remoteIP 从 RemoteAddr 取主机部分,解析失败原样返回。
+func remoteIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		return remoteAddr
 	}
 	return host
+}
+
+// isTrustedProxyIP 判断直连方是否位于内网(Docker bridge 网段属于 RFC1918
+// 私有区间)。公网直连时转发头一律不采信。
+func isTrustedProxyIP(ipStr string) bool {
+	ip := net.ParseIP(strings.TrimSpace(ipStr))
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsPrivate() {
+		return true
+	}
+	// IPv6 ULA fc00::/7(IsPrivate 已覆盖)之外,链路本地 fe80::/10 也是
+	// 容器间直连的常见形态。
+	if ip.IsLinkLocalUnicast() {
+		return true
+	}
+	return false
 }
