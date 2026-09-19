@@ -33,9 +33,9 @@ B 站单视频（bvid）可能包含多个分 P（如 P1/P2/P3）。App 自动�
 
 ## 服务端 URL 覆盖
 
-在 Android Studio 里可以把 `MEDIA_SERVER_URL=https://your-domain.example/api/media` 写入 `media_app/gradle.properties` 或用户级 `~/.gradle/gradle.properties`，然后重新 Sync。`MEDIA_SERVER_URL` 是 App 唯一需要的服务端配置；可以是服务根地址，也可以直接带 API 路径。API 契约由 `../media_server/API.md` 和 `../media_server/openapi.json` 维护。
+在 Android Studio 里可以把 `MEDIA_SERVER_URL=https://your-domain.example/api/media` 写入 `media_app/gradle.properties` 或用户级 `~/.gradle/gradle.properties`，然后重新 Sync。`MEDIA_SERVER_URL` 是 App 唯一需要的服务端配置；可以是服务根地址，也可以直接带 API 路径。API 契约由 `../media_server/API.md` 维护。
 
-首页从服务端读取内容分类，默认展示服务端返回的第一个分类（内置：电影、电视剧、家庭剧场、红色经典、Dota 专区）。App 只消费服务端返回的统一 opaque 视频 ID、opaque 播放选项 ID、`videoKind=vod` 和点播播放地址，并原样播放服务端返回的图片/播放 URL；不处理直播、视频来源、网页播放、外部打开或代理 URL 签名。
+首页从服务端读取内容分类，默认展示服务端返回的第一个分类（专区清单以服务端下发为准，见 `../media_server/src/contentCategories.json`）。App 只消费服务端返回的统一 opaque 视频 ID、opaque 播放选项 ID、`videoKind=vod` 和点播播放地址，并原样播放服务端返回的图片/播放 URL；不处理直播、视频来源、网页播放、外部打开或代理 URL 签名。
 
 播放器使用 Media3 `DefaultHttpDataSource` 直接流式读取播放 URL；客户端不使用下载器或落盘媒体缓存。B 站 CDN 播放流与图床（`*.hdslb.com`）需要带 PC UA + Referer 请求头，由 `PlaybackService` 的 `BILI_CDN_HEADERS` 与 Coil 的 `BilibiliImageLoaderFactory` 统一注入（见 `app/src/main/java/com/example/mediacenter/net/BilibiliImageLoaderFactory.kt`）。
 

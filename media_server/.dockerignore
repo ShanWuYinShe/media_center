@@ -1,6 +1,9 @@
-node_modules
-npm-debug.log
-dist
+# Go 服务构建上下文：只需要 go.mod/go.sum 与非测试 .go 源文件
+# （旧内容为 JS 项目残留，已按 Go 服务实际需要重写）
+*_test.go
+*.md
+data/
 .git
 .gitignore
-*.md
+Dockerfile
+.dockerignore

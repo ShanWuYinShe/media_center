@@ -4,13 +4,12 @@
 
 通用约束（Git 规范、Commit 格式、验证流程、工具链偏好、JDK 配置、Docker 等）以全局 `~/AGENTS.md` 为准（各 AI 工具的全局指令文件均链接到该文件），本文件只做项目特有补充，不得放宽或违背全局约束。
 
- 本目录是 `media_center` 仓库（`ShanWuYinShe/media_center`），被 `workwork` 仓库以 git submodule 引用（`services/media_center`）。
-
-AI Agent 工作目录：所有 AI agent 工作期间产生的中间文件写入项目根 `.workwork/`（已 `.gitignore`）。
+本目录是 `media_center` 仓库（`ShanWuYinShe/media_center`），被 `workwork` 仓库以 git submodule 引用（`services/media_center`）。
 
 ## 仓库结构
 
 - `media_app/` — Android TV + Kotlin + Jetpack Compose + Media3 客户端
+- `media_app_legacy/` — 旧版客户端存档（不再开发）
 - `media_server/` — Go 目录服务（provider 列表、分类列表、视频元数据）+ youtube provider 的实时通道（yt-dlp ytsearch 实时搜索，无 Data API 配额；vod_extractor 解析代理，见 `media_server/youtube.go`）。
 - `vod_extractor/` — Python + yt-dlp 独立点播解析服务（YouTube 播放直链解析）。由 `workwork` compose 部署在 internal_docker 内网，`media_server` 经 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 调用其 `POST /search`（实时搜索）与 `POST /extract`（播放直链解析）。
   - **硬前提**：YouTube 对数据中心 IP 的所有 player_client 都触发 "Sign in to confirm you're not a bot"，服务器部署必须放置 YouTube cookies（Netscape 格式）到 `.wework/vod_extractor/youtube-cookies.txt`（容器只读挂载为 `/config/youtube-cookies.txt`），否则解析与搜索一律失败。
@@ -48,11 +47,7 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 
 ## media_server
 
-```bash
-go build -C media_server -o /dev/null .   # 编译检查
-go vet -C media_server ./...
-go test -C media_server ./...
-```
+构建/测试/格式检查命令以 `media_server/AGENTS.md` 为唯一维护处。
 
 - 技术栈：Go；HTTP 服务监听 `PORT`（容器内默认 8787）。
 - 内容分类：`media_server/src/contentCategories.json`；线上由 `workwork` 的 admin 生成运行时分类配置注入。
