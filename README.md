@@ -46,6 +46,12 @@ go build -C media_server -o /dev/null .
 
 `workwork` 仓库通过 git submodule 引用本仓库到 `services/media_center`，docker-compose 从 `services/media_center/media_server` 构建并部署相关服务。
 
+部署后冒烟检查（对核心只读接口做 curl + JSON 断言，输出 PASS/FAIL，任一失败退出码 1）：
+
+```bash
+scripts/smoke.sh https://yinghuoren.com/api/media   # 或 http://localhost:8787
+```
+
 ## 工具链约定
 
 JS/Web 前端项目优先使用 Bun（`bun install`、`bun run`、`bun test`）。当前 `media_app` 是 Android TV 原生客户端，构建仍使用 Gradle/Android Studio 工具链；如果后续新增 Web 管理台或 H5 前端，应默认采用 Bun。
