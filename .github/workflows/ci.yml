@@ -36,7 +36,7 @@ jobs:
         run: go build -o /dev/null .
         working-directory: media_server
       - name: go test
-        run: go test -count=1 ./...
+        run: go test -race -count=1 ./...
         working-directory: media_server
 
   vod-extractor:
@@ -51,3 +51,26 @@ jobs:
 
       - name: syntax check
         run: python3 -m py_compile vod_extractor/server.py
+      - name: unit tests
+        run: python3 -m unittest discover -s vod_extractor/tests -v
+
+  media-app:
+    name: Media App (Android)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      # JDK 17 与 media_app build.gradle.kts 的 sourceCompatibility/jvmTarget 一致；
+      # setup-java 版本以 repos/actions/setup-java 最新 release 为准（当前 v6.0.1）
+      - uses: actions/setup-java@v6.0.1
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      # Android SDK 用 ubuntu runner 自带安装（/usr/local/lib/android/sdk），不额外装 action
+      - name: assembleDebug
+        working-directory: media_app
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+        run: ./gradlew :app:assembleDebug --no-daemon
