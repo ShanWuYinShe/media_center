@@ -24,7 +24,7 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 - `versionCode`：从 SemVer 派生 `major*100000 + minor*1000 + patch`（见 `semverToCode`，忽略 dev 后缀），整数比较可靠。容量：patch 0..999、minor 0..99。
 - 升版规则：破坏性改动升 major、新功能升 minor、bug 修复升 patch。无 tag 时 fallback 到 `0.1.0-dev`（不阻断构建）。
 
-AI 更新版本流程（代码改完、发版前执行）：版本号只由 git tag 决定，打完 tag 即“自动更新版本”，无需改任何文件。commit / tag 在对应 Worktree 内完成；合并进主分支后，push（含 tag）在主工作树执行（见全局 Git 准则）。
+AI 更新版本流程（代码改完、发版前执行）：版本号只由 git tag 决定，打完 tag 即“自动更新版本”，无需改任何文件。commit 在对应 Worktree 内完成；合并进主分支后，tag 与 push（含 tag）一律在主工作树执行（见全局 Git 准则）。
 
 1. 在 Worktree 内提交代码变更（确保要发布的 commit 已就绪）。
 2. 按变更类型决定下一 SemVer：`major`（破坏性）/`minor`（新功能）/`patch`（bug 修复）。
@@ -35,11 +35,14 @@ AI 更新版本流程（代码改完、发版前执行）：版本号只由 git 
 
 ## 部署 APK
 
-部署时如 `media_app/` 有变更，编译 APK 并上传到服务器的 `.wework/generated/media_center/media-center-app.apk`，同时生成 manifest JSON（SHA256 校验和自动计算）：
-
-```bash
-ssh workwork-server "cd workwork && cat > .wework/generated/media_center/app-update.json << 'EOF' { ... } EOF"
-```
+APK 有 **normal + legacy 两个变体**：normal 源码即本目录；legacy 为 Android 4.4.2
+兼容变体，源码在 `media_app_legacy/`。部署时如 `media_app/` 有变更，编译 APK 上传到
+服务器 `.wework/generated/media_center/`，文件名为版本化格式
+`media-center-app-v<versionCode>-<sha12>.apk`（admin 发布管理按此命名索引，固定名
+`media-center-app.apk` 不是上传名），随后手写 `app-update.json` 与
+`app-update-legacy.json` 两份 manifest（versionCode / versionName / SHA256 /
+apkFilename）。上传命令、manifest 字段与完整流程以 `workwork` 仓库 README
+「media_app」节为唯一维护处，此处不重复。
 
 ## 技术栈与服务端地址
 

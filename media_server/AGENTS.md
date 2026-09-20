@@ -44,7 +44,8 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 
 | 方法 | 路径 | 功能 |
 |------|------|------|
-| GET | `/api/health` | 健康检查 |
+| GET | `/health` | 健康检查(容器 healthcheck 与内网探活用) |
+| GET | `/api/health` | 健康检查公网别名(经 nginx 前缀重写,排障可直接 curl) |
 | GET | `/api/providers` | 有哪些视频源 |
 | GET | `/api/providers/{provider}/categories` | 某源的分类 |
 | GET | `/api/providers/{provider}/categories/{catId}/videos` | 某分类视频列表(分页) |
