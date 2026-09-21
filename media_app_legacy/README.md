@@ -36,4 +36,4 @@ B 站单视频（bvid）可能包含多个分 P（如 P1/P2/P3）。App 自动�
 
 播放前调用 BilibiliApi.resolvePlayback 获取最新播放地址，播放器使用 Media3 `DefaultHttpDataSource` 直接流式读取服务端返回的 URL；客户端不使用下载器或落盘媒体缓存。
 
-启动后 App 会请求 `/app/update?versionCode=当前版本` 检查更新；发现新版本时自动下载 APK、校验 SHA-256，然后拉起系统安装器。普通 Android TV 应用不能绕过系统权限静默安装，首次需要用户允许“安装未知应用”并确认安装。
+启动后 App 会请求 `/api/app/update?versionCode=当前版本&variant=legacy` 检查更新；发现新版本时自动下载 APK、校验 SHA-256，然后拉起系统安装器。普通 Android TV 应用不能绕过系统权限静默安装，首次需要用户允许“安装未知应用”并确认安装。

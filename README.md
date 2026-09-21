@@ -46,10 +46,11 @@ go build -C media_server -o /dev/null .
 
 `workwork` 仓库通过 git submodule 引用本仓库到 `services/media_center`，docker-compose 从 `services/media_center/media_server` 构建并部署相关服务。
 
-部署后冒烟检查（对核心只读接口做 curl + JSON 断言，输出 PASS/FAIL，任一失败退出码 1）：
+部署后冒烟检查（对核心只读接口做 curl + JSON 断言，输出 PASS/FAIL，任一失败退出码 1）；可选第二参数传 vod_extractor 内网地址，顺带探活其 `/health`：
 
 ```bash
 scripts/smoke.sh https://yinghuoren.com/api/media   # 或 http://localhost:8787
+scripts/smoke.sh http://localhost:8787 http://192.168.1.10:8790   # 第二参数探活 vod_extractor
 ```
 
 ## 工具链约定
@@ -62,4 +63,4 @@ API 由本仓库的 `media_server` 维护。实现或调整 App 前先看：
 
 - `media_server/API.md`
 
-App 端使用 `VideoSummary.id`（nativeId，如 BV1xxx）直接调用本地解析器播放。(当前仅 bilibili 源,App 端本地解析)
+播放地址按 provider 处理：bilibili 用 `VideoSummary.id`（nativeId，如 BV1xxx）在 App 端经 `BilibiliApi`（WBI 签名 + view + playurl）本地解析；youtube 用 11 字符视频 ID 调 server 端 `/api/providers/youtube/resolve`（代理 `vod_extractor`），App 拿到全部清晰度档后在播放器内本地换源。

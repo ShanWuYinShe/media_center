@@ -51,6 +51,10 @@ jobs:
 
       - name: syntax check
         run: python3 -m py_compile vod_extractor/server.py
+      - name: ruff
+        run: |
+          python3 -m pip install ruff
+          ruff check vod_extractor
       - name: unit tests
         run: python3 -m unittest discover -s vod_extractor/tests -v
 
@@ -71,6 +75,20 @@ jobs:
       # Android SDK 用 ubuntu runner 自带安装（/usr/local/lib/android/sdk），不额外装 action
       - name: assembleDebug
         working-directory: media_app
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+        run: ./gradlew :app:assembleDebug --no-daemon
+
+      - name: unit tests
+        working-directory: media_app
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+
+      # legacy 存档变体此前只在发版脚本（scripts/release-apk.sh）里编译，
+      # 编译破坏要到发版才发现，这里做低成本兜底（debug 变体，无 R8）。
+      - name: legacy assembleDebug
+        working-directory: media_app_legacy
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
         run: ./gradlew :app:assembleDebug --no-daemon

@@ -200,4 +200,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // JVM 单测(JUnit4):覆盖无 Android 依赖的纯 Kotlin 逻辑(时长格式化、WBI 签名、id 解析)。
+    testImplementation("junit:junit:4.13.2")
 }

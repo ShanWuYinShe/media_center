@@ -1,0 +1,6 @@
+# 仅承载 ruff 配置(server.py 是纯标准库单文件服务,无 Python 打包需求)。
+# ruff 0.16 起内置默认规则集大幅扩展(含 isort / flake8-blind-except 等),
+# 显式锁定 ruff 长期文档默认规则集(E4/E7/E9/F),保证 `ruff check` 结果
+# 不随 ruff 版本漂移;后续如需更严格规则,应连同修复一起渐进引入。
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

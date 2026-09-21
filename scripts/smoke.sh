@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # media_server 冒烟检查：对部署实例的核心只读接口做 curl + JSON 断言。
 #
-# 用法: scripts/smoke.sh <base-url>
+# 用法: scripts/smoke.sh <base-url> [vod-extractor-url]
 #   例: scripts/smoke.sh https://yinghuoren.com/api/media
-#       scripts/smoke.sh http://localhost:8787
+#       scripts/smoke.sh http://localhost:8787 http://192.168.1.10:8790
 #
 # 覆盖端点（见 media_server/API.md）:
 #   GET /health                                          → 200 {"status":"ok"}
@@ -12,13 +12,17 @@
 #   GET /api/providers/<id>/categories                   → 200 items 为数组
 #   GET /api/providers/<id>/categories/<cid>/videos      → 200 items 为数组
 #
+# 可选第二参数为 vod_extractor 内网地址（见 vod_extractor/server.py）:
+#   GET <vod-extractor-url>/health                       → 200 {"ok":true,...}
+#
 # <id>/<cid> 从前一响应动态取首项；catalog 为空时对应条目标 SKIP（不算失败）。
 # 任一 FAIL 时退出码 1，全部通过退出码 0。
 set -uo pipefail
 
 BASE="${1:-}"
+VOD_BASE="${2:-}"
 if [[ -z "${BASE}" ]] || [[ "${BASE}" == "-h" ]] || [[ "${BASE}" == "--help" ]]; then
-  echo "用法: scripts/smoke.sh <base-url>（如 https://yinghuoren.com/api/media）" >&2
+  echo "用法: scripts/smoke.sh <base-url> [vod-extractor-url]（如 https://yinghuoren.com/api/media http://host:8790）" >&2
   [[ -z "${BASE}" ]] && exit 2
   exit 0
 fi
@@ -89,6 +93,13 @@ echo "== media_server 冒烟: ${BASE} =="
 check "/health"            "${BASE}/health"              'data.get("status") == "ok"'
 check "/api/health"        "${BASE}/api/health"          'data.get("status") == "ok"'
 check "/api/providers"     "${BASE}/api/providers"       'isinstance(data.get("items"), list)'
+
+# 可选：vod_extractor 内网实例探活（不提供第二参数时完全跳过本节）
+if [[ -n "${VOD_BASE}" ]]; then
+  VOD_BASE="${VOD_BASE%/}"
+  echo "== vod_extractor 冒烟: ${VOD_BASE} =="
+  check "vod /health" "${VOD_BASE}/health" 'data.get("ok") is True'
+fi
 
 PROVIDERS_JSON="$("${CURL[@]}" "${BASE}/api/providers" 2>/dev/null)" || PROVIDERS_JSON=""
 PROVIDER_ID="$(first_of "${PROVIDERS_JSON:-{\}}" id || true)"
