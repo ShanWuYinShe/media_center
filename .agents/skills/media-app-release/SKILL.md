@@ -7,18 +7,14 @@ description: media_app 版本号与 APK 发版部署流程。触发：发版、�
 
 ## 版本号与发版（git tag 驱动）
 
-版本号规范（构建期自动读取，禁止手改 `build.gradle`）：`versionName` / `versionCode` 由 `build.gradle.kts` 在构建期用 `git describe` 读取最近 `v*` tag 自动派生，绝不手动改 versionName/versionCode。
+打 tag 通用流程（定 SemVer → 合并 → 主工作树打 tag 推送 → 构建）见全局 `git-workflow`「版本号以 tag 为源」；本 skill 只记 Android 特有部分。
 
-- `versionName`：取 tag（`v1.1.0` → `1.1.0`）；tag 后有新 commit 则带 `-dev.N` 后缀（如 `1.1.0-dev.3`）标识未发布构建。
+版本号派生（`build.gradle.kts` 构建期自动读取，禁止手改）：`versionName` / `versionCode` 由最近 `v*` tag 自动派生，绝不手动改 versionName/versionCode。
+
+- `versionName`：取 tag（`v1.1.0` → `1.1.0`）；tag 后有新 commit 则带 `-dev.N` 后缀（如 `1.1.0-dev.3`）。
 - `versionCode`：从 SemVer 派生 `major*100000 + minor*1000 + patch`（见 `semverToCode`，忽略 dev 后缀），整数比较可靠。容量：patch 0..999、minor 0..99。
-- 升版规则：破坏性改动升 major、新功能升 minor、bug 修复升 patch。无 tag 时 fallback 到 `0.1.0-dev`（不阻断构建）。
-
-AI 更新版本流程（代码改完、发版前执行）：版本号只由 git tag 决定，打完 tag 即“自动更新版本”，无需改任何文件。commit 在对应 Worktree 内完成；合并进主分支后，tag 与 push（含 tag）一律在主工作树执行（见全局 Git 准则）。
-
-1. 在 Worktree 内提交代码变更（确保要发布的 commit 已就绪）。
-2. 按变更类型决定下一 SemVer：`major`（破坏性）/`minor`（新功能）/`patch`（bug 修复）。
-3. 合并进主分支后，在主工作树于当前 commit 打 tag 并推送：`git tag vX.Y.Z && git push origin vX.Y.Z && git push origin main`（tag 必须在要发布的 commit 上）。
-4. 随后构建（`./gradlew :app:assembleRelease --no-daemon`）即得到干净版本号（`git describe` 在 tag 上产出 `X.Y.Z`，无 `-dev.N`）。
+- 无 tag 时 fallback 到 `0.1.0-dev`（不阻断构建）。
+- 发版构建命令：`./gradlew :app:assembleRelease --no-daemon`（在 tag 上构建即得干净版本号）。
 
 注意：tag 要打在 media_center 仓库（非外层 `workwork` 仓库）；版本号与外层仓库的提交/tag 无关。
 
