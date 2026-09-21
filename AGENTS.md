@@ -6,6 +6,14 @@
 
 本目录是 `media_center` 仓库（`ShanWuYinShe/media_center`），被 `workwork` 仓库以 git submodule 引用（`services/media_center`）。
 
+## 按需加载的 skill（.agents/skills/）
+
+| skill | 何时加载 |
+|---|---|
+| media-app-release | 发版、打 tag、构建与部署 APK 时 |
+| media-app-tv-ui | 新增或修改 TV 界面与交互时 |
+| media-server-catalog | 改分类数据、审核流程、搜索与解析时 |
+
 ## 仓库结构
 
 - `media_app/` — Android TV + Kotlin + Jetpack Compose + Media3 客户端
@@ -17,13 +25,13 @@
 
 App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部署方式。默认服务端 URL 是 `https://yinghuoren.com/api/media`。代理 / 部署基础设施在 `workwork` 仓库，通过 git submodule 引用本仓库来构建 `media_server` 和 `vod_extractor`。
 
-## media_app
+## media_app（详见 media_app/AGENTS.md 与 skill）
 
-构建、版本号（git tag 驱动）、APK 部署与 TV UI/UX 设计约定以 `media_app/AGENTS.md` 为唯一维护处。
+构建、版本号（git tag 驱动）、APK 部署与 TV UI/UX 设计约定以 `media_app/AGENTS.md` 为唯一维护处。其中发版流程另见 skill media-app-release，TV UI/UX 约定另见 skill media-app-tv-ui。
 
-## media_server
+## media_server（详见 media_server/AGENTS.md 与 skill）
 
-构建/测试/格式检查命令与 catalog 审核体系（唯一质量关口、youtube 实时搜索受控例外）以 `media_server/AGENTS.md` 为唯一维护处。
+构建/测试/格式检查命令与 catalog 审核体系（唯一质量关口、youtube 实时搜索受控例外）以 `media_server/AGENTS.md` 为唯一维护处。catalog 审核体系另见 skill media-server-catalog。
 
 - 播放解析（跨端契约）：App 端按 provider 处理——bilibili 用 `BilibiliApi`（WBI 签名 + view + playurl）本地解析；youtube 走 server 端解析（`/api/providers/youtube/resolve` 代理 `vod_extractor`，App 拿到全部清晰度档后在播放器内本地换源）。解析集中在服务端的原因：YouTube 风控对抗依赖 yt-dlp 及时更新，服务器容器重建即可全端生效，TV App 无需发版。
 - 部署：`workwork` 以 git submodule 引用本仓库，docker-compose 从 `services/media_center/media_server` 构建。
