@@ -1,5 +1,6 @@
-# GO_VERSION 需与 .github/workflows/ci.yml 的 setup-go go-version 保持一致
-ARG GO_VERSION=1.26.5
+# GO_VERSION 需与 .github/workflows/ci.yml 的 setup-go go-version、
+# deploy/versions.env(独立站部署的唯一版本来源)保持一致。
+ARG GO_VERSION=1.26.8
 ARG ALPINE_VERSION=3.24.1
 
 FROM golang:${GO_VERSION}-alpine AS builder

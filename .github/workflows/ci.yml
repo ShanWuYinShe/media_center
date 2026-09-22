@@ -20,10 +20,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Go 版本需与 media_server/Dockerfile 的 GO_VERSION 保持一致
+      # Go 版本需与 media_server/Dockerfile 的 GO_VERSION、deploy/versions.env 保持一致
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.8'
           cache: true
           cache-dependency-path: media_server/go.sum
 

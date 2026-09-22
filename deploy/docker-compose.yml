@@ -1,0 +1,191 @@
+# media 站编排：media.chaoset.com 独立站（web-service-conventions）。
+# 三服务自洽：nginx（边缘，公网 IPv6 经 ipvlan 直连）+ media_server + vod_extractor。
+# 与 workwork 聚合栈零互通：独立 bridge、独立数据目录、独立版本（versions.env）。
+#
+# 前置（服务器，见 README.md）：
+#   1. 宿主已建 external 网络 ipvlan_docker（IPv6 L3，与 workwork 共用同一网络，
+#      仅共用寻址，容器间仍被各自 bridge 隔离）；
+#   2. ./cert/ 放入 server_cert.pem / server_cert.key（*.chaoset.com 通配符 Origin 证书）
+#      与 cloudflare-origin-pull.pem（CF Origin Pull CA）；
+#   3. cp .env.example .env 并填 MEDIA_IPV6；
+#   4. ./data/generated/ 放 contentCategories.json / providerCredentials.json /
+#      app-update.json + media-center-app.apk；
+#      ./data/vod/ 放 youtube-cookies.txt（YouTube 解析硬前提）。
+
+name: media_center
+
+services:
+  nginx:
+    image: media-nginx:${IMAGE_TAG:-latest}
+    build:
+      context: ./nginx
+      args:
+        NGINX_VERSION: ${NGINX_VERSION:?NGINX_VERSION 未设置——版本唯一来源是 versions.env,请用 make build(自动注入)或 docker compose --env-file versions.env}
+        APK_MIRROR: ${APK_MIRROR:-mirrors.aliyun.com}
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
+      # 经官方镜像 envsubst 注入 server_name（模板 /etc/nginx/templates/*.template）
+      - MEDIA_DOMAIN=${MEDIA_DOMAIN:-media.chaoset.com}
+    init: true
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.5"
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    cap_add:
+      # nginx master chown cache 目录给 worker（CHOWN）并降权（SETGID/SETUID）；
+      # 容器默认 ip_unprivileged_port_start=0，443 无需 NET_BIND_SERVICE。
+      - CHOWN
+      - SETGID
+      - SETUID
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      edge:
+      ipvlan_docker:
+        ipv6_address: "${MEDIA_IPV6}"
+    volumes:
+      - ./cert:/etc/nginx/certs:ro
+      - ./cert/cloudflare-origin-pull.pem:/etc/nginx/cloudflare-origin-pull.pem:ro
+    depends_on:
+      media_server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/nginx-health >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  media_server:
+    image: media-server:${IMAGE_TAG:-latest}
+    build:
+      context: ../media_server
+      dockerfile: Dockerfile
+      args:
+        # deploy/versions.env 是唯一版本来源，经 Makefile export 后在此生效
+        GO_VERSION: ${GO_VERSION:?GO_VERSION 未设置——版本唯一来源是 versions.env,请用 make build(自动注入)或 docker compose --env-file versions.env}
+        ALPINE_VERSION: ${ALPINE_VERSION:?ALPINE_VERSION 未设置——版本唯一来源是 versions.env,请用 make build(自动注入)或 docker compose --env-file versions.env}
+        GIT_VERSION: ${GIT_VERSION:-dev}
+    restart: unless-stopped
+    init: true
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.25"
+    security_opt:
+      - "no-new-privileges:true"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - edge
+      - backend
+    cap_drop:
+      - ALL
+    tmpfs:
+      # Dockerfile 声明 VOLUME /cache 但服务未使用；tmpfs 覆盖避免匿名卷累积
+      - /cache
+    environment:
+      - TZ=Asia/Shanghai
+      - HOST=0.0.0.0
+      - PORT=8787
+      - CONTENT_CATEGORIES_FILE=/config/contentCategories.json
+      # Provider 凭证（如 bilibili SESSDATA）：拆分后随部署管理（编辑
+      # data/generated/providerCredentials.json + make restart media_server）
+      - PROVIDER_CREDENTIALS_FILE=/config/providerCredentials.json
+      - MEDIA_SERVER_CATALOG_DB=/app/data/catalog.db
+      - MEDIA_SERVER_INTERNAL_TOKEN=${MEDIA_SERVER_INTERNAL_TOKEN:-}
+      # App 更新下载地址：显式固定公网基址，禁止从请求 Host 头推导（防投毒引导恶意 APK）
+      - MEDIA_SERVER_PUBLIC_URL=${MEDIA_SERVER_PUBLIC_URL:-https://media.chaoset.com/api/v1}
+      - MEDIA_SERVER_APP_API_TOKEN=${MEDIA_SERVER_APP_API_TOKEN:-}
+      - MEDIA_SERVER_VOD_EXTRACTOR_URL=${MEDIA_SERVER_VOD_EXTRACTOR_URL:-http://vod_extractor:8790}
+    volumes:
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+      # 分类/凭证/app-update manifest/APK：随部署管理的配置目录（只读）
+      - ./data/generated:/config:ro
+      - media_data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8787/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # YouTube 点播解析（yt-dlp HTTP 封装）：仅 backend 内网，不对外暴露。
+  # 硬前提：./data/vod/youtube-cookies.txt（Netscape 格式），缺失则解析/搜索全被 bot 检测拦截。
+  vod_extractor:
+    image: media-vod-extractor:${IMAGE_TAG:-latest}
+    build:
+      context: ../vod_extractor
+      dockerfile: Dockerfile
+      args:
+        PYTHON_VERSION: ${PYTHON_VERSION:?PYTHON_VERSION 未设置——版本唯一来源是 versions.env,请用 make build(自动注入)或 docker compose --env-file versions.env}
+        GIT_VERSION: ${GIT_VERSION:-dev}
+    restart: unless-stopped
+    init: true
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+    security_opt:
+      - "no-new-privileges:true"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - backend
+    cap_drop:
+      - ALL
+    environment:
+      - TZ=Asia/Shanghai
+      - HOST=0.0.0.0
+      - PORT=8790
+      - VOD_EXTRACTOR_TIMEOUT_MS=${VOD_EXTRACTOR_TIMEOUT_MS:-30000}
+      - VOD_EXTRACTOR_MAX_OUTPUT_BYTES=${VOD_EXTRACTOR_MAX_OUTPUT_BYTES:-20971520}
+      - VOD_EXTRACTOR_MAX_CONCURRENT=${VOD_EXTRACTOR_MAX_CONCURRENT:-2}
+      - VOD_EXTRACTOR_EXTRACTOR_ARGS=${VOD_EXTRACTOR_EXTRACTOR_ARGS:-}
+      - VOD_EXTRACTOR_COOKIES_FILE=${VOD_EXTRACTOR_COOKIES_FILE:-}
+    volumes:
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+      - ./data/vod:/config:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8790/health', timeout=2).read()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  # 边缘：nginx ↔ media_server（bridge NAT，IPv4 出站）
+  edge:
+    driver: bridge
+  # 后端：media_server ↔ vod_extractor（不得让 nginx 直达 vod_extractor）
+  backend:
+    driver: bridge
+  # 宿主 IPv6 L3 直连网络（external，服务器上已存在，与 workwork 共用寻址池）
+  ipvlan_docker:
+    external: true
+
+volumes:
+  media_data:

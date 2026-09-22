@@ -35,9 +35,13 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 
 ## 路由
 
+对外规范前缀是 `/api/v1`（独立站约定，`main.go` 入口把 `/api/v1/x` 归一为 `/api/x`）；
+下表按内部路由书写，旧 `/api/*` 为过渡期废弃别名，行为与 `/api/v1/*` 完全一致。
+
 | 方法 | 路径 | 功能 |
 |------|------|------|
 | GET | `/health` | 健康检查(容器 healthcheck 与内网探活用) |
+| GET | `/healthz` | 存活探针(独立站约定,无鉴权,nginx /healthz 直达) |
 | GET | `/api/health` | 健康检查公网别名(经 nginx 前缀重写,排障可直接 curl) |
 | GET | `/api/providers` | 有哪些视频源 |
 | GET | `/api/providers/{provider}/categories` | 某源的分类 |
@@ -49,4 +53,4 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 | GET | `/api/app/update?versionCode=N&variant=` | App 更新检查(variant: normal/legacy) |
 | GET | `/api/app/download?variant=` | App APK 下载 |
 | POST | `/api/crash/report` | App 崩溃上报(限流 10/min/IP) |
-| POST | `/internal/catalog/*` | 管理接口(需 X-Internal-Token) |
+| POST | `/internal/catalog/*` | 管理接口(需 X-Internal-Token;独立站部署不对公网暴露,经宿主机调用) |

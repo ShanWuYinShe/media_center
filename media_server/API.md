@@ -2,10 +2,19 @@
 
 本文档描述 Android TV App 对接的公开 API。server 以目录服务为主——从已审核（`approved`）的 catalog 返回视频元数据（id、标题、简介、封面）。播放按 provider 分发：bilibili 由 App 端本地解析（`BilibiliApi`）；youtube 由 server 端解析（实时端点，见下），App 拿直链后自行播放。
 
+## 路径前缀约定
+
+独立站（media.chaoset.com）部署下，本文档所有 `/api/...` 路径同时以两种前缀提供服务：
+
+- **`/api/v1/...`（规范）**：web-service-conventions 约定的版本化前缀，新客户端一律使用；
+- **`/api/...`（废弃过渡）**：与 workwork 聚合栈时代的存量 App 及其 nginx 反代兼容，客户端全量切换后移除。
+
+两者行为完全一致（服务端入口归一化，见 `main.go` 的 `apiV1Prefix`）。`GET /healthz` 为无鉴权存活探针，不带版本前缀。App 更新下载基址 `MEDIA_SERVER_PUBLIC_URL` 已指向 `/api/v1`。
+
 ## 当前契约
 
 - server 端只从已审核（`approved`）的 catalog 返回数据。
-- `GET /api/providers`：有哪些视频源网站。
+- `GET /api/providers`（规范 `/api/v1/providers`）：有哪些视频源网站。
 - `GET /api/providers/{provider}/categories`：某视频源有哪些分类。
 - `GET /api/providers/{provider}/categories/{categoryId}/videos`：某分类下已审核的视频列表。
 

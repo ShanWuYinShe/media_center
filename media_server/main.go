@@ -206,7 +206,18 @@ func main() {
 // 保护精确施加在 API 路由上,下载端点在 ServeHTTP 里优先匹配、绕过此包裹。
 const apiTimeout = 60 * time.Second
 
+// apiV1Prefix 是独立站(media.chaoset.com)部署的对外规范业务前缀
+// (web-service-conventions:业务接口一律 /api/v1/)。内部路由仍以 /api 书写,
+// 入口处把 /api/v1/xxx 归一为 /api/xxx;旧 /api/xxx 保留为过渡期废弃别名
+// (workwork nginx 反代与存量 App 在用),客户端全量切换后一并移除。
+const apiV1Prefix = "/api/v1"
+
 func (s *mediaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// /api/v1 → /api 归一化:只改写路由用的 Path,Query 不受影响。
+	// 非前缀路径(含旧 /api/* 与 /healthz、/internal/*)原样进入分发。
+	if rest, ok := strings.CutPrefix(r.URL.Path, apiV1Prefix); ok {
+		r.URL.Path = "/api" + rest
+	}
 	// 大文件下载绕过超时包裹:TimeoutHandler 会缓冲整个响应再写出,对流式发送
 	// 的 APK 下载既没必要又浪费内存,且超时会截断传输。优先匹配后直接交给 handler。
 	if r.Method == http.MethodGet && r.URL.Path == "/api/app/download" {
@@ -220,7 +231,9 @@ func (s *mediaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // 单个 API 请求超过 apiTimeout 即返回 503 并中断,防止慢查询/卡住的 handler 拖垮服务。
 func (s *mediaServer) serveAPI(w http.ResponseWriter, r *http.Request) {
 	switch {
-	case r.Method == http.MethodGet && (r.URL.Path == "/health" || r.URL.Path == "/api/health"):
+	case r.Method == http.MethodGet && (r.URL.Path == "/health" || r.URL.Path == "/healthz" || r.URL.Path == "/api/health"):
+		// /healthz 是独立站约定的无鉴权存活探针(nginx 直接探此路径);
+		// /health 是容器 healthcheck 与既有调用方的原名;/api/health 为兼容保留。
 		s.writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version})
 	case strings.HasPrefix(r.URL.Path, "/internal/"):
 		s.handleInternal(w, r)
