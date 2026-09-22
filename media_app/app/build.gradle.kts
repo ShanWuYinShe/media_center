@@ -25,7 +25,8 @@ android {
 
         val serverBaseUrl = providers.gradleProperty("MEDIA_SERVER_URL")
             .orElse(providers.environmentVariable("MEDIA_SERVER_URL"))
-            .orElse("https://yinghuoren.com/api/media")
+            // 独立站规范前缀 /api/v1;旧默认(workwork 聚合栈)经其过渡反代仍可用
+            .orElse("https://media.chaoset.com/api/v1")
             .map { it.trim().trimEnd('/') }
             .orNull
             ?: error("MEDIA_SERVER_URL default is missing")
@@ -36,7 +37,7 @@ android {
         }
         if (serverUri.scheme?.lowercase() != "https" || serverUri.host.isNullOrBlank()) {
             throw GradleException(
-                "MEDIA_SERVER_URL must be an absolute HTTPS URL, e.g. https://yinghuoren.com/api/media",
+                "MEDIA_SERVER_URL must be an absolute HTTPS URL, e.g. https://media.chaoset.com/api/v1",
             )
         }
         val escapedServerBaseUrl = serverBaseUrl
