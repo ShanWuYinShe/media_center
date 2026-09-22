@@ -51,6 +51,10 @@ server {
     proxy_read_timeout 120s;
     proxy_send_timeout 120s;
 
+    # 变量形式 upstream 在运行期解析,必须显式指定 resolver(127.0.0.11 =
+    # docker 内嵌 DNS,可解析服务名并转发外部域名)。
+    resolver 127.0.0.11 valid=30s;
+
     set $media_upstream media_server:8787;
 
     # APK 流式下载：不在 nginx 侧缓冲整包（300MB 级），超时放宽到与服务端
