@@ -31,6 +31,13 @@ API 约定见仓库根 AGENTS.md「API 约定」：业务接口规范前缀 `/ap
    `{"status":"ok","version":"..."}`）；App 侧以新基址
    `https://media.chaoset.com/api/v1` 拉一次 providers。
 
+## 版本统一
+
+基础镜像版本由 workwork 仓库的 `versions.env` 作主本统一管理（本仓
+`deploy/versions.env` 是其在媒体站的落地，含站点专属键 PYTHON_VERSION）。
+跨仓校验/同步工具：workwork 仓 `scripts/sync-versions.sh check|sync`；
+勿单方面修改本仓版本值。
+
 ## 运维
 
 - **版本升级**：改 `versions.env` → `make build` → `make up <svc...>`。
