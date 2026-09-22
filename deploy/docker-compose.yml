@@ -39,10 +39,13 @@ services:
       - ALL
     cap_add:
       # nginx master chown cache 目录给 worker（CHOWN）并降权（SETGID/SETUID）；
+      # DAC_OVERRIDE：master 需读 cert/ 下属主为宿主用户的 0600 私钥（无此 cap
+      # 即 Permission denied 崩溃循环，与 workwork nginx 同因）。
       # 容器默认 ip_unprivileged_port_start=0，443 无需 NET_BIND_SERVICE。
       - CHOWN
       - SETGID
       - SETUID
+      - DAC_OVERRIDE
     logging:
       driver: "json-file"
       options:
