@@ -6,14 +6,6 @@
 
 本目录是 `media_center` 仓库（`ShanWuYinShe/media_center`）。
 
-## 按需加载的 skill（.agents/skills/）
-
-| skill | 何时加载 |
-|---|---|
-| media-app-release | 发版、打 tag、构建与部署 APK 时 |
-| media-app-tv-ui | 新增或修改 TV 界面与交互时 |
-| media-server-catalog | 改分类数据、审核流程、搜索与解析时 |
-
 ## 仓库结构
 
 - `media_app/` — Android TV + Kotlin + Jetpack Compose + Media3 客户端
