@@ -26,8 +26,14 @@ class MediaRepository(
         refreshCredentials()
         val items = api.providers().items.orEmpty()
         if (items.isNotEmpty() && !providerInitialized.getAndSet(true)) {
-            currentProvider = items.first().id
-            persistProvider()
+            // 仅当没有持久化选择、或持久化的 provider 已从列表下线时才自动选
+            // 第一个:currentProvider 初值已从 prefs 恢复,这里再无条件覆盖会让
+            // 用户每次重启都被拉回默认源(与注释"不回到默认源"相悖)。
+            val restored = providerPrefs?.getString(KEY_CURRENT_PROVIDER, null)
+            if (restored.isNullOrEmpty() || items.none { it.id == restored }) {
+                currentProvider = items.first().id
+                persistProvider()
+            }
         }
         return items
     }
