@@ -153,6 +153,9 @@ class SearchViewModel(
             return
         }
         _uiState.value = _uiState.value.copy(isSearching = true, error = null)
+        // 远程两级(youtube 实时通道 / server 搜索)任一失败置位:两级全失败且
+        // 本地也无结果时,把"网络不可用"与"真无结果"区分开,不再静默回退。
+        var remoteFailed = false
         // YouTube 实时搜索:优先调 server 的 YouTube 通道(Data API),不查本地
         // catalog(YouTube 内容不要求先入库)。失败仍落到下方本地目录过滤——
         // 至少能搜到已审核入库的 YouTube 内容。
@@ -162,6 +165,7 @@ class SearchViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                remoteFailed = true
                 AppLog.w("Search", "youtube search failed, fallback to local catalog: ${e.message}", e)
                 null
             }
@@ -177,6 +181,7 @@ class SearchViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            remoteFailed = true
             AppLog.w("Search", "server search failed, fallback to local catalog: ${e.message}", e)
             null
         }
@@ -217,7 +222,14 @@ class SearchViewModel(
                 .distinctBy { it.id }
                 .filter { it.title.contains(q, ignoreCase = true) }
         }
-        _uiState.value = _uiState.value.copy(isSearching = false, results = results, error = null)
+        // 远程两级全失败且本地无匹配:显式报网络错误,否则用户把"搜索服务挂了"
+        // 误读成"没有这个视频"。
+        val searchError = if (results.isEmpty() && remoteFailed) {
+            "搜索服务暂不可用（网络异常），请检查网络后重试"
+        } else {
+            null
+        }
+        _uiState.value = _uiState.value.copy(isSearching = false, results = results, error = searchError)
     }
 
     // 目录缓存是否与当前 provider 一致

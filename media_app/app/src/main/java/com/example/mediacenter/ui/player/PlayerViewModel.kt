@@ -3,6 +3,8 @@ package com.example.mediacenter.ui.player
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.mediacenter.data.ApiException
+import com.example.mediacenter.data.BilibiliApiException
 import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.PlaybackResult
@@ -89,9 +91,16 @@ class PlayerViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // 原始异常可能是英文技术信息;记日志、给固定友好文案(与分类页一致)
             AppLog.e("Player", "resolvePlayback failed: ${e.message}", e)
-            _uiState.value = _uiState.value.copy(isLoading = false, error = "播放地址解析失败，请重试")
+            // B 站/服务端异常的 message 已是面向用户的中文具体原因(风控/无分P/
+            // 令牌失效等),透出比固定文案可诊断——TV 上用户报错只有这一行字,
+            // "解析失败,请重试"无法区分是网络问题还是内容问题;其余异常
+            // (原始信息是英文技术细节)仍用通用友好文案。
+            val friendly = when (e) {
+                is BilibiliApiException, is ApiException -> e.message
+                else -> "播放地址解析失败，请重试"
+            }
+            _uiState.value = _uiState.value.copy(isLoading = false, error = friendly)
         }
     }
 }
