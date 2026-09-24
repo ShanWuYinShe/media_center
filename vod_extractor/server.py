@@ -31,6 +31,23 @@ MAX_QUERY_BYTES = 128
 DEFAULT_SEARCH_LIMIT = 20
 MAX_SEARCH_LIMIT = 30
 
+# /extract 目标 host 白名单:本服务当前只服务 youtube provider(media_server 只会
+# 传入 youtube watch URL),白名单把 SSRF 暴露面(含重定向后的落点之外)压到
+# "youtube 域"一个出口。可用 VOD_EXTRACTOR_ALLOWED_EXTRACT_HOSTS(逗号分隔)
+# 整体覆盖;留空用内置默认。
+DEFAULT_ALLOWED_EXTRACT_HOSTS = (
+    "youtube.com",
+    "www.youtube.com",
+    "youtu.be",
+    "m.youtube.com",
+    "music.youtube.com",
+)
+ALLOWED_EXTRACT_HOSTS = tuple(
+    host.strip().lower().lstrip(".")
+    for host in os.environ.get("VOD_EXTRACTOR_ALLOWED_EXTRACT_HOSTS", "").split(",")
+    if host.strip()
+) or DEFAULT_ALLOWED_EXTRACT_HOSTS
+
 # 版本自报:GIT_VERSION 由镜像构建期写入 /app/version(仓库 git describe);
 # yt-dlp 版本启动时取一次——YouTube 风控对抗依赖 yt-dlp 版本,排障必查。
 try:
@@ -55,13 +72,34 @@ class ExtractorBusyError(RuntimeError):
     pass
 
 
+class ExtractorConfigError(RuntimeError):
+    """服务端自身配置错误(如显式 cookies 文件缺失/不可读)。
+
+    必须与请求方错误(ValueError→400)区分:配置错误返回 503,
+    否则排障时会把服务端问题误判为客户端请求问题。
+    """
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "vod-extractor/1.0"
+    # socket 级读超时:慢速连接(慢发请求头/体)不能无限占用线程,
+    # 内网暴露也保留这道防线。
+    timeout = 30
 
     def do_GET(self):
         self.started_at = time.monotonic()
         if self.path == "/health":
-            self.send_json(200, {"ok": True, "version": SERVICE_VERSION, "ytdlp": YTDLP_VERSION})
+            self.send_json(
+                200,
+                {
+                    "ok": True,
+                    "version": SERVICE_VERSION,
+                    "ytdlp": YTDLP_VERSION,
+                    # cookies 健康信号:cookies 过期/缺失会让 YouTube 解析与搜索
+                    # 全部失败且不产生主动告警,外部监控靠此字段告警(见 README)。
+                    "cookies": cookies_health(),
+                },
+            )
             return
         self.send_json(404, {"error": "not found"})
 
@@ -81,6 +119,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not is_safe_target(url):
                     self.send_json(400, {"error": "url target is not allowed"})
                     return
+                if not is_allowed_extract_host(urlparse(url).hostname):
+                    self.send_json(400, {"error": "url host is not allowed"})
+                    return
                 extracted = extract_vod(url)
             else:
                 query, limit = parse_search_payload(payload)
@@ -92,6 +133,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": str(error)})
             return
         except ExtractorBusyError as error:
+            self.send_json(503, {"error": str(error)})
+            return
+        except ExtractorConfigError as error:
+            # 服务端配置问题(如 cookies 不可用)是 503,不是客户端的 400
             self.send_json(503, {"error": str(error)})
             return
         except RuntimeError as error:
@@ -210,6 +255,21 @@ def _is_private_or_reserved(ip):
     )
 
 
+def is_allowed_extract_host(host):
+    """host 白名单判定:与允许项相等或为其子域(大小写/末尾点归一化)。
+
+    host 取自 urlparse().hostname(已剥端口与 user:pass);YouTube 各区域
+    前缀(www./m./music.)靠子域规则覆盖。
+    """
+    host = (host or "").strip().lower().rstrip(".")
+    if not host:
+        return False
+    for allowed in ALLOWED_EXTRACT_HOSTS:
+        if host == allowed or host.endswith("." + allowed):
+            return True
+    return False
+
+
 def extract_vod(url):
     if not EXTRACTOR_SEMAPHORE.acquire(blocking=False):
         raise ExtractorBusyError("extractor is busy")
@@ -294,11 +354,32 @@ def extractor_command(target, single_video=True):
 def extractor_cookies_file():
     if not COOKIES_FILE:
         return None
-    if os.path.isfile(COOKIES_FILE):
+    if os.path.isfile(COOKIES_FILE) and os.access(COOKIES_FILE, os.R_OK):
         return COOKIES_FILE
     if COOKIES_FILE_EXPLICIT:
-        raise ValueError("configured cookies file is not readable")
+        # 存在但不可读(宿主属主 0600 直挂)与缺失同样致命,统一走配置错误(503)
+        raise ExtractorConfigError("configured cookies file is missing or not readable")
     return None
+
+
+def cookies_health():
+    """/health 暴露的 cookies 文件健康信号(只读元数据,不含内容)。
+
+    cookies 过期/缺失时解析与搜索全部失败但不产生主动告警,外部监控
+    依赖本字段:present=false 或 age_seconds 异常增大即应告警。
+    """
+    if not COOKIES_FILE:
+        return {"configured": False}
+    try:
+        stat = os.stat(COOKIES_FILE)
+    except OSError:
+        return {"configured": COOKIES_FILE_EXPLICIT, "present": False}
+    return {
+        "configured": COOKIES_FILE_EXPLICIT,
+        "present": True,
+        "readable": os.access(COOKIES_FILE, os.R_OK),
+        "age_seconds": max(0, int(time.time() - stat.st_mtime)),
+    }
 
 
 def read_limited_process_output(process):
@@ -376,8 +457,13 @@ def main():
     YTDLP_VERSION = _ytdlp_version()
     # 启动期校验:显式配置的 cookies 文件必须存在且可读,否则 fail-fast
     # (避免运行期每次请求都报错,且静默降级会让登录受限内容解析全失败)。
-    if COOKIES_FILE_EXPLICIT and not os.path.isfile(COOKIES_FILE):
-        print(f"error: configured cookies file not found: {COOKIES_FILE}", file=sys.stderr)
+    if COOKIES_FILE_EXPLICIT and not (
+        os.path.isfile(COOKIES_FILE) and os.access(COOKIES_FILE, os.R_OK)
+    ):
+        print(
+            f"error: configured cookies file missing or not readable: {COOKIES_FILE}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     server = ThreadingHTTPServer((HOST, PORT), Handler)

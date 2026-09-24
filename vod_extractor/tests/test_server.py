@@ -13,6 +13,7 @@ import socket
 import sys
 import unittest
 from unittest import mock
+from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -193,11 +194,25 @@ class ExtractorCommandTest(unittest.TestCase):
 
 class ExtractorCookiesFileTest(unittest.TestCase):
     def test_explicit_missing_file_raises(self):
-        # 显式配置（环境变量注入）的 cookies 文件必须存在，缺失即报错
+        # 显式配置（环境变量注入）的 cookies 文件必须存在，缺失即配置错误（→503）
         with mock.patch.object(server, "COOKIES_FILE", "/nonexistent/cookies.txt"), \
              mock.patch.object(server, "COOKIES_FILE_EXPLICIT", True):
-            with self.assertRaises(ValueError):
+            with self.assertRaises(server.ExtractorConfigError):
                 server.extractor_cookies_file()
+
+    def test_explicit_unreadable_file_raises(self):
+        # 存在但不可读（如宿主属主 0600 直挂进容器）与缺失同样致命
+        import tempfile
+
+        with tempfile.NamedTemporaryFile() as f:
+            os.chmod(f.name, 0o000)
+            try:
+                with mock.patch.object(server, "COOKIES_FILE", f.name), \
+                     mock.patch.object(server, "COOKIES_FILE_EXPLICIT", True):
+                    with self.assertRaises(server.ExtractorConfigError):
+                        server.extractor_cookies_file()
+            finally:
+                os.chmod(f.name, 0o600)
 
     def test_default_missing_file_is_none(self):
         # 默认路径缺失是正常状态（未放 cookies），静默降级
@@ -209,6 +224,75 @@ class ExtractorCookiesFileTest(unittest.TestCase):
         with mock.patch.object(server, "COOKIES_FILE", __file__), \
              mock.patch.object(server, "COOKIES_FILE_EXPLICIT", False):
             self.assertEqual(server.extractor_cookies_file(), __file__)
+
+
+class IsAllowedExtractHostTest(unittest.TestCase):
+    """/extract 目标 host 白名单：youtube 域精确或子域，其余拒绝。"""
+
+    def test_youtube_hosts_allowed(self):
+        for url in (
+            "https://www.youtube.com/watch?v=abc",
+            "https://youtube.com/watch?v=abc",
+            "https://youtu.be/abc",
+            "https://m.youtube.com/watch?v=abc",
+            "https://music.youtube.com/watch?v=abc",
+        ):
+            with self.subTest(url=url):
+                self.assertTrue(server.is_allowed_extract_host(urlparse(url).hostname))
+
+    def test_subdomain_allowed(self):
+        self.assertTrue(server.is_allowed_extract_host("a.b.youtube.com"))
+
+    def test_non_youtube_denied(self):
+        for host in ("example.com", "youtube.com.evil.io", "notyoutube.com", "169.254.169.254"):
+            with self.subTest(host=host):
+                self.assertFalse(server.is_allowed_extract_host(host))
+
+    def test_case_and_trailing_dot_normalized(self):
+        self.assertTrue(server.is_allowed_extract_host("WWW.YouTube.COM."))
+        self.assertTrue(server.is_allowed_extract_host(" YOUTUBE.com "))
+
+    def test_suffix_lookalike_denied(self):
+        # endswith(".youtube.com") 不应放过 "evilyoutube.com" 这类后缀撞名
+        self.assertFalse(server.is_allowed_extract_host("evilyoutube.com"))
+
+    def test_empty_host_denied(self):
+        self.assertFalse(server.is_allowed_extract_host(""))
+        self.assertFalse(server.is_allowed_extract_host(None))
+
+
+class CookiesHealthTest(unittest.TestCase):
+    """cookies 健康信号：只读元数据，不读文件内容。"""
+
+    def test_missing_file_reports_absent(self):
+        with mock.patch.object(server, "COOKIES_FILE", "/nonexistent/cookies.txt"), \
+             mock.patch.object(server, "COOKIES_FILE_EXPLICIT", False):
+            info = server.cookies_health()
+        self.assertFalse(info["present"])
+        self.assertFalse(info["configured"])
+
+    def test_missing_explicit_reports_configured(self):
+        with mock.patch.object(server, "COOKIES_FILE", "/nonexistent/cookies.txt"), \
+             mock.patch.object(server, "COOKIES_FILE_EXPLICIT", True):
+            info = server.cookies_health()
+        self.assertFalse(info["present"])
+        self.assertTrue(info["configured"])
+
+    def test_present_file_reports_metadata(self):
+        import tempfile
+
+        with tempfile.NamedTemporaryFile() as f:
+            with mock.patch.object(server, "COOKIES_FILE", f.name), \
+                 mock.patch.object(server, "COOKIES_FILE_EXPLICIT", False):
+                info = server.cookies_health()
+        self.assertTrue(info["present"])
+        self.assertTrue(info["readable"])
+        self.assertGreaterEqual(info["age_seconds"], 0)
+        self.assertLess(info["age_seconds"], 60)
+
+
+if __name__ == "__main__":
+    unittest.main()
 
 
 if __name__ == "__main__":

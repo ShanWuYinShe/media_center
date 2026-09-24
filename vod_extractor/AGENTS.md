@@ -8,7 +8,7 @@
 
 ## 部署硬前提（服务器）
 
-YouTube 对数据中心 IP 的所有 player_client 都触发 "Sign in to confirm you're not a bot"：服务器部署必须放置 YouTube cookies（Netscape 格式）到 `.wework/vod_extractor/youtube-cookies.txt`（容器只读挂载为 `/config/youtube-cookies.txt`），否则解析与搜索一律失败。优先通过 `VOD_EXTRACTOR_EXTRACTOR_ARGS`（如 `youtube:player_client=tv`）与 cookies 双管齐下；cookies 过期后需重新导出。
+YouTube 对数据中心 IP 的所有 player_client 都触发 "Sign in to confirm you're not a bot"：服务器部署必须放置 YouTube cookies（Netscape 格式）到 `deploy/data/vod/youtube-cookies.txt`（容器只读挂载为 `/config/youtube-cookies.txt`），否则解析与搜索一律失败。优先通过 `VOD_EXTRACTOR_EXTRACTOR_ARGS`（如 `youtube:player_client=tv`）与 cookies 双管齐下；cookies 过期后需重新导出。`GET /health` 返回 `cookies` 字段（present/readable/age_seconds）供外部监控告警。
 
 ## 约束
 

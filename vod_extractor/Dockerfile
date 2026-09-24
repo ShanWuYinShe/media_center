@@ -4,6 +4,8 @@ FROM python:${PYTHON_VERSION}-alpine
 
 WORKDIR /app
 
+# yt-dlp 版本唯一来源是 deploy/versions.env(经 compose build args 注入);
+# 此默认仅用于脱离编排直接 docker build 的场景。
 ARG YT_DLP_VERSION=2026.07.04
 # GIT_VERSION 由编排层传入(仓库 git describe),写入 /app/version 供 /health
 # 暴露;未传时为 "dev"。
@@ -26,7 +28,8 @@ ENV HOST=0.0.0.0 \
     VOD_EXTRACTOR_MAX_OUTPUT_BYTES=20971520 \
     VOD_EXTRACTOR_MAX_CONCURRENT=2 \
     VOD_EXTRACTOR_EXTRACTOR_ARGS="" \
-    VOD_EXTRACTOR_COOKIES_FILE=""
+    VOD_EXTRACTOR_COOKIES_FILE="" \
+    VOD_EXTRACTOR_ALLOWED_EXTRACT_HOSTS=""
 
 EXPOSE 8790
 
