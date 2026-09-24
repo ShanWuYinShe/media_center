@@ -104,6 +104,8 @@ type VideoSummary = {
 
 **鉴权**：请求必须携带 `X-App-Token` 头，且与服务端 `MEDIA_SERVER_APP_API_TOKEN` 一致（常量时间比较）；未配置 token 或令牌不匹配返回 401。同一 IP 每分钟超过 30 次返回 429。无凭证时返回空数组：
 
+> **风险告知**：`APP_API_TOKEN` 构建期注入 BuildConfig 随 APK 分发，反编译可提取。当前按**自用 App** 接受该风险（per-IP 限流 + 无设备绑定），若未来公开发布需改为服务端下发短期令牌或设备绑定方案。
+
 ```json
 { "credentials": [] }
 ```
