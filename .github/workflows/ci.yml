@@ -47,13 +47,15 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.14'
+          # 与 deploy/versions.env 的 PYTHON_VERSION 保持一致
+          python-version: '3.14.7'
 
       - name: syntax check
         run: python3 -m py_compile vod_extractor/server.py
       - name: ruff
         run: |
-          python3 -m pip install ruff
+          # 钉版本:规则集虽锁 E4/E7/E9/F,新 ruff 仍可能在这些组内加规则导致结果漂移
+          python3 -m pip install "ruff==0.16.8"
           ruff check vod_extractor
       - name: unit tests
         run: python3 -m unittest discover -s vod_extractor/tests -v
