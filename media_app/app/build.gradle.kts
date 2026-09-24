@@ -160,7 +160,6 @@ kotlin {
 dependencies {
     val media3Version = "1.10.1"
 
-    implementation("androidx.activity:activity-ktx:1.13.0")
     implementation("androidx.core:core-ktx:1.19.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.11.0")
@@ -192,7 +191,7 @@ dependencies {
     // (项目用 Icons.Filled.Search/Settings、Icons.AutoMirrored.Filled.ArrowBack)。
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.tv:tv-material:1.0.0")
-    implementation("androidx.tv:tv-foundation:1.0.0")
+    // activity-ktx 由 activity-compose 传递引入,不重复声明
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.navigation:navigation-compose:2.9.0")
 
