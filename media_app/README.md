@@ -13,7 +13,7 @@
 3. 打包调试 APK：使用 **Build > Build Bundle(s) / APK(s) > Build APK(s)**。
 4. 打包发布 APK：使用 **Build > Generate Signed Bundle / APK...**。
 
-命令行构建（JAVA_HOME 见全局「本机环境」Android Studio JBR 条目）：
+命令行构建（JAVA_HOME 见 skill local-environment 的 Android Studio JBR 条目）：
 
 ```bash
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:assembleDebug

@@ -27,6 +27,6 @@ APK 有 **normal + legacy 两个变体**：normal 源码即本目录；legacy �
 `media-center-app.apk` 不是上传名），随后手写 `app-update.json` 与
 `app-update-legacy.json` 两份 manifest（versionCode / versionName / SHA256 /
 apkFilename）。上述构建 + 命名 + manifest 生成（+ 可选 scp 上传）可用
-`scripts/release-apk.sh` 一键完成；上传命令、manifest 字段与完整流程仍以
-`workwork` 仓库 README「media_app」节为唯一维护处，此处不重复。
+`scripts/release-apk.sh` 一键完成（**该脚本即权威实现**，其头部注释与用法说明是
+上传命令、manifest 字段与完整流程的唯一维护处，本文件不重复）。
 

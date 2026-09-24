@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# media_app APK 发布脚本：把 media_app/AGENTS.md 与 workwork README「media_app」节
-# 描述的手工发布流程收敛为一条命令。
+# media_app APK 发布脚本：把 media_app/AGENTS.md 描述的手工发布流程收敛为一条命令。
+# 本脚本即 APK 上传命令、manifest 字段与完整部署流程的权威实现（skill media-app-release 引用此处）。
 #
 # 功能：
 #   1. 编译 normal（media_app/）与 legacy（media_app_legacy/）两个 release 变体
@@ -218,7 +218,7 @@ mkdir -p "${OUT_DIR}"
 
 if [[ "${UPLOAD}" -eq 1 ]]; then
   log "上传 APK 与 manifest → ${SERVER}:${REMOTE_DIR}/"
-  # 与 workwork README「media_app」节一致：版本化 APK 文件名 + 两份 manifest
+  # 服务器索引约定：版本化 APK 文件名 + 两份 manifest
   scp "${OUT_DIR}"/media-center-app-v*.apk "${SERVER}:${REMOTE_DIR}/"
   scp "${OUT_DIR}/app-update.json" "${OUT_DIR}/app-update-legacy.json" "${SERVER}:${REMOTE_DIR}/"
   log "上传完成。服务器侧需按 workwork README 完成发布确认（或经 admin 面板发布）。"

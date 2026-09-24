@@ -8,9 +8,8 @@
 
 ```bash
 cd media_app
-# JAVA_HOME 见全局「本机环境」Android Studio JBR 条目（以 ls 验证，变动时用 mdfind 定位）
-# --no-daemon 必加：Gradle/Kotlin Daemon 默认构建后 idle 保留数小时不退出（各 -Xmx2g），
-# AI agent 多次构建会累积多个 java 进程撑爆内存。--no-daemon 让构建完 java 进程立即退出。
+# JAVA_HOME 见 skill local-environment（Android Studio JBR 路径；以 ls 验证，变动时用 mdfind 定位）
+# --no-daemon 必加（原因见 skill toolchain-setup：Daemon 构建后 idle 数小时不退出，各占 -Xmx2g）
 # release（非 debug）：已配 debug 签名（signingConfig=debug）+ R8 minify，体积减半且可直接安装。
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:assembleRelease --no-daemon
 # 产物: app/build/outputs/apk/release/app-release.apk
