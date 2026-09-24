@@ -19,6 +19,9 @@ server {
     http2 on;
     server_name ${MEDIA_DOMAIN};
 
+    # 不对外暴露 nginx 版本号(纯 API 站,低成本加固)
+    server_tokens off;
+
     ssl_certificate /etc/nginx/certs/server_cert.pem;
     ssl_certificate_key /etc/nginx/certs/server_cert.key;
 

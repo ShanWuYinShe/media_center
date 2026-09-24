@@ -33,10 +33,28 @@ API 约定见仓库根 AGENTS.md「API 约定」：业务接口规范前缀 `/ap
 
 ## 版本统一
 
-基础镜像版本由 workwork 仓库的 `versions.env` 作主本统一管理（本仓
-`deploy/versions.env` 是其在媒体站的落地，含站点专属键 PYTHON_VERSION）。
-跨仓校验/同步工具：workwork 仓 `scripts/sync-versions.sh check|sync`；
-勿单方面修改本仓版本值。
+**`deploy/versions.env` 是本站全部版本键的唯一事实来源**（GO_VERSION /
+ALPINE_VERSION / PYTHON_VERSION / NGINX_VERSION / YT_DLP_VERSION）。
+升级：改 versions.env → `make build` → `make up <svc...>`。改完顺手核对
+media_server/Dockerfile 与 `.github/workflows/ci.yml` 的同名字段仍一致
+（compose 的 `:?` 守卫会在缺键时直接报错，绕过 Makefile 的裸 compose 调用
+必须 `--env-file versions.env`）。
+
+## 备份与监控
+
+- **catalog 备份**（system of record，当前唯一持久业务数据）：`make backup`
+  经 `/internal/catalog/export` 导出全量成员 JSON 到宿主 `backups/`
+  （依赖 .env 配置 `MEDIA_SERVER_INTERNAL_TOKEN`；导出可用
+  `/internal/catalog/import` 回放）。建议每日 cron + 异地留存；
+  需要整机级快照时先 `docker compose stop media_server` 再复制
+  `media_data` 卷（避免 SQLite WAL 半写状态）。
+- **外部探活**：docker healthcheck 只影响容器状态，假死/重启循环无告警。
+  在 Cloudflare 为 `https://media.chaoset.com/healthz` 配置 Health Check
+  并接通知渠道。
+- **cookies 失效告警**：vod_extractor `GET /health` 返回 `cookies` 字段
+  （present/readable/age_seconds）。cookies 缺失或 age 异常增大意味着
+  YouTube 搜索与解析即将/已经全功能瘫痪，对其告警（可由外部监控定时
+  打内网 /health 或在 media_server 侧观察 502 率）。
 
 ## 运维
 

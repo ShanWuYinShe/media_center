@@ -16,7 +16,7 @@ name: media_center
 
 services:
   nginx:
-    image: media-nginx:${IMAGE_TAG:-latest}
+    image: media-nginx:${IMAGE_TAG:?IMAGE_TAG 未设置——tag 由 Makefile 注入 git describe;回滚用 IMAGE_TAG=<旧tag> make up <svc>}
     build:
       context: ./nginx
       args:
@@ -33,6 +33,7 @@ services:
         limits:
           memory: 128M
           cpus: "0.5"
+          pids: 64
     security_opt:
       - "no-new-privileges:true"
     cap_drop:
@@ -54,7 +55,7 @@ services:
     networks:
       edge:
       ipvlan_docker:
-        ipv6_address: "${MEDIA_IPV6}"
+        ipv6_address: "${MEDIA_IPV6:?MEDIA_IPV6 未设置——公网入口 IPv6,见 README 首次部署步骤 1(cp .env.example .env 并填写)}"
     volumes:
       - ./cert:/etc/nginx/certs:ro
       - ./cert/cloudflare-origin-pull.pem:/etc/nginx/cloudflare-origin-pull.pem:ro
@@ -69,7 +70,7 @@ services:
       start_period: 10s
 
   media_server:
-    image: media-server:${IMAGE_TAG:-latest}
+    image: media-server:${IMAGE_TAG:?IMAGE_TAG 未设置——tag 由 Makefile 注入 git describe;回滚用 IMAGE_TAG=<旧tag> make up <svc>}
     build:
       context: ../media_server
       dockerfile: Dockerfile
@@ -85,6 +86,7 @@ services:
         limits:
           memory: 64M
           cpus: "0.25"
+          pids: 64
     security_opt:
       - "no-new-privileges:true"
     logging:
@@ -95,6 +97,11 @@ services:
     networks:
       - edge
       - backend
+    depends_on:
+      # 仅保证启动顺序(extractor 先起来),不做健康门禁:extractor 故障不应
+      # 拖死 catalog 主服务(youtube 实时通道会 502,其余接口不受影响)。
+      vod_extractor:
+        condition: service_started
     cap_drop:
       - ALL
     tmpfs:
@@ -129,12 +136,13 @@ services:
   # YouTube 点播解析（yt-dlp HTTP 封装）：仅 backend 内网，不对外暴露。
   # 硬前提：./data/vod/youtube-cookies.txt（Netscape 格式），缺失则解析/搜索全被 bot 检测拦截。
   vod_extractor:
-    image: media-vod-extractor:${IMAGE_TAG:-latest}
+    image: media-vod-extractor:${IMAGE_TAG:?IMAGE_TAG 未设置——tag 由 Makefile 注入 git describe;回滚用 IMAGE_TAG=<旧tag> make up <svc>}
     build:
       context: ../vod_extractor
       dockerfile: Dockerfile
       args:
         PYTHON_VERSION: ${PYTHON_VERSION:?PYTHON_VERSION 未设置——版本唯一来源是 versions.env,请用 make build(自动注入)或 docker compose --env-file versions.env}
+        YT_DLP_VERSION: ${YT_DLP_VERSION:?YT_DLP_VERSION 未设置——版本唯一来源是 versions.env,请用 make build(自动注入)或 docker compose --env-file versions.env}
         GIT_VERSION: ${GIT_VERSION:-dev}
     restart: unless-stopped
     init: true
@@ -143,6 +151,8 @@ services:
         limits:
           memory: 256M
           cpus: "0.5"
+          # yt-dlp 会派生 ffmpeg 等子进程,进程数上限放宽留余量
+          pids: 128
     security_opt:
       - "no-new-privileges:true"
     logging:
@@ -163,6 +173,8 @@ services:
       - VOD_EXTRACTOR_MAX_CONCURRENT=${VOD_EXTRACTOR_MAX_CONCURRENT:-2}
       - VOD_EXTRACTOR_EXTRACTOR_ARGS=${VOD_EXTRACTOR_EXTRACTOR_ARGS:-}
       - VOD_EXTRACTOR_COOKIES_FILE=${VOD_EXTRACTOR_COOKIES_FILE:-}
+      # /extract 目标 host 白名单(留空用 server.py 内置 youtube 域默认)
+      - VOD_EXTRACTOR_ALLOWED_EXTRACT_HOSTS=${VOD_EXTRACTOR_ALLOWED_EXTRACT_HOSTS:-}
     volumes:
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
       - ./data/vod:/config:ro

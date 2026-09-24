@@ -12,9 +12,9 @@ export IMAGE_TAG ?= $(GIT_VERSION)
 SERVICES := nginx media_server vod_extractor
 
 .DEFAULT_GOAL := help
-.PHONY: help $(SERVICES) build up restart logs ps
+.PHONY: help $(SERVICES) build up restart logs ps backup
 
-KNOWN_TARGETS := help build up restart logs ps
+KNOWN_TARGETS := help build up restart logs ps backup
 
 # 变长服务名目标的兜底规则（make build nginx 里的 "nginx" 不是 make 目标）。
 # 必须校验：无守卫时拼错目标（make buil nginx）会静默成功退出 0。
@@ -42,3 +42,10 @@ logs: ## 跟踪指定服务日志: make logs nginx
 
 ps: ## 查看服务状态
 	$(COMPOSE) ps
+
+backup: ## 备份 catalog 到宿主 backups/（经 /internal/catalog/export 导出 JSON，可用 import 回放）
+	@mkdir -p backups && \
+	STAMP=$$(date +%Y%m%d-%H%M%S) && \
+	$(COMPOSE) exec -T media_server sh -c 'wget -qO- --header "X-Internal-Token: $$MEDIA_SERVER_INTERNAL_TOKEN" http://127.0.0.1:8787/internal/catalog/export' > "backups/catalog-$$STAMP.json" \
+	|| { rm -f "backups/catalog-$$STAMP.json"; echo "backup 失败:确认容器在运行且 .env 已配置 MEDIA_SERVER_INTERNAL_TOKEN" >&2; exit 1; } \
+	&& echo "backup OK: backups/catalog-$$STAMP.json"
