@@ -161,7 +161,7 @@ YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返�
 {
   "versionCode": 2,
   "versionName": "1.1.0",
-  "apkUrl": "https://yinghuoren.com/api/media/app/download",
+  "apkUrl": "https://media.chaoset.com/api/v1/app/download",
   "sizeBytes": 12345678,
   "sha256": "64 字符 SHA-256 hex",
   "releaseNotes": "修复播放失败后跳回首页的问题",
@@ -193,7 +193,7 @@ YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返�
 
 ## 部署相关
 
-- `MEDIA_SERVER_PUBLIC_URL`（建议必填）：对外可见的 API 基址（如 `https://yinghuoren.com/api/media`）。位于反代后面时必须设置；未设置时下载地址由 Host 推导，仅接受 `MEDIA_SERVER_ALLOWED_HOSTS` 白名单或本地网段（防 Host 头投毒）。
+- `MEDIA_SERVER_PUBLIC_URL`（建议必填）：对外可见的 API 基址（如 `https://media.chaoset.com/api/v1`）。位于反代后面时必须设置；未设置时下载地址由 Host 推导，仅接受 `MEDIA_SERVER_ALLOWED_HOSTS` 白名单或本地网段（防 Host 头投毒）。
 - `MEDIA_SERVER_APP_API_TOKEN`：凭证接口与 youtube 实时端点的令牌，与 App 构建时注入的 `APP_API_TOKEN` 一致；为空则这些接口 401。
 - `MEDIA_SERVER_VOD_EXTRACTOR_URL`：vod_extractor 内网基址（如 `http://vod_extractor:8790`）；为空时 youtube 的搜索/解析端点均返回 503。
 - `contentCategories.json` 定义分类 ID 到标题/描述的映射。sources 字段保留解析（向后兼容旧配置）但不再使用。

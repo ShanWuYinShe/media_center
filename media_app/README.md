@@ -1,6 +1,6 @@
 # Android TV App（normal 变体）
 
-这个目录是 Android TV 客户端的 **normal 变体**：Kotlin + Jetpack Compose + Media3（minSdk 23）。服务端实现见 `../media_server`。App 只需要一个服务端地址，默认是 `https://yinghuoren.com/api/media`，也可以通过 `MEDIA_SERVER_URL` 覆盖。
+这个目录是 Android TV 客户端的 **normal 变体**：Kotlin + Jetpack Compose + Media3（minSdk 23）。服务端实现见 `../media_server`。App 只需要一个服务端地址，默认是 `https://media.chaoset.com/api/v1`，也可以通过 `MEDIA_SERVER_URL` 覆盖。
 
 > 另有 `../media_app_legacy`（legacy 变体：Views + ExoPlayer 2.x，minSdk 19，适配更老的国产 TV 盒子）。两者相互独立，各自维护。
 

@@ -31,9 +31,9 @@ youtube provider 是受控例外——实时搜索与播放直链解析经内网
 
 ## 配置与部署
 
-- `CONTENT_CATEGORIES_FILE`：运行时分类配置。workwork admin 会生成并挂载到 `/config/contentCategories.json`。
+- `CONTENT_CATEGORIES_FILE`：运行时分类配置。独立站部署由 `deploy/data/generated/contentCategories.json` 挂载为 `/config/contentCategories.json`（编辑后 `make restart media_server` 生效）。
 - `MEDIA_SERVER_CATALOG_DB`：SQLite 数据库路径，默认 `data/catalog.db`。设为空则关闭 catalog。
-- `MEDIA_SERVER_PUBLIC_URL`：**建议必填**，对外可见 API 基址（如 `https://yinghuoren.com/api/media`），用于拼接 app download URL。未配置时下载地址由请求 Host 推导，仅接受 `MEDIA_SERVER_ALLOWED_HOSTS` 白名单或本地网段——防止 Host 头投毒把更新包指向攻击者域名。
+- `MEDIA_SERVER_PUBLIC_URL`：**建议必填**，对外可见 API 基址（如 `https://media.chaoset.com/api/v1`），用于拼接 app download URL。未配置时下载地址由请求 Host 推导，仅接受 `MEDIA_SERVER_ALLOWED_HOSTS` 白名单或本地网段——防止 Host 头投毒把更新包指向攻击者域名。
 - `MEDIA_SERVER_ALLOWED_HOSTS`：逗号分隔的公网域名白名单，仅当 `MEDIA_SERVER_PUBLIC_URL` 未配置时用于校验下载 Host。
 - `MEDIA_SERVER_APP_API_TOKEN`：凭证等 App 端接口令牌（`X-App-Token`）。为空时 `/api/providers/credentials` 一律 401（App 降级无凭证模式）。App 构建时通过 gradle 属性 `APP_API_TOKEN` 注入同一值。
 - `MEDIA_SERVER_VOD_EXTRACTOR_URL`：vod_extractor 内网基址（如 `http://vod_extractor:8790`），youtube 实时搜索/解析依赖；为空时 youtube provider 的实时端点不可用。

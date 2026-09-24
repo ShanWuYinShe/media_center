@@ -26,5 +26,5 @@ TV 交互与视觉约定已移入 skill media-app-tv-ui。
 ## 技术栈与服务端地址
 
 - Compose + TV Material + Media3 ExoPlayer；网络：OkHttp；序列化：kotlinx-serialization；图片：Coil。
-- 服务端地址：默认 `https://yinghuoren.com/api/media`；如需覆盖，设置 `MEDIA_SERVER_URL`。
+- 服务端地址：默认 `https://media.chaoset.com/api/v1`；如需覆盖，设置 `MEDIA_SERVER_URL`。
 

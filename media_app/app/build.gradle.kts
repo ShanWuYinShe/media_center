@@ -100,7 +100,9 @@ android {
  * -dev.N 后缀(如 1.1.0-dev.3)标识未发布构建。无 tag 或不在 git 仓库时返回
  * 安全默认值 0.1.0-dev(不阻断构建,便于克隆后直接跑)。
  *
- * 发版流程:git tag v1.x.y && git push --tags,然后构建即得到干净的 versionName。
+ * 发版流程:git tag v1.x.y(annotated)→ 合并 main 后先 git push 分支、再单独
+ * git push origin v1.x.y(禁止 git push --tags 批量推,见 skill git-workflow),
+ * 然后构建即得到干净的 versionName。
  *
  * 用 ValueSource 执行 git(而非直接 ProcessBuilder),兼容 Gradle 配置缓存
  * (配置阶段不允许启动外部进程,ValueSource 是官方支持的例外)。
