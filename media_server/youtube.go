@@ -149,9 +149,11 @@ func (c *ytClient) searchVideos(ctx context.Context, query string) ([]VideoSumma
 func truncateBody(body []byte) string {
 	const max = 200
 	if len(body) > max {
-		return string(body[:max])
+		body = body[:max]
 	}
-	return string(body)
+	// 上游响应可能是截断/二进制内容;ToValidUTF8 把非法字节序列(如截断点落在
+	// 多字节字符中间)替换为 U+FFFD,避免日志出现半截字符。
+	return strings.ToValidUTF8(string(body), "�")
 }
 
 // ---- vod_extractor(yt-dlp)解析代理 ----

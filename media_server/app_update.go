@@ -150,7 +150,13 @@ func (s *mediaServer) handleAppDownload(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/vnd.android.package-archive")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "media-center-app.apk"))
+	// 下载文件名与变体对齐(normal: media-center-app.apk;其余变体加后缀),
+	// 与 release-apk.sh 的服务器索引命名约定一致。
+	filename := "media-center-app.apk"
+	if variant != "" {
+		filename = "media-center-app-" + variant + ".apk"
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	http.ServeFile(w, r, apkPath)
 }
 
@@ -252,10 +258,10 @@ func (s *mediaServer) appDownloadURL(r *http.Request, variant string) string {
 		log.Printf("app update: rejecting download host %q (set MEDIA_SERVER_PUBLIC_URL or MEDIA_SERVER_ALLOWED_HOSTS)", host)
 		return ""
 	}
+	// 一律默认 https:公网入口是 Cloudflare/nginx TLS 终结,本服务自身不暴露 TLS;
+	// 仅当反代显式告知 http(本地调试)或测试 URL 带 scheme 时才改写。
 	scheme := "https"
-	if r.TLS != nil {
-		scheme = "https"
-	} else if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
 		scheme = strings.Split(forwarded, ",")[0]
 	} else if r.URL.Scheme != "" {
 		scheme = r.URL.Scheme
