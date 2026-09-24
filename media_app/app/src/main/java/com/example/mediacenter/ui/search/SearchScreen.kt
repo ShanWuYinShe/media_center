@@ -10,7 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.requiredHeightIn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -69,7 +69,7 @@ fun SearchScreen(
         OutlinedTextField(
             value = state.query,
             onValueChange = { viewModel.search(it) },
-            modifier = Modifier.fillMaxWidth().requiredHeight(56.dp).focusRequester(searchFocus),
+            modifier = Modifier.fillMaxWidth().requiredHeightIn(min = 56.dp).focusRequester(searchFocus),
             placeholder = { Text("搜索视频...", color = TextTertiary) },
             singleLine = true,
             colors = OutlinedTextFieldDefaults.colors(

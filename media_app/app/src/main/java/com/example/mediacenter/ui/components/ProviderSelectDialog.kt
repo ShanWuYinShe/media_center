@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
@@ -37,7 +39,11 @@ fun ProviderSelectDialog(
         onDismissRequest = onDismiss,
         title = { Text("选择视频源", color = TextPrimary) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // 正文可滚动:provider 增多超出弹层高度时不至于溢出/裁切
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 providers.forEach { provider ->
                     Button(
                         onClick = { onSelect(provider.id) },

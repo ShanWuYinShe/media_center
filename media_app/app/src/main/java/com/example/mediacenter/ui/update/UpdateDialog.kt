@@ -146,9 +146,10 @@ fun UpdateDialog(
 private fun formatMegabytes(bytes: Long): String {
     if (bytes <= 0L) return "0 MB"
     val mb = bytes / (1024.0 * 1024.0)
+    // 显式 Locale:部分设备默认 Locale 的数字分隔符会把 "1.5" 格式成 "1,5"
     return if (mb >= 1024.0) {
-        String.format("%.2f GB", mb / 1024.0)
+        String.format(java.util.Locale.US, "%.2f GB", mb / 1024.0)
     } else {
-        String.format("%.1f MB", mb)
+        String.format(java.util.Locale.US, "%.1f MB", mb)
     }
 }
