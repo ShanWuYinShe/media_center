@@ -17,7 +17,8 @@ android {
         // 版本号由 git tag 驱动:versionName 从最近的 v* tag 读取(如 v1.1.0 → 1.1.0),
         // tag 之后若有新 commit 则带 -dev.N 后缀(如 1.1.0-dev.3)标识未发布。
         // versionCode 从 SemVer 部分派生(major*100000+minor*1000+patch),整数比较可靠。
-        // 发版只需:git tag v1.x.y && git push --tags,无需手改 build.gradle。
+        // 发版只需:打 v1.x.y tag 后构建(git describe 派生版本号),无需手改
+        // build.gradle;tag 推送纪律见 skill git-workflow(逐个推,禁 --tags)。
         val resolvedVersion = gitVersionName()
         versionName = resolvedVersion
         versionCode = semverToCode(resolvedVersion)
@@ -25,7 +26,7 @@ android {
 
         val serverBaseUrl = providers.gradleProperty("MEDIA_SERVER_URL")
             .orElse(providers.environmentVariable("MEDIA_SERVER_URL"))
-            .orElse("https://yinghuoren.com/api/media")
+            .orElse("https://media.chaoset.com/api/v1")
             .map { it.trim().trimEnd('/') }
             .orNull
             ?: error("MEDIA_SERVER_URL default is missing")
@@ -36,7 +37,7 @@ android {
         }
         if (serverUri.scheme?.lowercase() != "https" || serverUri.host.isNullOrBlank()) {
             throw GradleException(
-                "MEDIA_SERVER_URL must be an absolute HTTPS URL, e.g. https://yinghuoren.com/api/media",
+                "MEDIA_SERVER_URL must be an absolute HTTPS URL, e.g. https://media.chaoset.com/api/v1",
             )
         }
         val escapedServerBaseUrl = serverBaseUrl
