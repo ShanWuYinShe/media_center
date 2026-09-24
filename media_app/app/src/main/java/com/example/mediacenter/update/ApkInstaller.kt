@@ -7,12 +7,16 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageInstaller
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import com.example.mediacenter.log.AppLog
 import java.io.File
 import java.io.FileInputStream
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -29,6 +33,9 @@ import kotlinx.coroutines.withContext
 class ApkInstaller(private val context: Context) {
     private var installReceiver: BroadcastReceiver? = null
     private val installAction = "${context.packageName}.INSTALL_RESULT"
+    // 超时注销用主线程 Handler:BroadcastReceiver 注销本身线程安全,排期统一走主线程
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var receiverTimeout: Runnable? = null
 
     /** Android 8+ 需要"安装未知应用"权限才能用 ACTION_VIEW 装 APK。 */
     fun canInstallPackages(): Boolean {
@@ -78,11 +85,15 @@ class ApkInstaller(private val context: Context) {
     }
 
     private suspend fun tryInstallWithSession(apk: File): InstallLaunchResult {
+        // session 兜底:复制 APK 抛异常/协程取消时 abandon 掉会话——否则失败的
+        // 会话残留在系统 PackageInstaller 里(国产 TV 会话配额有限,累积会导致
+        // 后续更新全部失败)。commit 成功后置 null,避免 finally 路径误 abandon。
+        var session: PackageInstaller.Session? = null
         return try {
             val packageInstaller = context.packageManager.packageInstaller
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
             val sessionId = packageInstaller.createSession(params)
-            val session = packageInstaller.openSession(sessionId)
+            session = packageInstaller.openSession(sessionId)
 
             // APK 复制到 PackageInstaller session 是几十 MB 到数百 MB 的磁盘 IO，
             // 必须在后台线程执行，否则主线程卡顿数秒（老盒子上直接 ANR）。
@@ -104,27 +115,53 @@ class ApkInstaller(private val context: Context) {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
 
-            installReceiver?.let { context.unregisterReceiver(it) }
-            installReceiver = object : BroadcastReceiver() {
-                override fun onReceive(ctx: Context, intent: Intent) {
-                    @Suppress("InlinedApi")
-                    val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
-                    AppLog.i("Update", "install result: status=$status")
-                    ctx.unregisterReceiver(this)
-                    installReceiver = null
-                }
-            }
-            ContextCompat.registerReceiver(
-                context, installReceiver, IntentFilter(installAction),
-                ContextCompat.RECEIVER_NOT_EXPORTED,
-            )
+            registerInstallReceiver()
             session.commit(pendingIntent.intentSender)
             session.close()
+            session = null
             InstallLaunchResult.Started
+        } catch (e: CancellationException) {
+            runCatching { session?.abandon() }
+            throw e
         } catch (error: Throwable) {
+            runCatching { session?.abandon() }
             AppLog.w("Update", "PackageInstaller session failed: ${error.message}", error)
             InstallLaunchResult.Failed("安装失败：${error.message}")
         }
+    }
+
+    /**
+     * 注册安装结果广播,并安排超时兜底注销:用户在系统安装器里取消安装、或
+     * 系统未回传结果时,receiver 原本会一直挂到进程结束;超时后自行注销。
+     * 再次安装时旧 receiver 先注销、旧超时回调先移除。
+     */
+    private fun registerInstallReceiver() {
+        installReceiver?.let { runCatching { context.unregisterReceiver(it) } }
+        receiverTimeout?.let { mainHandler.removeCallbacks(it) }
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                @Suppress("InlinedApi")
+                val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+                AppLog.i("Update", "install result: status=$status")
+                mainHandler.removeCallbacks(receiverTimeout ?: return)
+                runCatching { ctx.unregisterReceiver(this) }
+                installReceiver = null
+            }
+        }
+        installReceiver = receiver
+        ContextCompat.registerReceiver(
+            context, receiver, IntentFilter(installAction),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        val timeout = Runnable {
+            installReceiver?.let {
+                runCatching { context.unregisterReceiver(it) }
+                installReceiver = null
+                AppLog.w("Update", "install result timeout, receiver unregistered")
+            }
+        }
+        receiverTimeout = timeout
+        mainHandler.postDelayed(timeout, TimeUnit.MINUTES.toMillis(INSTALL_RESULT_TIMEOUT_MINUTES))
     }
 
     /**
@@ -178,5 +215,11 @@ class ApkInstaller(private val context: Context) {
             AppLog.w("Update", "ACTION_VIEW install failed: ${error.message}", error)
             InstallLaunchResult.Failed("无法打开系统安装器，请手动安装更新包")
         }
+    }
+
+    private companion object {
+        // 安装结果广播的兜底注销时限:正常安装(用户确认)秒级回传;超时即视为
+        // 结果不再回来(用户取消/系统吞掉),注销 receiver 防止挂到进程结束。
+        const val INSTALL_RESULT_TIMEOUT_MINUTES = 10L
     }
 }
