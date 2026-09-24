@@ -1,6 +1,6 @@
 # Media Center VOD Extractor
 
- 本目录（`vod_extractor/`）是 `media_center` 仓库（`ShanWuYinShe/media_center`）的普通子目录，非独立仓库；该仓库被 `workwork` 以 git submodule 引用（`services/media_center`）。
+ 本目录（`vod_extractor/`）是 `media_center` 仓库（`ShanWuYinShe/media_center`）的普通子目录，非独立仓库。**本仓库已不再被 `workwork` 以 git submodule 引用**——workwork 已无 `services/media_center` 检出；部署编排在本仓库 `deploy/` 内自洽。
 
 内部点播解析服务：Python stdlib HTTP server + yt-dlp。设计上在 Docker `internal_docker` 网络中供其它服务内网调用（不暴露公网端口）。
 

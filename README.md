@@ -6,7 +6,7 @@
 - `media_server`：Go 实现的目录服务，提供 provider 列表、分类列表、视频元数据；youtube provider 的实时搜索与播放解析经 `vod_extractor` 代理（受控例外，结果不落 catalog）。
 - `vod_extractor`：Python + yt-dlp 内部点播解析服务，供 media_server 的 YouTube 实时搜索与播放解析调用（`/api/providers/youtube/search|resolve`，需宿主机放置 cookies）。
 
-App 只需要一个服务端地址，默认是 `https://yinghuoren.com/api/media`，也可以通过 `MEDIA_SERVER_URL` 覆盖。代理 / 部署基础设施（nginx、xray、admin 面板等）在 `workwork` 仓库，并通过 git submodule 引用本仓库来构建 `media_server`。
+App 只需要一个服务端地址 `MEDIA_SERVER_URL`（Gradle property 或同名环境变量覆盖；未设置时回落到内置默认 `https://media.chaoset.com/api/v1`，必须是绝对 HTTPS URL）。部署为本仓库内自洽编排：`deploy/`（nginx + media_server + vod_extractor 三服务 compose，独立 bridge 与数据目录，与 workwork 聚合栈零互通），目标域名 `media.chaoset.com`。**本仓库不再是 workwork 的 submodule**；旧地址 `https://yinghuoren.com/api/media` 是 workwork 聚合栈的过渡别名，经其过渡反代仍可用。
 
 ## 视频类型
 
@@ -44,7 +44,7 @@ Go 服务，详见 `media_server/README.md`。本地编译检查：
 go build -C media_server -o /dev/null .
 ```
 
-`workwork` 仓库通过 git submodule 引用本仓库到 `services/media_center`，docker-compose 从 `services/media_center/media_server` 构建并部署相关服务。
+部署编排在本仓库 `deploy/` 内（`media.chaoset.com` 独立站，与 workwork 聚合栈零互通）；此前 workwork 通过 git submodule 引用本仓库到 `services/media_center` 的方式已废弃（该检出已不存在）。
 
 部署后冒烟检查（对核心只读接口做 curl + JSON 断言，输出 PASS/FAIL，任一失败退出码 1）；可选第二参数传 vod_extractor 内网地址，顺带探活其 `/health`：
 

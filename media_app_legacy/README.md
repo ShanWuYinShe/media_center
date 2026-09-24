@@ -2,7 +2,7 @@
 
 > **已存档**（legacy 变体，面向 Android 4.4 老盒子；服务端仍经 `/api/app/update?variant=legacy` 提供更新，但本目录不再开发新功能）。
 
-这个目录只包含 Android TV 客户端。服务端实现为[本仓库](../media_server/)的 `media_server`（由 workwork 仓库以 submodule 方式引用构建），不是 workwork 自有代码。App 只需要一个服务端地址，默认是 `https://yinghuoren.com/api/media`，也可以通过 `MEDIA_SERVER_URL` 覆盖。
+这个目录只包含 Android TV 客户端。服务端实现为[本仓库](../media_server/)的 `media_server`（部署编排在本仓库 `deploy/` 内，非 workwork 自有代码；早前 workwork 以 submodule 引用构建的方式已废弃）。App 只需要一个服务端地址 `MEDIA_SERVER_URL`，未设置时回落到内置默认 `https://media.chaoset.com/api/v1`。
 
 ## Android Studio 菜单工作流
 

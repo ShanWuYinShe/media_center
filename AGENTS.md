@@ -16,7 +16,7 @@
   - 部署该服务时优先通过 `VOD_EXTRACTOR_EXTRACTOR_ARGS`（如 `youtube:player_client=tv`）与 cookies 双管齐下；cookies 过期后需重新导出。
 - `deploy/` — 独立站编排（media.chaoset.com）：nginx + media_server + vod_extractor 三服务自洽 compose，版本唯一来源 `deploy/versions.env`；操作细节见 `deploy/README.md`。
 
-App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部署方式。默认服务端 URL 正在从 `https://yinghuoren.com/api/media`（workwork 聚合栈过渡别名）迁移到独立站 `https://media.chaoset.com/api/v1`；两种前缀在服务端行为一致（见 `media_server/API.md` 路径前缀约定）。
+App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部署方式。构建期未设置时回落到内置默认 `https://media.chaoset.com/api/v1`（独立站规范前缀）；旧 `https://yinghuoren.com/api/media`（workwork 聚合栈过渡别名）经其过渡反代仍可用，两种前缀在服务端行为一致（见 `media_server/API.md` 路径前缀约定）。
 
 ## media_app（详见 media_app/AGENTS.md 与 skill）
 

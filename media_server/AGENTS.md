@@ -1,6 +1,6 @@
 # Media Center Media Server
 
- 本目录（`media_server/`）是 `media_center` 仓库（`ShanWuYinShe/media_center`）的普通子目录，非独立仓库；该仓库被 `workwork` 以 git submodule 引用（`services/media_center`）。
+ 本目录（`media_server/`）是 `media_center` 仓库（`ShanWuYinShe/media_center`）的普通子目录，非独立仓库。**本仓库已不再被 `workwork` 以 git submodule 引用**——workwork 已无 `services/media_center` 检出（media/music 已拆分为独立站仓库）；部署编排在本仓库 `deploy/` 内自洽（`media.chaoset.com`）。
 
 `media_center` 的合规公开视频聚合后端：Go HTTP 服务，以目录服务为主（catalog SQLite 为 system of record）；`youtube` provider 的搜索/解析走受控实时通道（见 `youtube.go`）。
 
