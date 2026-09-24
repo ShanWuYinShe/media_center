@@ -38,7 +38,7 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import com.example.mediacenter.BuildConfig
 import com.example.mediacenter.data.AppUpdateInfo
-import com.example.mediacenter.data.MediaApi
+import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.PlaybackPositionStore
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.update.AppUpdateManager
@@ -73,12 +73,15 @@ fun SettingsScreen(onBack: () -> Unit) {
     // ── 手动检查更新 ──
     // 与首页启动时的自动检查共用 AppUpdateManager / UpdateDialog；区别在于
     // 这里是用户主动触发，无论结果如何都给出明确反馈（含"已是最新版本"）。
-    val api = remember { MediaApi(BuildConfig.MEDIA_SERVER_URL) }
+    val api = MediaRepositoryHolder.updateApi
     val updateManager = remember {
         AppUpdateManager(context.applicationContext, api)
     }
     var updateState by remember { mutableStateOf<UpdateDialogState?>(null) }
     var checkingUpdate by remember { mutableStateOf(false) }
+    // "后台下载":下载中允许关闭弹窗,关闭后进度不再回写弹窗(协程继续);
+    // 完成时拉起系统安装器,失败时弹窗重新出现告知原因。
+    var downloadInBackground by remember { mutableStateOf(false) }
 
     // ── 服务端版本 ──
     // 排障时用户可直接报出线上服务端构建版本(/health 公开端点)。
@@ -106,13 +109,18 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     fun startUpdateDownload(info: AppUpdateInfo) {
         if (updateState is UpdateDialogState.Downloading) return
+        downloadInBackground = false
         scope.launch {
             updateState = UpdateDialogState.Downloading(info, 0f)
-            // 下载/安装流程与首页保持一致:下载(带进度)→校验→拉起安装器;
-            // 离开设置页会取消协程,AppUpdateManager 会清理半成品文件。
+            // 下载/安装流程与首页保持一致:下载(带进度)→校验→拉起安装器。
+            // 弹窗被"后台下载"关闭后进度不再回写(避免弹窗反复弹出);离开
+            // 设置页会取消协程,AppUpdateManager 会清理半成品文件。
             val result = updateManager.download(info) { progress ->
-                updateState = UpdateDialogState.Downloading(info, progress)
+                if (!downloadInBackground) {
+                    updateState = UpdateDialogState.Downloading(info, progress)
+                }
             }
+            downloadInBackground = false
             when (result) {
                 is UpdateDownloadResult.Ready -> {
                     updateState = null
@@ -156,7 +164,12 @@ fun SettingsScreen(onBack: () -> Unit) {
     updateState?.let { dialogState ->
         UpdateDialog(
             state = dialogState,
-            onDismiss = { updateState = null },
+            // 下载中允许"后台下载":用户不再被锁死在弹窗直到下载完成/失败
+            allowDismissDuringDownload = true,
+            onDismiss = {
+                if (dialogState is UpdateDialogState.Downloading) downloadInBackground = true
+                updateState = null
+            },
             onStartDownload = {
                 (dialogState as? UpdateDialogState.Available)?.let { startUpdateDownload(it.info) }
             },

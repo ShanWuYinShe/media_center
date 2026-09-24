@@ -3,7 +3,7 @@ package com.example.mediacenter.crash
 import android.content.Context
 import android.os.Build
 import com.example.mediacenter.BuildConfig
-import com.example.mediacenter.data.MediaApi
+import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.log.AppLog
 import java.io.File
 import java.text.SimpleDateFormat
@@ -64,7 +64,8 @@ object CrashReporter {
         if (!file.exists()) return
         val body = runCatching { file.readText() }.getOrNull() ?: return
         try {
-            val ok = MediaApi(BuildConfig.MEDIA_SERVER_URL).reportCrash(body)
+            // 共享的全局轻量客户端(holder 在 Application.onCreate 先于本调用初始化)
+            val ok = MediaRepositoryHolder.updateApi.reportCrash(body)
             if (ok) {
                 runCatching { file.delete() }
                 AppLog.i("Crash", "crash report uploaded")

@@ -14,8 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.mediacenter.BuildConfig
-import com.example.mediacenter.data.MediaApi
+import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
@@ -39,7 +38,7 @@ fun HomeScreen(
     val updateManager = remember {
         AppUpdateManager(
             context.applicationContext,
-            MediaApi(BuildConfig.MEDIA_SERVER_URL),
+            MediaRepositoryHolder.updateApi,
         )
     }
     val viewModel: HomeViewModel = viewModel(factory = HomeViewModelFactory(updateManager))

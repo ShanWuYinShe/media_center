@@ -23,4 +23,9 @@ object MediaRepositoryHolder {
         val apiCacheDir = appContext?.cacheDir?.resolve("api-cache")
         MediaRepository(api = MediaApi(BuildConfig.MEDIA_SERVER_URL, cacheDir = apiCacheDir), prefs = prefs)
     }
+
+    // App 更新检查/下载与崩溃上报等独立于 catalog 仓库的轻量客户端:全局共享
+    // 一个实例,复用同一 OkHttpClient 的连接池与线程池——此前首页/设置页/崩溃
+    // 上报各自 new MediaApi(连接池不复用,崩溃上报还是默认 10s 超时)。
+    val updateApi: MediaApi by lazy { MediaApi(BuildConfig.MEDIA_SERVER_URL) }
 }
