@@ -38,6 +38,7 @@ import androidx.media3.session.SessionToken
 import androidx.media3.ui.PlayerView
 import com.example.mediacenter.data.PlaybackPositionStore
 import com.example.mediacenter.data.PlaybackResult
+import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.player.PlaybackService
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
@@ -76,6 +77,12 @@ internal fun PlayerContent(
     var loadEpoch by remember { mutableIntStateOf(0) }
     // 续播标志:新流 READY 后尝试恢复断点续播(真实位置在 READY 时读取,此时才有时长)
     var shouldResume by remember { mutableStateOf(false) }
+    // 换源保进度:重载前捕获的精确播放位置(内存传递,不受 PlaybackPositionStore
+    // 的 30s 下限/5s 持久化粒度限制)。同分P内换清晰度/播放错误重试时携位续播;
+    // 跨分P是不同内容,位置必须清零。READY 后无条件 seekTo 该值。
+    var pendingSeekMs by remember { mutableLongStateOf(0L) }
+    // 上次加载流所属的分P,用于判定"换清晰度"与"换分P"
+    var lastPage by remember { mutableIntStateOf(playbackResult.pages.currentPage) }
     val controlsFocus = remember { FocusRequester() }
     // 多P视频的分P位置不能跨流恢复,只在单P视频上启用断点续播
     val canResume = playbackResult.pages.totalPages <= 1
@@ -148,11 +155,18 @@ internal fun PlayerContent(
 
             override fun onPlaybackStateChanged(state: Int) {
                 isBuffering = state == Player.STATE_BUFFERING
-                if (state == Player.STATE_READY && shouldResume) {
-                    shouldResume = false
-                    val durationMs = controller?.duration?.coerceAtLeast(0L) ?: 0L
-                    val seekTo = PlaybackPositionStore.resumePosition(context, videoId, durationMs)
-                    if (seekTo > 0) controller?.seekTo(seekTo)
+                if (state == Player.STATE_READY) {
+                    if (pendingSeekMs > 0L) {
+                        // 换源保进度:精确接续优先于断点续播(多P视频换清晰度也走这里)
+                        val target = pendingSeekMs
+                        pendingSeekMs = 0L
+                        controller?.seekTo(target)
+                    } else if (shouldResume) {
+                        shouldResume = false
+                        val durationMs = controller?.duration?.coerceAtLeast(0L) ?: 0L
+                        val seekTo = PlaybackPositionStore.resumePosition(context, videoId, durationMs)
+                        if (seekTo > 0) controller?.seekTo(seekTo)
+                    }
                 }
             }
 
@@ -177,8 +191,24 @@ internal fun PlayerContent(
     LaunchedEffect(controller, stream, loadEpoch) {
         val c = controller ?: return@LaunchedEffect
         playerError = null
-        // 单P视频:新流 READY 后尝试恢复断点续播(多P分页位置不能跨流恢复)
-        shouldResume = canResume
+        // 换源保进度:同分P重载前捕获精确位置;stop 后位置归零,捕获值经
+        // pendingSeekMs 传递到 READY 回调。首次加载时 controller 位置为 0,
+        // 走原有断点续播流程;跨分P强制归零(不同内容不能携位)。
+        val samePage = playbackResult.pages.currentPage == lastPage
+        lastPage = playbackResult.pages.currentPage
+        val captured = if (samePage) {
+            runCatching { c.currentPosition }.getOrDefault(0L).coerceAtLeast(0L)
+        } else {
+            0L
+        }
+        pendingSeekMs = when {
+            captured > 0L -> captured
+            // 重试场景:stop 已把位置归零,但换源前捕获的值仍然有效
+            samePage -> pendingSeekMs
+            else -> 0L
+        }
+        // 单P视频:无精确接续位置时,新流 READY 后尝试恢复断点续播
+        shouldResume = canResume && pendingSeekMs <= 0L
         c.stop()
         c.clearMediaItems()
         val item = MediaItem.Builder()
@@ -264,12 +294,20 @@ internal fun PlayerContent(
             }
         }
     }
-    DisposableEffect(Unit) {
-        // minSdk 23 兼容:只能用旧版 AudioFocus API(API 26+ 的 AudioFocusRequest 不可用)
-        @Suppress("DEPRECATION")
-        audioManager.requestAudioFocus(
-            audioFocusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN,
-        )
+    // 音频焦点:controller 就绪后才抢占——此前进入页面即抢占,连接/解析失败时
+    // 白白压低其他 App 的音量;被系统拒绝时记日志继续(用户可感知冲突自行处理)。
+    // controller 重连(release+新建)时旧焦点随 onDispose 归还、新 controller 再抢占。
+    DisposableEffect(controller) {
+        if (controller != null) {
+            // minSdk 23 兼容:只能用旧版 AudioFocus API(API 26+ 的 AudioFocusRequest 不可用)
+            @Suppress("DEPRECATION")
+            val granted = audioManager.requestAudioFocus(
+                audioFocusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN,
+            )
+            if (granted != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                AppLog.w("Player", "audio focus not granted (result=$granted); may compete with other apps")
+            }
+        }
         onDispose {
             @Suppress("DEPRECATION")
             audioManager.abandonAudioFocus(audioFocusListener)
@@ -350,6 +388,8 @@ internal fun PlayerContent(
                 }
             },
             update = { view -> view.player = controller },
+            // 视图移除时解绑 player 引用(controller 已在别处 release,防悬挂引用)
+            onRelease = { view -> view.player = null },
             modifier = Modifier.fillMaxSize(),
         )
         // 缓冲指示：画面未停但流没跟上时给出“正在加载”反馈
