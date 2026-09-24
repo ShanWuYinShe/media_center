@@ -59,6 +59,13 @@ media_server/data/
 # ----- media_server 编译产物(go build 在包目录生成的同名二进制) -----
 media_server/media_server
 
+# ----- 部署机密(见 deploy/README.md:服务器把 YouTube cookies、provider 凭证、
+# TLS 私钥放在 git 工作树内,git add -A 前必须确保它们被忽略) -----
+deploy/data/
+deploy/cert/
+# make backup 的宿主侧备份产物
+deploy/backups/
+
 # ----- AI Agent 工作目录 -----
 .workwork/
 
