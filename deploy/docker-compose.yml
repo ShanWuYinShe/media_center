@@ -175,6 +175,8 @@ services:
       - VOD_EXTRACTOR_COOKIES_FILE=${VOD_EXTRACTOR_COOKIES_FILE:-}
       # /extract 目标 host 白名单(留空用 server.py 内置 youtube 域默认)
       - VOD_EXTRACTOR_ALLOWED_EXTRACT_HOSTS=${VOD_EXTRACTOR_ALLOWED_EXTRACT_HOSTS:-}
+      # 并发连接数上限(每连接一线程的防线,默认 32)
+      - VOD_EXTRACTOR_MAX_CONNECTIONS=${VOD_EXTRACTOR_MAX_CONNECTIONS:-}
     volumes:
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
       - ./data/vod:/config:ro

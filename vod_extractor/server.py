@@ -27,6 +27,10 @@ COOKIES_FILE = COOKIES_FILE_ENV or DEFAULT_COOKIES_FILE
 COOKIES_FILE_EXPLICIT = bool(COOKIES_FILE_ENV)
 EXTRACTOR_ARGS = os.environ.get("VOD_EXTRACTOR_EXTRACTOR_ARGS", "").strip()
 EXTRACTOR_SEMAPHORE = threading.BoundedSemaphore(MAX_CONCURRENT)
+# 并发连接数上限:ThreadingHTTPServer 每连接一线程,无上限时大量并发连接
+# (即使有 30s socket 超时)也会线性堆线程。超限的新连接直接关闭——yt-dlp
+# 并发只有 2,正常流量远到不了这个值,纯属资源防线。
+MAX_CONNECTIONS = max(4, int(os.environ.get("VOD_EXTRACTOR_MAX_CONNECTIONS", "32")))
 MAX_QUERY_BYTES = 128
 DEFAULT_SEARCH_LIMIT = 20
 MAX_SEARCH_LIMIT = 30
@@ -452,6 +456,30 @@ def stop_process(process):
         log_internal(f"process {process.pid} did not exit after kill")
 
 
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """并发连接数有上限的 ThreadingHTTPServer。
+
+    超限的新连接在 process_request 阶段直接关闭(不发响应,客户端表现为连接
+    被重置);已接入的连接不受影响。槽位在连接处理线程结束时释放。
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._conn_slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+
+    def process_request(self, request, client_address):
+        if not self._conn_slots.acquire(blocking=False):
+            self.close_request(request)
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._conn_slots.release()
+
+
 def main():
     global YTDLP_VERSION
     YTDLP_VERSION = _ytdlp_version()
@@ -466,7 +494,7 @@ def main():
         )
         sys.exit(1)
 
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    server = BoundedThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
     print(f"vod extractor {SERVICE_VERSION} (yt-dlp {YTDLP_VERSION}) listening on {HOST}:{PORT}", flush=True)
     server.serve_forever()

@@ -12,6 +12,7 @@ import os
 import socket
 import sys
 import unittest
+from http.server import ThreadingHTTPServer
 from unittest import mock
 from urllib.parse import urlparse
 
@@ -291,8 +292,50 @@ class CookiesHealthTest(unittest.TestCase):
         self.assertLess(info["age_seconds"], 60)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class BoundedServerSlotsTest(unittest.TestCase):
+    """连接数上限子类:槽位容量来自配置,超限拒连、线程结束释放。
+
+    不真开网络:绑随机端口构造实例,process_request 用 mock 打桩验证
+    "超限 → close_request、不放行父类"与"释放后可再次接入"两条语义。
+    """
+
+    def _make_server(self):
+        s = server.BoundedThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        self.addCleanup(s.server_close)
+        return s
+
+    def _acquire_all_slots(self, s):
+        acquired = []
+        while s._conn_slots.acquire(blocking=False):
+            acquired.append(True)
+        return acquired
+
+    def test_slot_capacity_matches_config(self):
+        s = self._make_server()
+        acquired = self._acquire_all_slots(s)
+        self.assertEqual(len(acquired), server.MAX_CONNECTIONS)
+        for _ in acquired:
+            s._conn_slots.release()
+
+    def test_over_limit_closes_and_parent_not_called(self):
+        s = self._make_server()
+        self._acquire_all_slots(s)
+        try:
+            with mock.patch.object(s, "close_request") as close_request, \
+                 mock.patch.object(ThreadingHTTPServer, "process_request") as parent:
+                s.process_request(mock.Mock(), ("127.0.0.1", 12345))
+                close_request.assert_called_once()
+                parent.assert_not_called()
+        finally:
+            while s._conn_slots.acquire(blocking=False):
+                pass
+
+    def test_slot_released_after_thread_finishes(self):
+        s = self._make_server()
+        with mock.patch.object(ThreadingHTTPServer, "process_request_thread"):
+            # 直接走 process_request:接入占一个槽位,线程结束后释放
+            s.process_request(mock.Mock(), ("127.0.0.1", 12345))
+            self.assertEqual(s._conn_slots._initial_value - s._conn_slots._value, 0)
 
 
 if __name__ == "__main__":
