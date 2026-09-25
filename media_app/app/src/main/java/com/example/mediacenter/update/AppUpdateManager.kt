@@ -37,9 +37,14 @@ class AppUpdateManager(
     private val api: MediaApi,
     private val client: OkHttpClient = AppHttpClient.shared,
 ) {
-    private val downloadMutex = Mutex()
     // APK 安装逻辑(三种安装方式 + 权限引导)拆到独立类,本类只做版本检查/下载/校验。
     private val installer = ApkInstaller(context)
+
+    private companion object {
+        // 进程级共享:首页与设置页各自构造 AppUpdateManager 实例,实例级 Mutex 不互斥——
+        // 两个入口并发下载同一版本会对同一目标文件并发截断互写,文件损坏后双双 sha256 失败。
+        val downloadMutex = Mutex()
+    }
 
     /** 委托:启动系统安装器(见 [ApkInstaller])。 */
     suspend fun launchInstaller(apk: File): InstallLaunchResult = installer.launchInstaller(apk)
@@ -54,6 +59,9 @@ class AppUpdateManager(
     suspend fun check(): UpdateCheckResult {
         val update = try {
             api.appUpdate(BuildConfig.VERSION_CODE)
+        } catch (error: CancellationException) {
+            // 协程取消不当普通失败处理(取消页面上层已感知)
+            throw error
         } catch (error: Throwable) {
             AppLog.w("Update", "check failed: ${error.message}", error)
             return UpdateCheckResult.Failed("检查更新失败，请稍后重试")
@@ -89,12 +97,23 @@ class AppUpdateManager(
     private fun cleanupPartialDownload(update: AppUpdateInfo) {
         val target = apkTargetFile(update)
         if (target.isFile) target.delete()
+        // .part 临时文件同样清理(协程取消路径)
+        File(target.parentFile, "${target.name}.part").delete()
     }
 
-    /** apkUrl 的 host 必须与 API 基址 host 一致;不一致视为投毒,拒绝下载。 */
+    /** apkUrl 必须是 https 且 host 与 API 基址一致;不满足视为投毒,拒绝下载(fail-closed)。 */
     private fun validateApkUrlHost(update: AppUpdateInfo) {
         val expectedHost = runCatching { api.baseUrl.toUri().host }.getOrNull()
-        if (expectedHost.isNullOrEmpty()) return
+        if (expectedHost.isNullOrEmpty()) {
+            // 原 assert 行为是静默跳过校验;改为 fail-closed:基址非法本身就该暴露
+            AppLog.w("Update", "refusing apk download: api base url host unknown")
+            throw IllegalStateException("api base url host unknown")
+        }
+        val apkScheme = runCatching { update.apkUrl.toUri().scheme }.getOrNull()
+        if (!apkScheme.equals("https", ignoreCase = true)) {
+            AppLog.w("Update", "refusing apk download: scheme $apkScheme is not https")
+            throw IllegalStateException("apk url scheme is not https")
+        }
         val apkHost = runCatching { update.apkUrl.toUri().host }.getOrNull()
         if (apkHost != null && !apkHost.equals(expectedHost, ignoreCase = true)) {
             AppLog.w("Update", "refusing apk download: host $apkHost != api host $expectedHost")
@@ -105,6 +124,13 @@ class AppUpdateManager(
     private fun apkTargetFile(update: AppUpdateInfo): File =
         File(File(context.cacheDir, "app-updates"), "media-center-${update.versionCode}.apk")
 
+    // 下载专用 client:禁用重定向——同源 host 校验只看 manifest.apkUrl,若跟随
+    // 302 到外域即被绕过(本服务不依赖重定向下发 APK)。派生共享连接池。
+    private val downloadClient = client.newBuilder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
+
     private suspend fun downloadAndVerify(update: AppUpdateInfo, onProgress: (Float) -> Unit): File {
         // 同源校验:manifest.apkUrl 的 host 必须与 API 基址一致。服务端即使被
         // Host 头投毒(未配置 MEDIA_SERVER_PUBLIC_URL 时),客户端也拒绝下载
@@ -112,7 +138,12 @@ class AppUpdateManager(
         validateApkUrlHost(update)
 
         val target = apkTargetFile(update)
+        // 下载目录按需创建:此前从未 mkdirs,首次应用内更新 FileOutputStream 必抛
+        // FileNotFoundException,更新功能完全不可用。
+        target.parentFile?.mkdirs()
+        // sizeBytes<=0(手写/旧版 manifest)时跳过尺寸比对,完整性只由 sha256 判定
         if (target.isFile &&
+            update.sizeBytes > 0 &&
             target.length() == update.sizeBytes &&
             target.sha256().equals(update.sha256, ignoreCase = true)
         ) {
@@ -127,7 +158,7 @@ class AppUpdateManager(
         // 可取消下载:协程取消时 call.cancel() 中断请求与流拷贝。
         // 进度回调按节流间隔上报,避免 8KB chunk 粒度下高频重组 UI。
         return suspendCancellableCoroutine { continuation ->
-            val call = client.newCall(request)
+            val call = downloadClient.newCall(request)
             continuation.invokeOnCancellation { call.cancel() }
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
@@ -135,6 +166,9 @@ class AppUpdateManager(
                 }
 
                 override fun onResponse(call: Call, response: Response) {
+                    // 写 .part 临时文件,校验通过后原子改名——进程被杀不会留下
+                    // 名字可信的半成品 APK 占空间或被误认(sha256 仍是最终防线)。
+                    val part = File(target.parentFile, "${target.name}.part")
                     try {
                         response.use {
                             if (!it.isSuccessful) {
@@ -144,7 +178,8 @@ class AppUpdateManager(
                             val totalBytes = body.contentLength()
                             var copied = 0L
                             var lastReportMs = 0L
-                            FileOutputStream(target).use { out ->
+                            if (part.isFile) part.delete()
+                            FileOutputStream(part).use { out ->
                                 body.byteStream().use { input ->
                                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                                     while (true) {
@@ -162,17 +197,23 @@ class AppUpdateManager(
                             }
                             if (totalBytes > 0) onProgress(1f)
                         }
-                        // 尺寸 + SHA256 双校验;失败删除半成品
-                        if (target.length() != update.sizeBytes) {
-                            target.delete()
+                        // 尺寸 + SHA256 双校验;失败删除半成品。sizeBytes<=0 时跳过
+                        // 尺寸比对,完整性只由 sha256 判定。
+                        if (update.sizeBytes > 0 && part.length() != update.sizeBytes) {
+                            part.delete()
                             throw IllegalStateException("apk size mismatch")
                         }
-                        if (!target.sha256().equals(update.sha256, ignoreCase = true)) {
-                            target.delete()
+                        if (!part.sha256().equals(update.sha256, ignoreCase = true)) {
+                            part.delete()
                             throw IllegalStateException("apk checksum mismatch")
+                        }
+                        if (!part.renameTo(target)) {
+                            part.delete()
+                            throw IllegalStateException("apk rename failed")
                         }
                         if (continuation.isActive) continuation.resume(target)
                     } catch (error: Throwable) {
+                        runCatching { if (part.isFile) part.delete() }
                         if (continuation.isActive) {
                             // 网络中断等 IO 失败会留下半成品 APK；主动清理，
                             // 避免缓存目录堆积半成品文件。
