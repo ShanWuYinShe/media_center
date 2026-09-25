@@ -32,6 +32,8 @@ class MediaCenterApp : Application(), ImageLoaderFactory {
         AppLog.init(this)
         // 注入全局 repository 的持久化 context(provider 选择重启后恢复)
         com.example.mediacenter.data.MediaRepositoryHolder.init(this)
+        // 更新协调器同样需要 application context(首页/设置页共用一份更新状态)
+        com.example.mediacenter.update.AppUpdateHolder.init(this)
         // 记录真实系统版本:国产 TV 盒子常在设置里显示 4.4.2 但 Build.VERSION 实际是 21+
         // (魔改以骗过 minSdk 检查)。这条日志用于戳穿"显示版本≠真实内核版本"。
         AppLog.i(

@@ -11,10 +11,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
@@ -22,7 +20,7 @@ import com.example.mediacenter.ui.components.ProviderSelectDialog
 import com.example.mediacenter.ui.components.TopBar
 import com.example.mediacenter.ui.update.UpdateDialog
 import com.example.mediacenter.ui.update.UpdateDialogState
-import com.example.mediacenter.update.AppUpdateManager
+import com.example.mediacenter.update.AppUpdateHolder
 import com.example.mediacenter.util.NetworkRestoreEffect
 
 @Composable
@@ -32,30 +30,23 @@ fun HomeScreen(
     onSettingsClick: () -> Unit,
     onSeeAll: (categoryId: String, title: String) -> Unit,
 ) {
-    // 更新管理器与 ViewModel 在组合体内创建:AppUpdateManager 需要 context,
-    // 下载状态随 ViewModel 存活(离开首页不中断)。
-    val context = LocalContext.current
-    val updateManager = remember {
-        AppUpdateManager(
-            context.applicationContext,
-            MediaRepositoryHolder.updateApi,
-        )
-    }
-    val viewModel: HomeViewModel = viewModel(factory = HomeViewModelFactory(updateManager))
+    // 更新状态在进程级协调器(AppUpdateHolder)上:离开首页下载不中断,
+    // 进设置页看到的是同一份下载进度与弹窗状态。
+    val viewModel: HomeViewModel = viewModel(factory = HomeViewModelFactory())
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
 
     updateState?.let { dialogState ->
         UpdateDialog(
             state = dialogState,
-            onDismiss = { viewModel.dismissUpdate(allowDuringDownload = true) },
-            // 下载由 HomeViewModel 持有,弹窗关闭/离开首页返回后继续,可“后台下载”
+            onDismiss = { AppUpdateHolder.dismissUpdate(allowDuringDownload = true) },
+            // 下载由进程级协调器持有,弹窗关闭/离开首页返回后继续,可“后台下载”
             allowDismissDuringDownload = true,
             onStartDownload = {
-                (dialogState as? UpdateDialogState.Available)?.let { viewModel.startUpdateDownload(it.info) }
+                (dialogState as? UpdateDialogState.Available)?.let { AppUpdateHolder.startUpdateDownload(it.info) }
             },
             onRetryDownload = {
-                (dialogState as? UpdateDialogState.Failed)?.let { viewModel.startUpdateDownload(it.info) }
+                (dialogState as? UpdateDialogState.Failed)?.let { AppUpdateHolder.startUpdateDownload(it.info) }
             },
         )
     }

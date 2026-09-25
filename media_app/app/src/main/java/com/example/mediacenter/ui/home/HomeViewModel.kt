@@ -3,7 +3,6 @@ package com.example.mediacenter.ui.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.example.mediacenter.data.AppUpdateInfo
 import com.example.mediacenter.data.ContentCategory
 import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.MediaRepositoryHolder
@@ -11,10 +10,7 @@ import com.example.mediacenter.data.ProviderInfo
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.ui.update.UpdateDialogState
-import com.example.mediacenter.update.AppUpdateManager
-import com.example.mediacenter.update.InstallLaunchResult
-import com.example.mediacenter.update.UpdateCheckResult
-import com.example.mediacenter.update.UpdateDownloadResult
+import com.example.mediacenter.update.AppUpdateHolder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -40,23 +36,13 @@ data class HomeUiState(
 
 class HomeViewModel(
     private val repository: MediaRepository = MediaRepositoryHolder.repository,
-    private val updateManager: AppUpdateManager? = null,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
-    // App 内更新:检查/下载状态放在 ViewModel——VM 随导航 back stack entry 存活,
-    // 离开首页(点开视频/进设置)下载不中断、返回时进度与弹窗状态仍可恢复。
-    private val _updateState = MutableStateFlow<UpdateDialogState?>(null)
-    val updateState: StateFlow<UpdateDialogState?> = _updateState.asStateFlow()
-    // VM 生命周期内只检查一次;下载失败/取消后允许再次检查
-    private var updateChecked = false
-    private var updateDownloading = false
-    // "后台下载":弹窗被用户关掉但下载协程继续;进度回调据此停止回写弹窗状态。
-    // 主线程写、OkHttp 回调线程读,必须 @Volatile 保证可见性(否则已关闭的弹窗
-    // 可能因可见性滞后被进度回调重新顶出)。
-    @Volatile
-    private var updateDialogHiddenWhileDownloading = false
+    // App 内更新:检查/下载/弹窗状态统一在进程级协调器(AppUpdateHolder)上,
+    // 与设置页共享同一份;这里只暴露其状态流,进入首页时顺手发起一次检查。
+    val updateState: StateFlow<UpdateDialogState?> = AppUpdateHolder.updateState
 
     // 跟踪当前加载任务:切换 provider / 刷新时取消旧任务,
     // 避免慢的旧请求后完成覆盖新状态(旧 provider 内容配新 currentProvider)。
@@ -74,7 +60,8 @@ class HomeViewModel(
 
     init {
         loadHome()
-        checkUpdate()
+        // 自动检查更新:协调器内进程级只查一次,失败/下载中不重复发起
+        AppUpdateHolder.requestCheck()
     }
 
     fun loadHome() {
@@ -149,100 +136,6 @@ class HomeViewModel(
         loadHome()
     }
 
-    // ── App 内更新 ──
-
-    fun checkUpdate() {
-        val manager = updateManager ?: return
-        if (updateChecked || updateDownloading) return
-        updateChecked = true
-        viewModelScope.launch {
-            when (val result = manager.check()) {
-                is UpdateCheckResult.UpdateAvailable -> {
-                    _updateState.value = UpdateDialogState.Available(result.update)
-                }
-                is UpdateCheckResult.Failed -> {
-                    // 检查失败不打扰用户（离线/服务器抖动常见），但必须留日志便于排查；
-                    // 回滚 updateChecked:否则启动时一次瞬时失败会让本 VM 生命周期内
-                    // 更新检查永不重试。
-                    updateChecked = false
-                    AppLog.w("Update", "update check failed: ${result.message}")
-                }
-                UpdateCheckResult.NoUpdate -> Unit
-            }
-        }
-    }
-
-    fun startUpdateDownload(info: AppUpdateInfo) {
-        val manager = updateManager ?: return
-        if (updateDownloading) return
-        updateDownloading = true
-        updateDialogHiddenWhileDownloading = false
-        _updateState.value = UpdateDialogState.Downloading(info, 0f)
-        viewModelScope.launch {
-            when (val result = manager.download(info) { progress ->
-                // 用户已选"后台下载"时不再回写弹窗状态，否则每次进度回调都会把弹窗重新顶出来
-                if (!updateDialogHiddenWhileDownloading) {
-                    _updateState.value = UpdateDialogState.Downloading(info, progress)
-                }
-            }) {
-                is UpdateDownloadResult.Ready -> {
-                    _updateState.value = null
-                    when (val install = manager.launchInstaller(result.apk)) {
-                        is InstallLaunchResult.NeedsPermission -> {
-                            // Android 8+ 未开"安装未知应用"权限:引导去系统设置,返回后提示重试。
-                            // 重置状态机:否则 Failed 弹窗的"重试"会被 updateDownloading 守卫吞掉
-                            // (Android 8+ 盒子首更必走"引导开权限→返回→重试"主线)。
-                            updateDownloading = false
-                            updateChecked = false
-                            manager.launchInstallPermissionSettings()
-                            _updateState.value = UpdateDialogState.Failed(
-                                result.update,
-                                "请先允许安装未知应用，然后重新下载安装",
-                            )
-                        }
-                        is InstallLaunchResult.Failed -> {
-                            updateDownloading = false
-                            updateChecked = false
-                            _updateState.value = UpdateDialogState.Failed(result.update, install.message)
-                        }
-                        is InstallLaunchResult.Started -> {
-                            // 用户取消系统安装器时,本 VM 内仍保留重查/重装入口
-                            updateDownloading = false
-                            updateChecked = false
-                        }
-                    }
-                }
-                is UpdateDownloadResult.Failed -> {
-                    // 失败后可再次检查/重试
-                    updateDownloading = false
-                    updateChecked = false
-                    _updateState.value = UpdateDialogState.Failed(info, result.message)
-                }
-            }
-        }
-    }
-
-    /**
-     * 关闭更新弹窗。
-     * 非 Downloading 状态：直接清状态并允许再次检查。
-     * Downloading 且 allowDuringDownload=true：仅隐藏弹窗，后台下载继续；
-     *   完成后仍会拉起安装器，失败则 Failed 弹窗重新出现。不重置
-     *   updateDownloading/updateChecked（任务还活着）。
-     * Downloading 且不允许（默认）：保持原阻塞行为，防止任务与 UI 脱节。
-     */
-    fun dismissUpdate(allowDuringDownload: Boolean = false) {
-        val current = _updateState.value
-        if (current is UpdateDialogState.Downloading) {
-            if (!allowDuringDownload) return
-            updateDialogHiddenWhileDownloading = true
-            _updateState.value = null
-            return
-        }
-        _updateState.value = null
-        updateDownloading = false
-        updateChecked = false
-    }
-
     private companion object {
         // 首页并行拉取分类第一页的并发上限:弱网/老设备上超过该值的并发
         // 只会互相抢占连接与带宽,整体更慢。
@@ -254,13 +147,9 @@ class HomeViewModel(
     }
 }
 
-class HomeViewModelFactory(
-    private val updateManager: AppUpdateManager,
-) : ViewModelProvider.Factory {
+class HomeViewModelFactory : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        return HomeViewModel(
-            updateManager = updateManager,
-        ) as T
+        return HomeViewModel() as T
     }
 }

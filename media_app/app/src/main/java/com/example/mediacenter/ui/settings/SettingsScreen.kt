@@ -36,15 +36,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.mediacenter.BuildConfig
-import com.example.mediacenter.data.AppUpdateInfo
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.PlaybackPositionStore
 import com.example.mediacenter.log.AppLog
-import com.example.mediacenter.update.AppUpdateManager
-import com.example.mediacenter.update.InstallLaunchResult
+import com.example.mediacenter.update.AppUpdateHolder
 import com.example.mediacenter.update.UpdateCheckResult
-import com.example.mediacenter.update.UpdateDownloadResult
 import com.example.mediacenter.ui.components.TvIconButton
 import com.example.mediacenter.ui.components.TvScrollableText
 import com.example.mediacenter.ui.theme.AppleBlue
@@ -71,78 +69,30 @@ fun SettingsScreen(onBack: () -> Unit) {
     var logs by remember { mutableStateOf("") }
 
     // ── 手动检查更新 ──
-    // 与首页启动时的自动检查共用 AppUpdateManager / UpdateDialog；区别在于
-    // 这里是用户主动触发，无论结果如何都给出明确反馈（含"已是最新版本"）。
-    val api = MediaRepositoryHolder.updateApi
-    val updateManager = remember {
-        AppUpdateManager(context.applicationContext, api)
-    }
-    var updateState by remember { mutableStateOf<UpdateDialogState?>(null) }
+    // 与首页共用进程级协调器(AppUpdateHolder):同一份状态流,下载在任何页面
+    // 发起、任何页面都能观察进度;这里是用户主动触发,无论结果如何都给出
+    // 明确反馈(含"已是最新版本")。
+    val updateState by AppUpdateHolder.updateState.collectAsStateWithLifecycle()
     var checkingUpdate by remember { mutableStateOf(false) }
-    // "后台下载":下载中允许关闭弹窗,关闭后进度不再回写弹窗(协程继续);
-    // 完成时拉起系统安装器,失败时弹窗重新出现告知原因。
-    var downloadInBackground by remember { mutableStateOf(false) }
 
     // ── 服务端版本 ──
     // 排障时用户可直接报出线上服务端构建版本(/health 公开端点)。
     var serverVersion by remember { mutableStateOf("获取中…") }
     LaunchedEffect(Unit) {
-        serverVersion = api.serverVersion() ?: "无法获取"
+        serverVersion = MediaRepositoryHolder.updateApi.serverVersion() ?: "无法获取"
     }
 
     fun checkForUpdate() {
-        if (checkingUpdate || updateState != null) return
+        if (checkingUpdate) return
         checkingUpdate = true
         feedback = null
         scope.launch {
-            when (val result = updateManager.check()) {
-                is UpdateCheckResult.UpdateAvailable -> {
-                    feedback = null
-                    updateState = UpdateDialogState.Available(result.update)
-                }
+            when (val result = AppUpdateHolder.checkSuspend()) {
+                is UpdateCheckResult.UpdateAvailable -> feedback = null
                 is UpdateCheckResult.Failed -> feedback = result.message
                 UpdateCheckResult.NoUpdate -> feedback = "已是最新版本"
             }
             checkingUpdate = false
-        }
-    }
-
-    fun startUpdateDownload(info: AppUpdateInfo) {
-        if (updateState is UpdateDialogState.Downloading) return
-        downloadInBackground = false
-        scope.launch {
-            updateState = UpdateDialogState.Downloading(info, 0f)
-            // 下载/安装流程与首页保持一致:下载(带进度)→校验→拉起安装器。
-            // 弹窗被"后台下载"关闭后进度不再回写(避免弹窗反复弹出);离开
-            // 设置页会取消协程,AppUpdateManager 会清理半成品文件。
-            val result = updateManager.download(info) { progress ->
-                if (!downloadInBackground) {
-                    updateState = UpdateDialogState.Downloading(info, progress)
-                }
-            }
-            downloadInBackground = false
-            when (result) {
-                is UpdateDownloadResult.Ready -> {
-                    updateState = null
-                    when (val install = updateManager.launchInstaller(result.apk)) {
-                        is InstallLaunchResult.NeedsPermission -> {
-                            // Android 8+ 未开"安装未知应用"权限:引导去系统设置,返回后可重试。
-                            updateManager.launchInstallPermissionSettings()
-                            updateState = UpdateDialogState.Failed(
-                                result.update,
-                                "请先允许安装未知应用，然后重新下载安装",
-                            )
-                        }
-                        is InstallLaunchResult.Failed -> {
-                            updateState = UpdateDialogState.Failed(result.update, install.message)
-                        }
-                        is InstallLaunchResult.Started -> Unit
-                    }
-                }
-                is UpdateDownloadResult.Failed -> {
-                    updateState = UpdateDialogState.Failed(info, result.message)
-                }
-            }
         }
     }
 
@@ -164,17 +114,14 @@ fun SettingsScreen(onBack: () -> Unit) {
     updateState?.let { dialogState ->
         UpdateDialog(
             state = dialogState,
-            // 下载中允许"后台下载":用户不再被锁死在弹窗直到下载完成/失败
+            // 下载中允许"后台下载":状态在进程级协调器上,离开设置页也不中断
             allowDismissDuringDownload = true,
-            onDismiss = {
-                if (dialogState is UpdateDialogState.Downloading) downloadInBackground = true
-                updateState = null
-            },
+            onDismiss = { AppUpdateHolder.dismissUpdate(allowDuringDownload = true) },
             onStartDownload = {
-                (dialogState as? UpdateDialogState.Available)?.let { startUpdateDownload(it.info) }
+                (dialogState as? UpdateDialogState.Available)?.let { AppUpdateHolder.startUpdateDownload(it.info) }
             },
             onRetryDownload = {
-                (dialogState as? UpdateDialogState.Failed)?.let { startUpdateDownload(it.info) }
+                (dialogState as? UpdateDialogState.Failed)?.let { AppUpdateHolder.startUpdateDownload(it.info) }
             },
         )
     }
