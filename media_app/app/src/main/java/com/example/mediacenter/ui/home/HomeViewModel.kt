@@ -52,7 +52,10 @@ class HomeViewModel(
     // VM 生命周期内只检查一次;下载失败/取消后允许再次检查
     private var updateChecked = false
     private var updateDownloading = false
-    // "后台下载":弹窗被用户关掉但下载协程继续;进度回调据此停止回写弹窗状态
+    // "后台下载":弹窗被用户关掉但下载协程继续;进度回调据此停止回写弹窗状态。
+    // 主线程写、OkHttp 回调线程读,必须 @Volatile 保证可见性(否则已关闭的弹窗
+    // 可能因可见性滞后被进度回调重新顶出)。
+    @Volatile
     private var updateDialogHiddenWhileDownloading = false
 
     // 跟踪当前加载任务:切换 provider / 刷新时取消旧任务,
@@ -158,7 +161,10 @@ class HomeViewModel(
                     _updateState.value = UpdateDialogState.Available(result.update)
                 }
                 is UpdateCheckResult.Failed -> {
-                    // 检查失败不打扰用户（离线/服务器抖动常见），但必须留日志便于排查。
+                    // 检查失败不打扰用户（离线/服务器抖动常见），但必须留日志便于排查；
+                    // 回滚 updateChecked:否则启动时一次瞬时失败会让本 VM 生命周期内
+                    // 更新检查永不重试。
+                    updateChecked = false
                     AppLog.w("Update", "update check failed: ${result.message}")
                 }
                 UpdateCheckResult.NoUpdate -> Unit
@@ -184,6 +190,10 @@ class HomeViewModel(
                     when (val install = manager.launchInstaller(result.apk)) {
                         is InstallLaunchResult.NeedsPermission -> {
                             // Android 8+ 未开"安装未知应用"权限:引导去系统设置,返回后提示重试。
+                            // 重置状态机:否则 Failed 弹窗的"重试"会被 updateDownloading 守卫吞掉
+                            // (Android 8+ 盒子首更必走"引导开权限→返回→重试"主线)。
+                            updateDownloading = false
+                            updateChecked = false
                             manager.launchInstallPermissionSettings()
                             _updateState.value = UpdateDialogState.Failed(
                                 result.update,
@@ -191,9 +201,15 @@ class HomeViewModel(
                             )
                         }
                         is InstallLaunchResult.Failed -> {
+                            updateDownloading = false
+                            updateChecked = false
                             _updateState.value = UpdateDialogState.Failed(result.update, install.message)
                         }
-                        is InstallLaunchResult.Started -> Unit
+                        is InstallLaunchResult.Started -> {
+                            // 用户取消系统安装器时,本 VM 内仍保留重查/重装入口
+                            updateDownloading = false
+                            updateChecked = false
+                        }
                     }
                 }
                 is UpdateDownloadResult.Failed -> {

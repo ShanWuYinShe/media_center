@@ -10,6 +10,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 internal data class BiliNavResponse(
     val code: Int = 0,
+    val message: String? = null,
     val data: NavData? = null,
 ) {
     @Serializable
@@ -30,6 +31,8 @@ internal data class BiliNavResponse(
 @Serializable
 internal data class BiliViewResponse(
     val code: Int = 0,
+    // B 站业务错误的人类可读原因(风控 -352/-412/-403 等),透传给用户界面
+    val message: String? = null,
     val data: ViewData? = null,
 ) {
     @Serializable
@@ -50,6 +53,7 @@ internal data class BiliViewResponse(
 @Serializable
 internal data class BiliPlayUrlResponse(
     val code: Int = 0,
+    val message: String? = null,
     val data: PlayUrlData? = null,
 ) {
     @Serializable

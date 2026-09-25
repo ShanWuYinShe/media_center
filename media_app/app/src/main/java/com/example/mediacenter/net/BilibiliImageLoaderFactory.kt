@@ -5,7 +5,6 @@ import coil.ImageLoader
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import com.example.mediacenter.log.AppLog
-import com.example.mediacenter.player.BILI_CDN_HEADERS
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 

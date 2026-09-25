@@ -85,6 +85,9 @@ class MediaApi(
      */
     suspend fun serverVersion(): String? = try {
         get<ServerHealth>(pathSegments = listOf("health")).version
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        // 协程取消不当普通失败处理
+        throw e
     } catch (error: Exception) {
         AppLog.w("Api", "server version: ${error.message}")
         null

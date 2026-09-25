@@ -10,17 +10,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.example.mediacenter.log.AppLog
-
-/**
- * B 站 CDN 反爬必需的请求头:PC 端 User-Agent + Referer/Origin 指向 bilibili.com。
- * 不带这些头,CDN 直接返回 403,播放流无法加载。与 [com.example.mediacenter.data.BilibiliApi]
- * 解析 playurl 时使用的头保持一致;此处集中定义,供播放服务的 HttpDataSource 复用。
- */
-internal val BILI_CDN_HEADERS = mapOf(
-    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer" to "https://www.bilibili.com",
-    "Origin" to "https://www.bilibili.com",
-)
+import com.example.mediacenter.net.BILI_CDN_HEADERS
 
 /**
  * 播放服务:ExoPlayer + MediaSession 常驻于此,提供系统媒体栏卡片、通知控制与媒体按键。
@@ -39,6 +29,8 @@ class PlaybackService : MediaSessionService() {
         val httpFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(BILI_CDN_HEADERS.getValue("User-Agent"))
             .setDefaultRequestProperties(BILI_CDN_HEADERS - "User-Agent")
+            // B 站 CDN 个别直链会 http↔https 302,默认不跟随跨协议重定向会直接加载失败
+            .setAllowCrossProtocolRedirects(true)
         val player = ExoPlayer.Builder(this)
             .setAudioAttributes(
                 AudioAttributes.Builder()

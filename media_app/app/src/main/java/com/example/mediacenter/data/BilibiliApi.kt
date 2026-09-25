@@ -23,6 +23,14 @@ import java.time.Duration
 class BilibiliApiException(override val message: String) : Exception(message)
 
 /**
+ * 拼装 B 站业务错误的用户可见文案:优先透出响应里的 message(风控 -352/-412/-403
+ * 的真实原因就在这个字段),缺失时回退到裸 code。
+ */
+private fun biliError(where: String, code: Int, message: String?): String =
+    message?.takeIf { it.isNotBlank() }?.let { "$where 失败($code): $it" }
+        ?: "${where}接口返回 code=$code"
+
+/**
  * B 站官方 API 客户端:让 App 端拿到 catalog 的 bvid 后**自己**解析播放地址,
  * 避免 server 端做上游调用(限流 / 带宽压力 / 重复签名)。
  *
@@ -87,7 +95,7 @@ class BilibiliApi(
             AppLog.i("Bili", "multi-page video: $bvid has $totalPages pages, requesting cid=$targetCid (page=$pageIndex) quality=$qn")
         }
         val payload = fetchPlayUrl(bvid, targetCid, quality = qn)
-        if (payload.code != 0) throw BilibiliApiException("playurl 接口返回 code=${payload.code}")
+        if (payload.code != 0) throw BilibiliApiException(biliError("playurl", payload.code, payload.message))
 
         val (options, qualities) = buildPlaybackOptions(bvid, pageIndex, payload)
         if (options.isEmpty()) throw BilibiliApiException("B 站未返回播放流(可能触发风控)")
@@ -149,9 +157,9 @@ class BilibiliApi(
         val signed = signWbiParams(mapOf("bvid" to bvid), keys.first, keys.second)
         val url = buildUrl("https://api.bilibili.com/x/web-interface/wbi/view", signed)
         val payload = getJson<BiliViewResponse>(url)
-        val data = payload.data ?: throw BilibiliApiException("view 接口返回 code=${payload.code} 找不到 bvid=$bvid")
+        val data = payload.data ?: throw BilibiliApiException(biliError("view", payload.code, payload.message) + " (bvid=$bvid)")
         if (data.bvid.isNullOrEmpty()) {
-            throw BilibiliApiException("view 接口返回 code=${payload.code} 找不到 bvid=$bvid")
+            throw BilibiliApiException(biliError("view", payload.code, payload.message) + " (bvid=$bvid)")
         }
         if ((data.cid ?: 0) == 0L) {
             throw BilibiliApiException("view 接口未返回 cid(可能视频被删/审核)")
@@ -190,7 +198,7 @@ class BilibiliApi(
             val newImg = extractKeyFromUrl(payload.data?.wbiImg?.imgUrl ?: "")
             val newSub = extractKeyFromUrl(payload.data?.wbiImg?.subUrl ?: "")
             if (newImg.isEmpty() || newSub.isEmpty()) {
-                throw BilibiliApiException("无法从 nav 接口拿到 WBI 密钥(code=${payload.code})")
+                throw BilibiliApiException(biliError("nav", payload.code, payload.message) + ": 未拿到 WBI 密钥")
             }
             imgKey = newImg
             subKey = newSub
@@ -308,8 +316,8 @@ class BilibiliApi(
         private val RETRY_BACKOFF_MS = longArrayOf(800L)
 
         // B 站反爬要求:必须带 PC 端 User-Agent + Referer 才能拿到 playurl。
-        // 与 PlaybackService 的 BILI_CDN_HEADERS 同源(单一来源),播放流/playurl 共用。
-        private val DIRECT_HEADERS = com.example.mediacenter.player.BILI_CDN_HEADERS
+        // CDN 必需头单一来源已下沉到 net 层(BilibiliCdn.kt),data/player/图片加载共同引用。
+        private val DIRECT_HEADERS = com.example.mediacenter.net.BILI_CDN_HEADERS
     }
 }
 
