@@ -151,11 +151,15 @@ class AppUpdateManager(
 
     @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
     private suspend fun tryInstallWithSession(apk: File): InstallLaunchResult {
+        // session 兜底:复制 APK 抛异常/协程取消时 abandon 掉会话——失败的会话残留
+        // 在系统 PackageInstaller 里,老盒子会话配额有限,累积会导致后续更新失败。
+        // commit 成功后置 null,避免异常路径误 abandon 已提交的会话。
+        var session: PackageInstaller.Session? = null
         return try {
             val packageInstaller = context.packageManager.packageInstaller
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
             val sessionId = packageInstaller.createSession(params)
-            val session = packageInstaller.openSession(sessionId)
+            session = packageInstaller.openSession(sessionId)
 
             // APK 复制到 PackageInstaller session 是磁盘 IO，必须在后台线程执行，
             // 否则老盒子上主线程卡顿数秒甚至 ANR。
@@ -196,8 +200,13 @@ class AppUpdateManager(
             )
             session.commit(pendingIntent.intentSender)
             session.close()
+            session = null
             InstallLaunchResult.Started
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            runCatching { session?.abandon() }
+            throw e
         } catch (error: Throwable) {
+            runCatching { session?.abandon() }
             AppLog.w("Update", "PackageInstaller session failed: ${error.message}", error)
             InstallLaunchResult.Failed("安装失败：${error.message}")
         }
