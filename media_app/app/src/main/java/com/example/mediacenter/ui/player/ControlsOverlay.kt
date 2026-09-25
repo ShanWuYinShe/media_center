@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -114,6 +115,8 @@ internal fun ControlsOverlay(
                     modifier = Modifier
                         .weight(1f)
                         .requiredHeight(48.dp)
+                        // 失焦即复位预览值:否则进度条残留拖动预览、再聚焦从旧值续算 seek
+                        .onFocusChanged { if (!it.isFocused) dragPositionMs = null }
                         .onPreviewKeyEvent { event ->
                             // 与拖动同款两段式：KeyDown 只更新本地预览值，KeyUp 才提交
                             // 真实 seek。否则长按方向键的连发会产生一串连续 seek 导致卡顿。

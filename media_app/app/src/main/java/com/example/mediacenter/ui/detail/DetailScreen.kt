@@ -110,14 +110,16 @@ fun DetailScreen(
             Spacer(Modifier.height(8.dp))
         }
         val desc = video.description.orEmpty()
-        // 只按真实文本布局判断是否溢出,固定折叠 3 行,不在原布局内展开
-        var descOverflowed by remember { mutableStateOf(false) }
+        // 只按真实文本布局判断是否溢出,固定折叠 3 行,不在原布局内展开。
+        // 必须用 hasVisualOverflow:maxLines=3 时 lineCount 恒 <=3,"行数>3"永远为 false,
+        // 披露按钮会永不出现。remember 带 video.id:换视频时重置溢出状态。
+        var descOverflowed by remember(video.id) { mutableStateOf(false) }
         Text(
             desc.ifEmpty { "暂无简介" },
             color = TextSecondary,
             maxLines = 3,
             overflow = TextOverflow.Ellipsis,
-            onTextLayout = { layoutResult -> descOverflowed = layoutResult.lineCount > 3 },
+            onTextLayout = { layoutResult -> descOverflowed = layoutResult.hasVisualOverflow },
         )
         if (descOverflowed) {
             var showFullDesc by remember { mutableStateOf(false) }
@@ -170,6 +172,7 @@ private fun FullDescriptionDialog(
                 text = description,
                 color = TextSecondary,
                 modifier = Modifier.fillMaxWidth(),
+                maxHeight = 360.dp,
             )
         },
         confirmButton = {

@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -18,6 +19,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import com.example.mediacenter.ui.theme.TextPrimary
 import kotlinx.coroutines.launch
 
@@ -39,6 +41,8 @@ fun TvScrollableText(
 ) {
     val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
+    // 滚动步长按 density 换算:写死像素在 4K/高密度盒子上每键只滚约半行
+    val scrollStepPx = with(LocalDensity.current) { ScrollStepDp.toPx() }
     val heightModifier = if (maxHeight != null) Modifier.requiredHeightIn(max = maxHeight) else Modifier
     Text(
         text = text,
@@ -52,11 +56,11 @@ fun TvScrollableText(
                 // 无法继续向下/向上走出正文回到弹窗按钮。
                 when (e.key) {
                     Key.DirectionDown -> if (scrollState.canScrollForward) {
-                        scope.launch { scrollState.animateScrollBy(160f) }
+                        scope.launch { scrollState.animateScrollBy(scrollStepPx) }
                         true
                     } else false
                     Key.DirectionUp -> if (scrollState.canScrollBackward) {
-                        scope.launch { scrollState.animateScrollBy(-160f) }
+                        scope.launch { scrollState.animateScrollBy(-scrollStepPx) }
                         true
                     } else false
                     else -> false
@@ -66,3 +70,6 @@ fun TvScrollableText(
             .focusable(),
     )
 }
+
+/** 每次按键的滚动步长:约两行正文,按 density 换算成像素。 */
+private val ScrollStepDp = 40.dp

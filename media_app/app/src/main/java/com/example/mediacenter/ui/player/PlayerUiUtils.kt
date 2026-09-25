@@ -17,7 +17,8 @@ internal fun friendlyPlaybackError(error: PlaybackException): String = when {
         error.errorCode == PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE ->
         "播放地址失效或网络异常，请重试"
     error.errorCode in 6001..6010 -> "播放受保护内容失败"
-    else -> "播放失败（${error.errorCodeName}）"
+    // 只给数字码:errorCodeName 是英文技术信息,不适合直接展示给 TV 用户
+    else -> "播放失败（错误码 ${error.errorCode}）"
 }
 
 internal val CONTROL_KEYS = setOf(

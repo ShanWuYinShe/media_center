@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 data class SearchUiState(
@@ -93,8 +95,13 @@ class SearchViewModel(
             val cats = repository.categories()
             _uiState.value = _uiState.value.copy(categories = cats)
             val loaded = coroutineScope {
+                // 并发上限:与 HomeViewModel 同教训,弱网下"分类×页"并发打满
+                // 连接池会互相拖慢
+                val semaphore = Semaphore(SEARCH_FETCH_CONCURRENCY)
                 cats.map { cat ->
-                    async { cat.id to loadCategoryPages(cat.id, 1, FAST_PAGES) }
+                    async {
+                        semaphore.withPermit { cat.id to loadCategoryPages(cat.id, 1, FAST_PAGES) }
+                    }
                 }.awaitAll().toMap()
             }
             catalogCache.clear()
@@ -119,8 +126,11 @@ class SearchViewModel(
         if (cats.isEmpty()) return
         try {
             val extra = coroutineScope {
+                val semaphore = Semaphore(SEARCH_FETCH_CONCURRENCY)
                 cats.map { cat ->
-                    async { cat.id to loadCategoryPages(cat.id, FAST_PAGES + 1, MAX_PAGES_PER_CATEGORY) }
+                    async {
+                        semaphore.withPermit { cat.id to loadCategoryPages(cat.id, FAST_PAGES + 1, MAX_PAGES_PER_CATEGORY) }
+                    }
                 }.awaitAll().toMap()
             }
             // 合并前校验:provider 已切换则丢弃本次结果(数据已作废)。
@@ -237,6 +247,8 @@ class SearchViewModel(
         get() = cachedProvider == repository.currentProvider
 
     private companion object {
+        // 目录拉取并发上限:与 HomeViewModel 同值,防止弱网打满 OkHttp 连接池。
+        const val SEARCH_FETCH_CONCURRENCY = 4
         // 首搜只需前 2 页(36 条)，秒回；旧实现拉满 5 页导致冷启动慢 + 内存占用高。
         const val FAST_PAGES = 2
         // 每分类最多拉取的页数(后台补全用)，控制本地目录规模(18 条/页)。

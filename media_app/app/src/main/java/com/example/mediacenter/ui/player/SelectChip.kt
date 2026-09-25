@@ -1,6 +1,7 @@
 package com.example.mediacenter.ui.player
 
 import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -22,7 +23,8 @@ internal fun SelectChip(
 ) {
     Button(
         onClick = onClick,
-        modifier = Modifier.requiredHeight(48.dp),
+        // 宽度上限让 maxLines/Ellipsis 真正生效:LazyRow 里无约束时超长分P名会宽出整屏
+        modifier = Modifier.requiredHeight(48.dp).widthIn(max = 240.dp),
         colors = ButtonDefaults.colors(
             // selected 非聚焦时用暗蓝：焦点态(Apple Blue)必须是视觉最强状态，
             // selected 与 focused 同色会让用户分不清“当前选中”和“现在操作的是哪个”。

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.VideoSummary
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -71,6 +72,8 @@ class CategoryVideosViewModel(
                         isLoadingInitial = false,
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoadingInitial = false, error = "分类内容加载失败，请重试")
@@ -104,6 +107,8 @@ class CategoryVideosViewModel(
                             (response.total > 0 && merged.size >= response.total),
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 // 翻页失败不丢已有列表,滚动到页底时展示重试入口
                 _uiState.update { it.copy(isLoadingMore = false, loadMoreFailed = true) }

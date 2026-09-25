@@ -3,6 +3,7 @@ package com.example.mediacenter.ui
 import android.net.Uri
 import android.os.Bundle
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -81,7 +82,11 @@ fun AppNavigation() {
         ) { backStackEntry ->
             val video = backStackEntry.arguments?.getString("video")?.let { raw ->
                 runCatching { videoJson.decodeFromString(VideoSummary.serializer(), raw) }.getOrNull()
-            } ?: return@composable
+            } ?: run {
+                // 仅 saved state 损坏时发生:退回上一页,不渲染无提示的空白页
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
             DetailScreen(
                 video = video,
                 onPlay = { navController.navigate(Routes.player(video.id, video.title)) },
