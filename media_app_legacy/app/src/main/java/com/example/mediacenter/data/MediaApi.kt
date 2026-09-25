@@ -69,8 +69,10 @@ class MediaApi(
 
     // 凭证接口需要 X-App-Token(与服务端 MEDIA_SERVER_APP_API_TOKEN 一致):
     // 凭证是共享账号会话 cookie,服务端只向持令牌的客户端下发。
+    // allowHttpFallback=false:SESSDATA/令牌绝不走明文 HTTP 降级——TLS 握手
+    // 失败时该接口直接报网络错误,App 降级为无凭证模式(免费清晰度可用)。
     suspend fun credentials(): CredentialsResponse =
-        get(listOf("providers", "credentials"), headers = appTokenHeaders())
+        get(listOf("providers", "credentials"), headers = appTokenHeaders(), allowHttpFallback = false)
 
     suspend fun categories(provider: String): CategoriesResponse =
         get(listOf("providers", provider, "categories"))
@@ -116,6 +118,7 @@ class MediaApi(
         pathSegments: List<String>,
         query: Map<String, String> = emptyMap(),
         headers: Map<String, String> = emptyMap(),
+        allowHttpFallback: Boolean = true,
     ): T {
         val label = "/" + pathSegments.joinToString("/")
         val startedAt = System.currentTimeMillis()
@@ -154,7 +157,8 @@ class MediaApi(
         }
         // HTTPS 重试耗尽:若是 TLS 握手失败(老设备与 Cloudflare TLS 配置不兼容),
         // 降级到明文 HTTP 再试一次(服务端需放行 HTTP,见 MediaApi 类注释)。
-        if (classifyNetworkError(lastError) == NetworkErrorCategory.TLS_HANDSHAKE) {
+        // 携带敏感头(X-App-Token/凭证)的调用可用 allowHttpFallback=false 退出此路径。
+        if (classifyNetworkError(lastError) == NetworkErrorCategory.TLS_HANDSHAKE && allowHttpFallback) {
             val httpRoot = httpApiRoot
             if (httpRoot != null) {
                 val httpRequest = buildRequest(httpRoot, pathSegments, query, headers)
