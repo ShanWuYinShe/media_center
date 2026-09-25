@@ -22,7 +22,7 @@ description: media_app 版本号与 APK 发版部署流程。触发：发版、�
 
 APK 有 **normal + legacy 两个变体**：normal 源码即本目录；legacy 为 Android 4.4.2
 兼容变体，源码在 `media_app_legacy/`。部署时如 `media_app/` 有变更，编译 APK 上传到
-服务器 media 站 deploy/ 检出下的 `deploy/data/generated/`（compose 挂载为 media_server
+服务器工作用户 HOME 下 `media_center/deploy/data/generated/`（compose 挂载为 media_server
 的 /config，manifest 与 APK 每次请求现读，文件就位即生效），文件名为版本化格式
 `media-center-app-v<versionCode>-<sha12>.apk`（沿用早期 workwork admin 的命名约定，
 固定名 `media-center-app.apk` 不是上传名），随后生成 `app-update.json` 与

@@ -31,9 +31,10 @@
 #                      无 local.properties，Gradle 依赖此变量或 local.properties 定位 SDK
 #   RELEASE_SERVER     --server 未指定时的上传目标（user@host）
 #   RELEASE_REMOTE_DIR --remote-dir 未指定时的服务器目标目录
-#                      （默认 deploy/data/generated，相对服务器上 media 站
-#                      deploy/ 的检出位置；须与 compose 挂载的 ./data/generated
-#                      同目录，布局不同时用 --remote-dir 显式覆盖）
+#                      （默认 media_center/deploy/data/generated：相对服务器
+#                      上工作用户 HOME，与 workwork-server 实测布局一致——
+#                      该检出即 compose 挂载的 ./data/generated；布局不同时
+#                      用 --remote-dir 显式覆盖）
 set -euo pipefail
 
 # ---------- 常量与默认值 ----------
@@ -42,7 +43,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 DEFAULT_JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
-DEFAULT_REMOTE_DIR="deploy/data/generated"
+DEFAULT_REMOTE_DIR="media_center/deploy/data/generated"
 
 UPLOAD=0
 SERVER="${RELEASE_SERVER:-}"
