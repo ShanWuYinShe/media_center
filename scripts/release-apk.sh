@@ -7,8 +7,8 @@
 #      （已配 debug 签名 + R8 minify，可直接安装）。
 #   2. 计算每个 APK 的 SHA256 与大小，按服务器索引约定重命名：
 #        media-center-app-v<versionCode>-<sha12>.apk
-#      其中 <sha12> 是 APK 文件 SHA256 的前 12 位十六进制（与 workwork admin
-#      mediaAppReleaseFilename() 一致，不是 git commit sha）。
+#      其中 <sha12> 是 APK 文件 SHA256 的前 12 位十六进制（命名格式沿用早期
+#      workwork admin 的 mediaAppReleaseFilename()，不是 git commit sha）。
 #   3. 生成 app-update.json（normal）与 app-update-legacy.json（legacy）两份
 #      manifest 到本地输出目录，字段与 media_server/app_update.go 的
 #      AppUpdateManifest 解析与校验精确一致：
@@ -31,7 +31,9 @@
 #                      无 local.properties，Gradle 依赖此变量或 local.properties 定位 SDK
 #   RELEASE_SERVER     --server 未指定时的上传目标（user@host）
 #   RELEASE_REMOTE_DIR --remote-dir 未指定时的服务器目标目录
-#                      （默认 .wework/generated/media_center，与 workwork 约定一致）
+#                      （默认 deploy/data/generated，相对服务器上 media 站
+#                      deploy/ 的检出位置；须与 compose 挂载的 ./data/generated
+#                      同目录，布局不同时用 --remote-dir 显式覆盖）
 set -euo pipefail
 
 # ---------- 常量与默认值 ----------
@@ -40,7 +42,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 DEFAULT_JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
-DEFAULT_REMOTE_DIR=".wework/generated/media_center"
+DEFAULT_REMOTE_DIR="deploy/data/generated"
 
 UPLOAD=0
 SERVER="${RELEASE_SERVER:-}"
@@ -221,7 +223,7 @@ if [[ "${UPLOAD}" -eq 1 ]]; then
   # 服务器索引约定：版本化 APK 文件名 + 两份 manifest
   scp "${OUT_DIR}"/media-center-app-v*.apk "${SERVER}:${REMOTE_DIR}/"
   scp "${OUT_DIR}/app-update.json" "${OUT_DIR}/app-update-legacy.json" "${SERVER}:${REMOTE_DIR}/"
-  log "上传完成。服务器侧需按 workwork README 完成发布确认（或经 admin 面板发布）。"
+  log "上传完成。manifest 与 APK 为 media_server 每次请求现读，文件就位即生效（见 deploy/README.md 运维一节）。"
 fi
 
 log "全部完成。产物目录: ${OUT_DIR}"
