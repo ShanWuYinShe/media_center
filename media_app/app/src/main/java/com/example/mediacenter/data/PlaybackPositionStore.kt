@@ -51,3 +51,11 @@ object PlaybackPositionStore {
         prefs(context).edit { clear() }
     }
 }
+
+/**
+ * 分页视频的存储 key:多P按页隔离位置("BV1xx#p2" = 第 2 页),单P与多P首页
+ * 保持原 videoId——历史记录无需迁移。key 由调用方组合,保存与恢复必须
+ * 使用同一 [playbackStorageKey] 结果。
+ */
+fun playbackStorageKey(videoId: String, page: Int): String =
+    if (page > 0) "$videoId#p${page + 1}" else videoId

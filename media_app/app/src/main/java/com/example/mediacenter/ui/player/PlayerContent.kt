@@ -39,6 +39,7 @@ import androidx.media3.ui.PlayerView
 import com.example.mediacenter.data.PlaybackPositionStore
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.WatchHistory
+import com.example.mediacenter.data.playbackStorageKey
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.player.PlaybackService
 import com.example.mediacenter.ui.components.ErrorView
@@ -179,12 +180,22 @@ internal fun PlayerContent(
     DisposableEffect(controller) {
         controller?.addListener(playerListener)
         onDispose {
-            // 退出播放页前保存位置,保证"播放中途返回"也能续播
+            // 退出播放页前保存位置,保证"播放中途返回"也能续播。
+            // 多P视频按页隔离存储(key 带 #pN),各页位置互不覆盖。
             val posMs = controller?.currentPosition?.coerceAtLeast(0L) ?: 0L
-            PlaybackPositionStore.save(context, videoId, posMs)
-            // 回写观看历史(继续观看行):看完(距结尾不足 15s)的条目会被移除
             val durMs = controller?.duration?.coerceAtLeast(0L) ?: 0L
-            WatchHistory.updatePosition(context, videoId, posMs / 1000, durMs / 1000)
+            val pagesInfo = playbackResult.pages
+            PlaybackPositionStore.save(context, playbackStorageKey(videoId, pagesInfo.currentPage), posMs)
+            // 回写观看历史(继续观看行):看完(距结尾不足 15s)的条目会被移除;
+            // 多P回写绝对位置(前面各页时长累加),进度条比例按整部视频
+            val offsetSec = pagesInfo.pageDurations.take(pagesInfo.currentPage).sum()
+            val totalPageSec = pagesInfo.pageDurations.sum()
+            WatchHistory.updatePosition(
+                context,
+                videoId,
+                offsetSec + posMs / 1000,
+                if (totalPageSec > 0) totalPageSec else durMs / 1000,
+            )
             controller?.removeListener(playerListener)
             releaseOnce(controller)
             // 本 App 无后台播放需求:页面退出即停止播放服务
@@ -208,9 +219,13 @@ internal fun PlayerContent(
         }
         pendingSeekMs = when {
             captured > 0L -> captured
-            // 重试场景:stop 已把位置归零,但换源前捕获的值仍然有效
             samePage -> pendingSeekMs
-            else -> 0L
+            else -> {
+                // 跨分P:恢复目标页的持久化断点(此前多P换页完全不恢复)。
+                // 时长未知,不做"已看完"过滤;无记录时为 0,等同全新开始。
+                val pageKey = playbackStorageKey(videoId, playbackResult.pages.currentPage)
+                PlaybackPositionStore.resumePosition(context, pageKey)
+            }
         }
         // 单P视频:无精确接续位置时,新流 READY 后尝试恢复断点续播
         shouldResume = canResume && pendingSeekMs <= 0L
