@@ -24,6 +24,7 @@ class WatchHistoryCoreTest {
 
     // ── upsert ──
 
+    @Test
     fun upsert_dedupes_and_moves_to_front() {
         val entries = listOf(entry("a"), entry("b"))
         val result = WatchHistoryCore.upsert(entries, entry("b", updatedAt = 9L))
@@ -31,6 +32,7 @@ class WatchHistoryCoreTest {
         assertEquals(9L, result.first().updatedAt)
     }
 
+    @Test
     fun upsert_caps_capacity_evicting_oldest() {
         var entries = listOf(entry("a"), entry("b"))
         entries = WatchHistoryCore.upsert(entries, entry("c"), cap = 2)
@@ -38,6 +40,7 @@ class WatchHistoryCoreTest {
         assertEquals(listOf("d", "c"), entries.map { it.videoId })
     }
 
+    @Test
     fun upsert_rejects_blank_id() {
         val entries = listOf(entry("a"))
         assertEquals(entries, WatchHistoryCore.upsert(entries, entry(" ")))
@@ -45,6 +48,7 @@ class WatchHistoryCoreTest {
 
     // ── updateProgress ──
 
+    @Test
     fun update_progress_updates_existing_and_moves_to_front() {
         val entries = listOf(entry("a", durationSeconds = 600), entry("b", durationSeconds = 600))
         val result = WatchHistoryCore.updateProgress(entries, "b", positionSeconds = 300, durationSeconds = 600)
@@ -52,17 +56,20 @@ class WatchHistoryCoreTest {
         assertEquals(300L, result.first().positionSeconds)
     }
 
+    @Test
     fun update_progress_ignores_short_positions() {
         val entries = listOf(entry("a"))
         assertEquals(entries, WatchHistoryCore.updateProgress(entries, "a", positionSeconds = 10, durationSeconds = 600))
     }
 
+    @Test
     fun update_progress_removes_finished_entries() {
         val entries = listOf(entry("a", durationSeconds = 600), entry("b", durationSeconds = 600))
         val result = WatchHistoryCore.updateProgress(entries, "a", positionSeconds = 590, durationSeconds = 600)
         assertEquals(listOf("b"), result.map { it.videoId })
     }
 
+    @Test
     fun update_progress_ignores_unknown_ids() {
         // 元数据由详情页点击播放时登记;未登记的 id 不产生空标题条目
         val entries = listOf(entry("a"))
