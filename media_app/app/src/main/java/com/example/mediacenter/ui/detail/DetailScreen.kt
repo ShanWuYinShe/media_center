@@ -34,8 +34,11 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import coil.compose.AsyncImage
+import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.PlaybackPositionStore
 import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.data.WatchEntry
+import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.ui.components.TvScrollableText
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.CardGray
@@ -140,7 +143,21 @@ fun DetailScreen(
         val playFocus = remember { FocusRequester() }
         LaunchedEffect(video.id) { playFocus.requestFocus() }
         Button(
-            onClick = onPlay,
+            onClick = {
+                // 登记观看历史(继续观看行):元数据齐全,位置由播放器退出时回写。
+                // provider 取点击时刻的当前源,首页继续观看行按当前源过滤展示。
+                WatchHistory.upsert(
+                    context,
+                    WatchEntry(
+                        videoId = video.id,
+                        provider = MediaRepositoryHolder.repository.currentProvider,
+                        title = video.title,
+                        thumbnailUrl = video.thumbnailUrl.orEmpty(),
+                        durationSeconds = video.durationSeconds ?: 0L,
+                    ),
+                )
+                onPlay()
+            },
             modifier = Modifier.requiredHeight(56.dp).fillMaxWidth().focusRequester(playFocus),
             colors = ButtonDefaults.colors(containerColor = AppleBlue),
         ) {

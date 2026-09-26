@@ -38,6 +38,7 @@ import androidx.media3.session.SessionToken
 import androidx.media3.ui.PlayerView
 import com.example.mediacenter.data.PlaybackPositionStore
 import com.example.mediacenter.data.PlaybackResult
+import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.player.PlaybackService
 import com.example.mediacenter.ui.components.ErrorView
@@ -179,7 +180,11 @@ internal fun PlayerContent(
         controller?.addListener(playerListener)
         onDispose {
             // 退出播放页前保存位置,保证"播放中途返回"也能续播
-            PlaybackPositionStore.save(context, videoId, controller?.currentPosition?.coerceAtLeast(0L) ?: 0L)
+            val posMs = controller?.currentPosition?.coerceAtLeast(0L) ?: 0L
+            PlaybackPositionStore.save(context, videoId, posMs)
+            // 回写观看历史(继续观看行):看完(距结尾不足 15s)的条目会被移除
+            val durMs = controller?.duration?.coerceAtLeast(0L) ?: 0L
+            WatchHistory.updatePosition(context, videoId, posMs / 1000, durMs / 1000)
             controller?.removeListener(playerListener)
             releaseOnce(controller)
             // 本 App 无后台播放需求:页面退出即停止播放服务

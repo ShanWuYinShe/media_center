@@ -28,8 +28,9 @@ fun CategoryRow(
     categoryName: String,
     videos: List<VideoSummary>,
     onVideoClick: (VideoSummary) -> Unit,
-    onSeeAll: () -> Unit,
     modifier: Modifier = Modifier,
+    // 可选"查看全部":继续观看行没有对应的分类页,传 null 隐藏入口
+    onSeeAll: (() -> Unit)? = null,
     loadFailed: Boolean = false,
 ) {
     Column(modifier = modifier.padding(vertical = 12.dp)) {
@@ -45,13 +46,15 @@ fun CategoryRow(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f).padding(vertical = 8.dp),
             )
-            TextButton(onClick = onSeeAll) {
-                Text(
-                    text = "\u67E5\u770B\u5168\u90E8",
-                    color = AppleBlue,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            onSeeAll?.let { onClick ->
+                TextButton(onClick = onClick) {
+                    Text(
+                        text = "\u67E5\u770B\u5168\u90E8",
+                        color = AppleBlue,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
         if (videos.isEmpty()) {

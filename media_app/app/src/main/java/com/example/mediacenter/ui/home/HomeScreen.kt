@@ -11,9 +11,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.data.WatchEntry
+import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.components.ProviderSelectDialog
@@ -35,6 +41,17 @@ fun HomeScreen(
     val viewModel: HomeViewModel = viewModel(factory = HomeViewModelFactory())
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
+
+    // ── 继续观看 ──
+    // 每次回到 RESUMED 重读观看历史:从播放页返回后行内容立即反映最新进度。
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var watchEntries by remember { mutableStateOf<List<WatchEntry>>(emptyList()) }
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            watchEntries = WatchHistory.entries(context)
+        }
+    }
 
     updateState?.let { dialogState ->
         UpdateDialog(
@@ -85,6 +102,21 @@ fun HomeScreen(
                     null
                 },
             )
+        }
+        // ── 继续观看 ──
+        // 只显示当前 provider 的条目(播放解析按当前源路由,跨源条目无法播放);
+        // 位置不足 30s 的条目在登记端已过滤。放在分类行之前,回到首页即见。
+        val continueEntries = watchEntries.filter {
+            it.provider == state.currentProvider && it.positionSeconds >= 30
+        }
+        if (continueEntries.isNotEmpty()) {
+            item {
+                CategoryRow(
+                    categoryName = "继续观看",
+                    videos = continueEntries.map { it.toVideoSummary() },
+                    onVideoClick = onVideoClick,
+                )
+            }
         }
         when {
             state.isLoading -> item { LoadingIndicator() }
