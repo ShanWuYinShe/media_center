@@ -113,7 +113,15 @@ fun HomeScreen(
             item {
                 CategoryRow(
                     categoryName = "继续观看",
-                    videos = continueEntries.map { it.toVideoSummary() },
+                    videos = continueEntries.map { entry ->
+                        // 多P条目标题前缀页码,一眼分清看的是哪一集/哪一分P
+                        val summary = entry.toVideoSummary()
+                        if (entry.page > 0) {
+                            summary.copy(title = "第 ${entry.page + 1} 页 · ${summary.title}")
+                        } else {
+                            summary
+                        }
+                    },
                     onVideoClick = onVideoClick,
                     progressById = continueEntries
                         .filter { it.durationSeconds > 0 }

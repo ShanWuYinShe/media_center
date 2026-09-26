@@ -129,6 +129,10 @@ class BilibiliApi(
         payload: BiliPlayUrlResponse,
     ): Pair<List<PlaybackOption>, List<QualityOption>> {
         val data = payload.data ?: return emptyList<PlaybackOption>() to emptyList<QualityOption>()
+        // 多段 durl(size>1,个别老视频分段提供)当前只播第一段;记日志便于发现这类内容
+        data.durl?.takeIf { it.size > 1 }?.let {
+            AppLog.w("Bili", "multi-segment durl (${it.size} segments), playing first segment only: $bvid")
+        }
         val durlUrl = data.durl?.firstOrNull()?.url ?: return emptyList<PlaybackOption>() to buildAvailableQualities(data)
         val option = PlaybackOption(
             id = "bili-$bvid-p$pageIndex-q${data.quality}",

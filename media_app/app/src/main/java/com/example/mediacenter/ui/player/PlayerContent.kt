@@ -2,6 +2,7 @@ package com.example.mediacenter.ui.player
 
 import android.Manifest
 import android.app.Activity
+import androidx.activity.compose.BackHandler
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -67,6 +68,10 @@ internal fun PlayerContent(
     // 才能命中 HLS 媒体源;progressive mp4 靠 URL 推断也可,统一带上最稳)。
     val stream = playbackResult.options.first()
     var showControls by remember { mutableStateOf(true) }
+    // BACK 先收起控制条,再退播放页(标准视频播放器行为);收起状态由
+    // PlayerScreen 的 BackHandler 兜底退出。Compose 中后注册的可用
+    // BackHandler 优先,故此处注册即获得优先级。
+    BackHandler(enabled = showControls) { showControls = false }
     var playerError by remember { mutableStateOf<String?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
     // 缓冲中提示：卡顿不再表现为“画面冻住不知道在干嘛”
