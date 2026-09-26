@@ -233,6 +233,16 @@ internal fun PlayerContent(
                 PlaybackPositionStore.resumePosition(context, pageKey)
             }
         }
+        // 多P按页直达(继续观看)首次加载:同分P场景下 captured 与 pendingSeek
+        // 均为 0,这里补读目标页的持久化断点(首页 key 即原 videoId),否则打开
+        // 即在页首,与"上次看到第 N 页 X 分"的详情页提示不一致
+        if (!canResume && pendingSeekMs <= 0L) {
+            val stored = PlaybackPositionStore.resumePosition(
+                context,
+                playbackStorageKey(videoId, playbackResult.pages.currentPage),
+            )
+            if (stored > 0L) pendingSeekMs = stored
+        }
         // 单P视频:无精确接续位置时,新流 READY 后尝试恢复断点续播
         shouldResume = canResume && pendingSeekMs <= 0L
         c.stop()
