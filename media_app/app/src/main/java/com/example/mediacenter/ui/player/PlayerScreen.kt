@@ -17,10 +17,11 @@ import com.example.mediacenter.ui.theme.BackgroundDark
 fun PlayerScreen(
     videoId: String,
     videoTitle: String,
+    initialPage: Int = 0,
     onBack: () -> Unit,
     viewModel: PlayerViewModel = viewModel(
-        key = "player_$videoId",
-        factory = PlayerViewModelFactory(videoId),
+        key = "player_${videoId}_p$initialPage",
+        factory = PlayerViewModelFactory(videoId, initialPage),
     ),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()

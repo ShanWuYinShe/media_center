@@ -21,7 +21,7 @@ import kotlinx.serialization.json.Json
 object Routes {
     const val HOME = "home"
     const val DETAIL = "detail/{video}"
-    const val PLAYER = "player/{videoId}?title={title}"
+    const val PLAYER = "player/{videoId}?title={title}&page={page}"
     const val SEARCH = "search"
     const val CATEGORY = "category/{categoryId}?title={title}"
     const val SETTINGS = "settings"
@@ -34,8 +34,9 @@ object Routes {
     fun detail(video: VideoSummary) =
         "detail/${videoSummaryType.serializeAsValue(video)}"
 
-    fun player(videoId: String, title: String) =
-        "player/${Uri.encode(videoId, "")}?title=${Uri.encode(title, "")}"
+    fun player(videoId: String, title: String, page: Int = 0) =
+        "player/${Uri.encode(videoId, "")}?title=${Uri.encode(title, "")}" +
+            if (page > 0) "&page=$page" else ""
 
     fun category(categoryId: String, title: String) =
         "category/${Uri.encode(categoryId, "")}?title=${Uri.encode(title, "")}"
@@ -89,7 +90,7 @@ fun AppNavigation() {
             }
             DetailScreen(
                 video = video,
-                onPlay = { navController.navigate(Routes.player(video.id, video.title)) },
+                onPlay = { page -> navController.navigate(Routes.player(video.id, video.title, page)) },
                 onBack = { navController.popBackStack() },
             )
         }
@@ -101,13 +102,19 @@ fun AppNavigation() {
                     type = NavType.StringType
                     defaultValue = ""
                 },
+                navArgument("page") {
+                    type = NavType.IntType
+                    defaultValue = 0
+                },
             ),
         ) { backStackEntry ->
             val videoId = backStackEntry.arguments?.getString("videoId") ?: return@composable
             val title = backStackEntry.arguments?.getString("title") ?: ""
+            val page = backStackEntry.arguments?.getInt("page") ?: 0
             PlayerScreen(
                 videoId = videoId,
                 videoTitle = title,
+                initialPage = page,
                 onBack = { navController.popBackStack() },
             )
         }

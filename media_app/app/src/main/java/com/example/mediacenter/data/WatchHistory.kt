@@ -15,6 +15,8 @@ data class WatchEntry(
     val thumbnailUrl: String,
     val durationSeconds: Long = 0,
     val positionSeconds: Long = 0,
+    // 多P视频:最后观看的分页(0 起始)。继续观看点击后带页码直达该页。
+    val page: Int = 0,
     val updatedAt: Long = 0,
 ) {
     /** 转成首页卡片所需的 VideoSummary(继续观看行复用 CategoryRow/VideoCard)。 */
@@ -53,21 +55,31 @@ object WatchHistoryCore {
     /**
      * 回写播放进度:只更新已存在的条目(条目创建于详情页点击播放时,元数据齐全),
      * 提到最前;看完(时长已知且距结尾不足 15s)则移除。位置不足 30s 忽略。
+     * 多P视频 positionSeconds 为绝对位置(前面各页时长累加),page 记录最后观看页。
      */
     fun updateProgress(
         entries: List<WatchEntry>,
         videoId: String,
         positionSeconds: Long,
         durationSeconds: Long,
+        page: Int = 0,
     ): List<WatchEntry> {
         if (videoId.isBlank() || positionSeconds < MIN_KEPT_SECONDS) return entries
         val old = entries.firstOrNull { it.videoId == videoId } ?: return entries
         if (durationSeconds > 0 && positionSeconds >= durationSeconds - TAIL_IGNORE_SECONDS) {
             return entries.filterNot { it.videoId == videoId }
         }
-        val updated = old.copy(positionSeconds = positionSeconds, updatedAt = System.currentTimeMillis())
+        val updated = old.copy(
+            positionSeconds = positionSeconds,
+            page = page,
+            updatedAt = System.currentTimeMillis(),
+        )
         return listOf(updated) + entries.filterNot { it.videoId == videoId }
     }
+
+    /** 某视频最后观看的分页(0 起始,无记录/未登记返回 0)。 */
+    fun pageOf(entries: List<WatchEntry>, videoId: String): Int =
+        entries.firstOrNull { it.videoId == videoId }?.page ?: 0
 }
 
 /**
@@ -94,17 +106,29 @@ object WatchHistory {
         }
     }
 
-    /** 播放器退出/进度持久化时回写位置。 */
-    fun updatePosition(context: Context, videoId: String, positionSeconds: Long, durationSeconds: Long) {
+    /** 播放器退出/进度持久化时回写位置。多P视频 page 为最后观看页(0 起始)。 */
+    fun updatePosition(
+        context: Context,
+        videoId: String,
+        positionSeconds: Long,
+        durationSeconds: Long,
+        page: Int = 0,
+    ) {
         prefs(context).edit {
             putString(
                 KEY_ENTRIES,
                 WatchHistoryCore.encode(
-                    WatchHistoryCore.updateProgress(entries(context), videoId, positionSeconds, durationSeconds),
+                    WatchHistoryCore.updateProgress(
+                        entries(context), videoId, positionSeconds, durationSeconds, page,
+                    ),
                 ),
             )
         }
     }
+
+    /** 某视频最后观看的分页(0 起始,无记录/未登记返回 0)。 */
+    fun pageOf(context: Context, videoId: String): Int =
+        WatchHistoryCore.pageOf(entries(context), videoId)
 
     /** 清除全部观看历史(设置页"清除观看历史")。 */
     fun clear(context: Context) {

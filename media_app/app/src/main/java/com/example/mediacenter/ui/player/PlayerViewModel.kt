@@ -26,13 +26,15 @@ data class PlayerUiState(
 class PlayerViewModel(
     private val videoId: String,
     private val repository: MediaRepository = MediaRepositoryHolder.repository,
+    // 初始分页(0 起始):继续观看按页直达时由路由传入;>0 时优先于 id 解析
+    private val initialPage: Int = 0,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(PlayerUiState())
     val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
 
     // 当前清晰度与分页(多P),切换分页时保持已选清晰度。
     private var currentQn: Int? = null
-    private var currentPage: Int = parsePageId(videoId).second
+    private var currentPage: Int = maxOf(initialPage, parsePageId(videoId).second)
     // 解析任务:快速连续切换清晰度/分P时取消旧的,避免旧响应覆盖新选择
     private var resolveJob: Job? = null
 
@@ -105,9 +107,12 @@ class PlayerViewModel(
     }
 }
 
-class PlayerViewModelFactory(private val videoId: String) : ViewModelProvider.Factory {
+class PlayerViewModelFactory(
+    private val videoId: String,
+    private val initialPage: Int = 0,
+) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        return PlayerViewModel(videoId) as T
+        return PlayerViewModel(videoId, initialPage = initialPage) as T
     }
 }

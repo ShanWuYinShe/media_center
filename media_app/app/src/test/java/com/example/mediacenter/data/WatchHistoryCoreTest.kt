@@ -56,6 +56,15 @@ class WatchHistoryCoreTest {
         assertEquals(300L, result.first().positionSeconds)
     }
 
+    fun update_progress_records_page() {
+        val entries = listOf(entry("BV1xx", durationSeconds = 1800))
+        val result = WatchHistoryCore.updateProgress(
+            entries, "BV1xx", positionSeconds = 700, durationSeconds = 1800, page = 1,
+        )
+        assertEquals(1, result.first().page)
+        assertEquals(700L, result.first().positionSeconds)
+    }
+
     @Test
     fun update_progress_ignores_short_positions() {
         val entries = listOf(entry("a"))
@@ -77,6 +86,16 @@ class WatchHistoryCoreTest {
     }
 
     // ── encode/decode ──
+
+    fun page_of_returns_last_watched_page() {
+        val entries = listOf(
+            entry("BV1xx").copy(page = 2),
+            entry("yt1").copy(page = 0),
+        )
+        assertEquals(2, WatchHistoryCore.pageOf(entries, "BV1xx"))
+        assertEquals(0, WatchHistoryCore.pageOf(entries, "yt1"))
+        assertEquals(0, WatchHistoryCore.pageOf(entries, "unknown"))
+    }
 
     fun encode_decode_roundtrip() {
         val entries = listOf(entry("a", positionSeconds = 300, durationSeconds = 600), entry("yt1", provider = "youtube"))

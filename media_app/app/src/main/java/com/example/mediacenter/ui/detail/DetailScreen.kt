@@ -54,7 +54,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun DetailScreen(
     video: VideoSummary,
-    onPlay: () -> Unit,
+    onPlay: (page: Int) -> Unit,
     onBack: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
@@ -99,14 +99,28 @@ fun DetailScreen(
         // 首次访问会同步加载 XML,放 IO 调度器异步读,避免主线程进详情页卡顿。
         val context = LocalContext.current
         var resumePosition by remember(video.id) { mutableLongStateOf(0L) }
+        // 继续观看:上次观看的分页与绝对位置(多P),点击播放时直达该页该处
+        var lastWatchedPage by remember(video.id) { mutableStateOf(0) }
+        var lastWatchedSeconds by remember(video.id) { mutableLongStateOf(0L) }
         LaunchedEffect(video.id) {
             resumePosition = withContext(Dispatchers.IO) {
                 PlaybackPositionStore.resumePosition(context, video.id, (video.durationSeconds ?: 0L) * 1000L)
             }
+            lastWatchedPage = withContext(Dispatchers.IO) { WatchHistory.pageOf(context, video.id) }
+            lastWatchedSeconds = withContext(Dispatchers.IO) {
+                WatchHistory.entries(context).firstOrNull { it.videoId == video.id }?.positionSeconds ?: 0L
+            }
         }
-        if (resumePosition > 0) {
+        val hintText = when {
+            lastWatchedPage > 0 && lastWatchedSeconds >= 30 ->
+                "上次看到第 ${lastWatchedPage + 1} 页 ${formatDuration(lastWatchedSeconds)}，播放将从此处继续"
+            resumePosition > 0 ->
+                "上次播放到 ${formatDuration(resumePosition)}，播放将从此处继续"
+            else -> null
+        }
+        if (hintText != null) {
             Text(
-                text = "上次播放到 ${formatDuration(resumePosition)}，播放将从此处继续",
+                text = hintText,
                 color = TextTertiary,
                 fontSize = 13.sp,
             )
@@ -144,8 +158,9 @@ fun DetailScreen(
         LaunchedEffect(video.id) { playFocus.requestFocus() }
         Button(
             onClick = {
-                // 登记观看历史(继续观看行):元数据齐全,位置由播放器退出时回写。
-                // provider 取点击时刻的当前源,首页继续观看行按当前源过滤展示。
+                // 登记观看历史(继续观看行):元数据齐全,保留上次观看页;位置由
+                // 播放器退出时回写。provider 取点击时刻的当前源,首页继续观看行
+                // 按当前源过滤展示。
                 WatchHistory.upsert(
                     context,
                     WatchEntry(
@@ -154,9 +169,10 @@ fun DetailScreen(
                         title = video.title,
                         thumbnailUrl = video.thumbnailUrl.orEmpty(),
                         durationSeconds = video.durationSeconds ?: 0L,
+                        page = lastWatchedPage,
                     ),
                 )
-                onPlay()
+                onPlay(lastWatchedPage)
             },
             modifier = Modifier.requiredHeight(56.dp).fillMaxWidth().focusRequester(playFocus),
             colors = ButtonDefaults.colors(containerColor = AppleBlue),

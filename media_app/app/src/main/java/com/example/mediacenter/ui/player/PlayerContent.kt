@@ -187,7 +187,7 @@ internal fun PlayerContent(
             val pagesInfo = playbackResult.pages
             PlaybackPositionStore.save(context, playbackStorageKey(videoId, pagesInfo.currentPage), posMs)
             // 回写观看历史(继续观看行):看完(距结尾不足 15s)的条目会被移除;
-            // 多P回写绝对位置(前面各页时长累加),进度条比例按整部视频
+            // 多P回写绝对位置(前面各页时长累加)+ 最后观看页,继续观看点击后直达该页
             val offsetSec = pagesInfo.pageDurations.take(pagesInfo.currentPage).sum()
             val totalPageSec = pagesInfo.pageDurations.sum()
             WatchHistory.updatePosition(
@@ -195,6 +195,7 @@ internal fun PlayerContent(
                 videoId,
                 offsetSec + posMs / 1000,
                 if (totalPageSec > 0) totalPageSec else durMs / 1000,
+                page = pagesInfo.currentPage,
             )
             controller?.removeListener(playerListener)
             releaseOnce(controller)
