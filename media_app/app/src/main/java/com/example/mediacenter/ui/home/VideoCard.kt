@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -23,6 +24,7 @@ import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import coil.compose.AsyncImage
 import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.CardGray
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.util.formatSeconds
@@ -32,6 +34,7 @@ fun VideoCard(
     video: VideoSummary,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    progress: Float? = null,
 ) {
     // 不用 requiredWidth/requiredHeight 钉死尺寸——会让卡片在 CategoryVideosScreen
     // 的 GridCells.Adaptive(280.dp) 里无法 fillMaxWidth，4K/平板上也会偏小。
@@ -86,6 +89,23 @@ fun VideoCard(
                         .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                 )
+            }
+            // 观看进度条(继续观看行):贴卡片底边,焦点放大时随卡片同步缩放
+            if (progress != null && progress > 0f) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .background(Color.Black.copy(alpha = 0.45f)),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progress.coerceIn(0f, 1f))
+                            .fillMaxHeight()
+                            .background(AppleBlue),
+                    )
+                }
             }
         }
     }

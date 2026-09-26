@@ -115,6 +115,11 @@ fun HomeScreen(
                     categoryName = "继续观看",
                     videos = continueEntries.map { it.toVideoSummary() },
                     onVideoClick = onVideoClick,
+                    progressById = continueEntries
+                        .filter { it.durationSeconds > 0 }
+                        .associate { entry ->
+                            entry.videoId to (entry.positionSeconds.toFloat() / entry.durationSeconds).coerceIn(0f, 1f)
+                        },
                 )
             }
         }

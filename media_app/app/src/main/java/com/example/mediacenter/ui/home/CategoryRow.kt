@@ -31,6 +31,8 @@ fun CategoryRow(
     modifier: Modifier = Modifier,
     // 可选"查看全部":继续观看行没有对应的分类页,传 null 隐藏入口
     onSeeAll: (() -> Unit)? = null,
+    // 按 videoId 的观看进度(0f..1f),继续观看行用
+    progressById: Map<String, Float> = emptyMap(),
     loadFailed: Boolean = false,
 ) {
     Column(modifier = modifier.padding(vertical = 12.dp)) {
@@ -78,7 +80,12 @@ fun CategoryRow(
                     // LazyRow item 横/纵轴均无界:必须固定卡片宽度,aspectRatio 才能
                     // 稳定推导高度——否则尺寸回退到 AsyncImage 固有尺寸,占位图与
                     // 真实图片尺寸不同会引发加载前后布局跳变。
-                    VideoCard(video = video, onClick = { onVideoClick(video) }, modifier = Modifier.width(240.dp))
+                    VideoCard(
+                        video = video,
+                        onClick = { onVideoClick(video) },
+                        progress = progressById[video.id],
+                        modifier = Modifier.width(240.dp),
+                    )
                 }
             }
         }
