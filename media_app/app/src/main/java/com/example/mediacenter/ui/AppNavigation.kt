@@ -70,6 +70,9 @@ fun AppNavigation() {
         composable(Routes.HOME) {
             HomeScreen(
                 onVideoClick = { video -> navController.navigate(Routes.detail(video)) },
+                onContinueVideoClick = { video, page ->
+                    navController.navigate(Routes.player(video.id, video.title, page))
+                },
                 onSearchClick = { navController.navigate(Routes.SEARCH) },
                 onSettingsClick = { navController.navigate(Routes.SETTINGS) },
                 onSeeAll = { categoryId, title ->

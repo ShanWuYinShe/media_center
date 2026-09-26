@@ -32,6 +32,8 @@ import com.example.mediacenter.util.NetworkRestoreEffect
 @Composable
 fun HomeScreen(
     onVideoClick: (VideoSummary) -> Unit,
+    // 继续观看行点击:直达播放页并携带分页(跳过详情页,TV"继续看"标准动线)
+    onContinueVideoClick: (VideoSummary, Int) -> Unit,
     onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onSeeAll: (categoryId: String, title: String) -> Unit,
@@ -106,9 +108,11 @@ fun HomeScreen(
         // ── 继续观看 ──
         // 只显示当前 provider 的条目(播放解析按当前源路由,跨源条目无法播放);
         // 位置不足 30s 的条目在登记端已过滤。放在分类行之前,回到首页即见。
+        // 点击直达播放页并带分页(跳过详情页)。
         val continueEntries = watchEntries.filter {
             it.provider == state.currentProvider && it.positionSeconds >= 30
         }
+        val continuePageById = continueEntries.associate { it.videoId to it.page }
         if (continueEntries.isNotEmpty()) {
             item {
                 CategoryRow(
@@ -122,7 +126,9 @@ fun HomeScreen(
                             summary
                         }
                     },
-                    onVideoClick = onVideoClick,
+                    onVideoClick = { video ->
+                        onContinueVideoClick(video, continuePageById[video.id] ?: 0)
+                    },
                     progressById = continueEntries
                         .filter { it.durationSeconds > 0 }
                         .associate { entry ->
