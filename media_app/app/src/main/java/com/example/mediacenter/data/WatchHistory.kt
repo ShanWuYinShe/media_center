@@ -39,6 +39,15 @@ object WatchHistoryCore {
     const val MIN_KEPT_SECONDS = 30L
     // 距结尾不足 15s 视为看完,看完的条目从继续观看中移除
     const val TAIL_IGNORE_SECONDS = 15L
+    // 条目过期(与断点续播位置的 7 天有效期同口径):过期条目的位置已不可恢复
+    const val DEFAULT_MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
+
+    /** 移除超过 maxAgeMs 未更新的条目(过期条目的位置已不可靠)。 */
+    fun dropExpired(
+        entries: List<WatchEntry>,
+        nowMs: Long = System.currentTimeMillis(),
+        maxAgeMs: Long = DEFAULT_MAX_AGE_MS,
+    ): List<WatchEntry> = entries.filter { nowMs - it.updatedAt <= maxAgeMs }
 
     fun decode(raw: String?): List<WatchEntry> =
         raw?.let { runCatching { json.decodeFromString<List<WatchEntry>>(it) }.getOrNull() } ?: emptyList()
@@ -94,7 +103,7 @@ object WatchHistory {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     fun entries(context: Context): List<WatchEntry> =
-        WatchHistoryCore.decode(prefs(context).getString(KEY_ENTRIES, null))
+        WatchHistoryCore.dropExpired(WatchHistoryCore.decode(prefs(context).getString(KEY_ENTRIES, null)))
 
     /** 详情页点击播放时登记(元数据齐全,位置先记 0,播放器退出时回写)。 */
     fun upsert(context: Context, entry: WatchEntry) {

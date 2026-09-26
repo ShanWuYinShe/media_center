@@ -97,6 +97,25 @@ class WatchHistoryCoreTest {
         assertEquals(0, WatchHistoryCore.pageOf(entries, "unknown"))
     }
 
+    @Test
+    fun drop_expired_removes_stale_entries() {
+        val now = System.currentTimeMillis()
+        val entries = listOf(
+            entry("fresh", updatedAt = now),
+            entry("stale", updatedAt = now - 8L * 24 * 60 * 60 * 1000),
+        )
+        val result = WatchHistoryCore.dropExpired(entries, nowMs = now)
+        assertEquals(listOf("fresh"), result.map { it.videoId })
+    }
+
+    @Test
+    fun drop_expired_keeps_entries_within_max_age() {
+        val now = System.currentTimeMillis()
+        val entries = listOf(entry("recent", updatedAt = now - 6L * 24 * 60 * 60 * 1000))
+        assertEquals(entries, WatchHistoryCore.dropExpired(entries, nowMs = now))
+    }
+
+    @Test
     fun encode_decode_roundtrip() {
         val entries = listOf(entry("a", positionSeconds = 300, durationSeconds = 600), entry("yt1", provider = "youtube"))
         val raw = WatchHistoryCore.encode(entries)
