@@ -29,6 +29,15 @@ class BilibiliWbiSignerTest {
     }
 
     @Test
+    fun `encodeWbiValue 对齐参考实现编码`() {
+        // 空格按 %20(不是 +),~ 保留原字符(不是 %7E)
+        assertEquals("hello%20world", encodeWbiValue("hello world"))
+        assertEquals("a~b", encodeWbiValue("a~b"))
+        // 字面 + 必须编码为 %2B(与空格的 + 占位区分)
+        assertEquals("a%2Bb", encodeWbiValue("a+b"))
+    }
+
+    @Test
     fun `不同参数产生不同签名`() {
         val a = signWbiParams(mapOf("bvid" to "BV1xx411c7mD"), imgKey, subKey)
         val b = signWbiParams(mapOf("bvid" to "BV1xx411c7mD", "cid" to "1"), imgKey, subKey)
