@@ -10,6 +10,7 @@
 import ipaddress
 import os
 import socket
+import subprocess
 import sys
 import time
 import unittest
@@ -334,6 +335,50 @@ class BoundedServerSlotsTest(unittest.TestCase):
             while s._conn_slots._value < s._conn_slots._initial_value and time.time() < deadline:
                 time.sleep(0.01)
         self.assertEqual(s._conn_slots._value, s._conn_slots._initial_value)
+
+
+class MaxConnectionsEnvTest(unittest.TestCase):
+    """VOD_EXTRACTOR_MAX_CONNECTIONS 环境变量解析回归。
+
+    compose 以 ${VAR:-} 注入时键存在但值为空串,os.environ.get 的默认值
+    不生效:历史实现在模块顶层 int("") 抛 ValueError,import 即死,
+    容器 restart: unless-stopped 无限重启。用子进程真实 import 验证
+    空串回落默认值、合法值被采纳两条语义。
+    """
+
+    def _import_with_env(self, value):
+        env = dict(os.environ, VOD_EXTRACTOR_MAX_CONNECTIONS=value)
+        return subprocess.run(
+            [sys.executable, "-c", "import server; print(server.MAX_CONNECTIONS)"],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            timeout=30,
+        )
+
+    def test_empty_value_falls_back_to_default(self):
+        proc = self._import_with_env("")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(int(proc.stdout.strip()), max(4, int("32")))
+
+    def test_missing_value_uses_default(self):
+        env = {k: v for k, v in os.environ.items() if k != "VOD_EXTRACTOR_MAX_CONNECTIONS"}
+        proc = subprocess.run(
+            [sys.executable, "-c", "import server; print(server.MAX_CONNECTIONS)"],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(int(proc.stdout.strip()), 32)
+
+    def test_explicit_value_respected(self):
+        proc = self._import_with_env("7")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(int(proc.stdout.strip()), 7)
 
 
 if __name__ == "__main__":

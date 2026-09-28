@@ -175,8 +175,10 @@ services:
       - VOD_EXTRACTOR_COOKIES_FILE=${VOD_EXTRACTOR_COOKIES_FILE:-}
       # /extract 目标 host 白名单(留空用 server.py 内置 youtube 域默认)
       - VOD_EXTRACTOR_ALLOWED_EXTRACT_HOSTS=${VOD_EXTRACTOR_ALLOWED_EXTRACT_HOSTS:-}
-      # 并发连接数上限(每连接一线程的防线,默认 32)
-      - VOD_EXTRACTOR_MAX_CONNECTIONS=${VOD_EXTRACTOR_MAX_CONNECTIONS:-}
+      # 并发连接数上限(每连接一线程的防线,默认 32)。兜底值必须非空:
+      # `:-` 会把「.env 未设该键」替换成空串,空串覆盖 Dockerfile 的 ENV 默认后,
+      # server.py 顶层 int("") 直接抛异常 → 容器 crash loop。
+      - VOD_EXTRACTOR_MAX_CONNECTIONS=${VOD_EXTRACTOR_MAX_CONNECTIONS:-32}
     volumes:
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
       - ./data/vod:/config:ro

@@ -30,7 +30,9 @@ EXTRACTOR_SEMAPHORE = threading.BoundedSemaphore(MAX_CONCURRENT)
 # 并发连接数上限:ThreadingHTTPServer 每连接一线程,无上限时大量并发连接
 # (即使有 30s socket 超时)也会线性堆线程。超限的新连接直接关闭——yt-dlp
 # 并发只有 2,正常流量远到不了这个值,纯属资源防线。
-MAX_CONNECTIONS = max(4, int(os.environ.get("VOD_EXTRACTOR_MAX_CONNECTIONS", "32")))
+# `or "32"` 兜住空串:compose 用 ${VAR:-} 注入时键存在但值为空,os.environ.get
+# 的默认值对空串不生效,int("") 会在模块顶层炸掉进程(import 即死 → crash loop)。
+MAX_CONNECTIONS = max(4, int(os.environ.get("VOD_EXTRACTOR_MAX_CONNECTIONS") or "32"))
 MAX_QUERY_BYTES = 128
 DEFAULT_SEARCH_LIMIT = 20
 MAX_SEARCH_LIMIT = 30
