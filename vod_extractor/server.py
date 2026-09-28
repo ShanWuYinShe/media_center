@@ -86,6 +86,15 @@ class ExtractorConfigError(RuntimeError):
     """
 
 
+class RequestBodyTimeoutError(OSError):
+    """读取请求体超时/中断(客户端慢发或中途断开)。
+
+    与上游 yt-dlp 超时共用 TimeoutError 名称但语义相反:前者是请求方的
+    问题(408),后者才是 extractor timed out(504)。继承 OSError 而非
+    TimeoutError,避免被 do_POST 的 `except TimeoutError` 抢先捕获。
+    """
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "vod-extractor/1.0"
     # socket 级读超时:慢速连接(慢发请求头/体)不能无限占用线程,
@@ -135,6 +144,13 @@ class Handler(BaseHTTPRequestHandler):
         except TimeoutError:
             self.send_json(504, {"error": "extractor timed out"})
             return
+        except RequestBodyTimeoutError as error:
+            # 客户端慢发 body 撞上 socket 读超时:408 语义精确,不与上游超时
+            # (504)混用,保住"504 率 = extractor 超时"的监控语义。
+            # body 只读到一半,连接状态已不可信,发完响应即关闭。
+            self.close_connection = True
+            self.send_json(408, {"error": str(error)})
+            return
         except ValueError as error:
             self.send_json(400, {"error": str(error)})
             return
@@ -156,12 +172,22 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, extracted)
 
     def read_json_body(self):
-        length = int(self.headers.get("content-length", "0"))
+        try:
+            length = int(self.headers.get("content-length", "0"))
+        except ValueError:
+            # content-length 非数字:int() 的英文异常文案不回给客户端,统一标准 400。
+            raise ValueError("request body is required") from None
         if length <= 0:
             raise ValueError("request body is required")
         if length > MAX_REQUEST_BYTES:
             raise ValueError("request body is too large")
-        raw = self.rfile.read(length)
+        try:
+            raw = self.rfile.read(length)
+        except OSError as error:
+            # 客户端慢发/中断 body 撞上 socket 读超时(Handler.timeout):
+            # socket.timeout 即 TimeoutError,不拦截会落到 do_POST 的
+            # `except TimeoutError → 504`,与上游 yt-dlp 超时混为一谈。
+            raise RequestBodyTimeoutError("request body read failed") from error
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError as error:
@@ -172,11 +198,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_json(self, status, payload):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("content-type", "application/json; charset=utf-8")
-        self.send_header("content-length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("content-type", "application/json; charset=utf-8")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # 客户端已断连(调用方超时主动放弃很常见):关闭连接并吞掉异常,
+            # 否则漏到 ThreadingMixIn.handle_error 打整段 traceback;
+            # 访问日志照记(status 是真实产生的)。
+            self.close_connection = True
         self.log_json(status, payload)
 
     def log_json(self, status, payload):
@@ -480,6 +512,15 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
             super().process_request_thread(request, client_address)
         finally:
             self._conn_slots.release()
+
+    def handle_error(self, request, client_address):
+        # 读请求行/头阶段发生在 handler 的 try 块之外,客户端断连或慢速
+        # (socket 超时)会直接漏到这里打整段 traceback;这类属常见噪音,
+        # 静默即可,其余异常仍走默认输出(保留真 bug 的现场)。
+        error = sys.exc_info()[1]
+        if isinstance(error, (BrokenPipeError, ConnectionResetError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
 
 
 def main():

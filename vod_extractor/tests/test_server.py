@@ -381,5 +381,125 @@ class MaxConnectionsEnvTest(unittest.TestCase):
         self.assertEqual(int(proc.stdout.strip()), 7)
 
 
+class ReadJsonBodyTest(unittest.TestCase):
+    """read_json_body 请求行健壮性:content-length 非数字 → 400 语义;
+    body 读取超时/中断 → RequestBodyTimeoutError(408),不与上游 yt-dlp
+    超时(同为 TimeoutError → 504)混淆。
+
+    Handler 用 __new__ 绕过 __init__(避免真实 socket);headers 用 dict
+    即可——代码只调用 .get()。
+    """
+
+    @staticmethod
+    def _handler_with_length(value):
+        handler = server.Handler.__new__(server.Handler)
+        handler.headers = {"content-length": value}
+        return handler
+
+    def test_non_numeric_content_length_is_client_error(self):
+        handler = self._handler_with_length("abc")
+        with self.assertRaises(ValueError):
+            handler.read_json_body()
+
+    def test_missing_content_length_is_client_error(self):
+        handler = self._handler_with_length("0")
+        with self.assertRaises(ValueError):
+            handler.read_json_body()
+
+    def test_body_read_timeout_raises_request_body_timeout(self):
+        handler = self._handler_with_length("16")
+
+        class _TimeoutFile:
+            @staticmethod
+            def read(_n):
+                raise TimeoutError("socket timed out")
+
+        handler.rfile = _TimeoutFile()
+        with self.assertRaises(server.RequestBodyTimeoutError):
+            handler.read_json_body()
+
+
+class DoPostBodyTimeoutTest(unittest.TestCase):
+    """do_POST 对 RequestBodyTimeoutError 返回 408 并关闭连接(响应发出后
+    连接状态已不可信)。"""
+
+    def test_body_timeout_returns_408_and_closes(self):
+        handler = server.Handler.__new__(server.Handler)
+        handler.path = "/extract"
+        handler.close_connection = False
+        sent = {}
+        with mock.patch.object(
+            server.Handler,
+            "read_json_body",
+            side_effect=server.RequestBodyTimeoutError("request body read failed"),
+        ), mock.patch.object(
+            server.Handler,
+            "send_json",
+            side_effect=lambda status, payload: sent.update(status=status, payload=payload),
+        ):
+            handler.do_POST()
+        self.assertEqual(sent["status"], 408)
+        self.assertEqual(sent["payload"], {"error": "request body read failed"})
+        self.assertTrue(handler.close_connection)
+
+
+class SendJsonDisconnectTest(unittest.TestCase):
+    """send_json 在客户端断连(写响应失败)时静默关闭连接,且访问日志照记。
+
+    历史实现把 BrokenPipeError 漏给 ThreadingMixIn.handle_error 打
+    traceback,且 write 失败跳过 log_json 丢日志。
+    """
+
+    @staticmethod
+    def _handler(write_error):
+        handler = server.Handler.__new__(server.Handler)
+        handler.path = "/extract"
+        handler.close_connection = False
+        handler.send_response = mock.Mock()
+        handler.send_header = mock.Mock()
+        handler.end_headers = mock.Mock()
+        handler.wfile = mock.Mock()
+        handler.wfile.write.side_effect = write_error
+        logged = []
+        handler.log_json = lambda status, payload: logged.append(status)
+        return handler, logged
+
+    def test_broken_pipe_silenced_and_logged(self):
+        handler, logged = self._handler(BrokenPipeError())
+        handler.send_json(200, {"ok": True})  # 不得抛异常
+        self.assertTrue(handler.close_connection)
+        self.assertEqual(logged, [200])
+
+    def test_connection_reset_silenced_and_logged(self):
+        handler, logged = self._handler(ConnectionResetError())
+        handler.send_json(200, {"ok": True})
+        self.assertTrue(handler.close_connection)
+        self.assertEqual(logged, [200])
+
+
+class HandleErrorSilenceTest(unittest.TestCase):
+    """handle_error:连接类异常(断连/读请求行超时)静默,其余仍走默认输出。"""
+
+    @staticmethod
+    def _raise_and_handle(s, error):
+        try:
+            raise error
+        except type(error):
+            s.handle_error(mock.Mock(), ("127.0.0.1", 12345))
+
+    def test_connection_errors_silenced(self):
+        s = server.BoundedThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        self.addCleanup(s.server_close)
+        for error in (BrokenPipeError(), ConnectionResetError(), TimeoutError()):
+            self._raise_and_handle(s, error)  # 不抛异常、不打印即通过
+
+    def test_unexpected_error_still_reported(self):
+        s = server.BoundedThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        self.addCleanup(s.server_close)
+        with mock.patch.object(ThreadingHTTPServer, "handle_error") as parent:
+            self._raise_and_handle(s, RuntimeError("boom"))
+            parent.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
