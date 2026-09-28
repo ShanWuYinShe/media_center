@@ -190,7 +190,11 @@ func TestSearchHandler(t *testing.T) {
 	}
 	mustUpsert(t, c, "bilibili", "BV1pending", "未审核 流浪", 1800)
 
-	s := &mediaServer{catalog: c}
+	s := &mediaServer{
+		catalog:       c,
+		searchLimiter: newIPWindowLimiter(searchPerMinuteLimit, time.Minute),
+		searchGate:    make(chan struct{}, maxConcurrentSearches),
+	}
 
 	t.Run("empty query returns empty", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/search", nil)

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"time"
 )
@@ -22,13 +24,36 @@ func requestLogMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(rec, r)
+
+		// panic 防护:net/http 内建 recover 只保证进程不死,客户端拿到的是
+		// 半途断连,且这里精心维护的错误包络与访问日志全部失效。接住 panic
+		// 后回结构化 500;响应头已写出时重复 WriteHeader 只会产生一条无害
+		// 日志,不会二次 panic。
+		func() {
+			defer func() {
+				if err := recover(); err != nil {
+					slog.Error("handler panic recovered",
+						slog.String("method", r.Method),
+						slog.String("path", r.URL.Path),
+						slog.Any("panic", err),
+						slog.String("stack", string(debug.Stack())),
+					)
+					writeErrorEnvelope(rec, &apiError{
+						Status:  http.StatusInternalServerError,
+						Code:    "INTERNAL_ERROR",
+						Message: "服务端内部错误。",
+					})
+				}
+			}()
+			next.ServeHTTP(rec, r)
+		}()
 
 		duration := time.Since(start).Milliseconds()
-		// 健康检查高频低价值,降级为 Debug 避免刷屏。
+		// 健康检查高频低价值,降级为 Debug 避免刷屏(/healthz 是文档约定的
+		// 公网探针,互联网扫描器常打,同样降级)。
 		level := slog.LevelInfo
 		switch {
-		case r.URL.Path == "/health" || r.URL.Path == "/api/health":
+		case r.URL.Path == "/health" || r.URL.Path == "/api/health" || r.URL.Path == "/healthz":
 			level = slog.LevelDebug
 		case rec.status >= 500:
 			level = slog.LevelError
@@ -82,22 +107,45 @@ func (r *statusRecorder) Flush() {
 	}
 }
 
+// ReadFrom 透传 io.ReaderFrom:http.ServeContent/ServeFile 内部经 io.Copy 发送
+// 文件,io.Copy 优先检测目标是否实现 ReaderFrom——底层 http.response 实现了它
+// (Linux 上走 sendfile 零拷贝);本包裹层若不透传,数百 MB 的 APK 下载
+// (/api/app/download)会退化成用户态逐块拷贝,白白吃 CPU 与内存带宽。
+func (r *statusRecorder) ReadFrom(src io.Reader) (int64, error) {
+	if !r.wroteHeader {
+		r.WriteHeader(http.StatusOK)
+	}
+	if rf, ok := r.ResponseWriter.(io.ReaderFrom); ok {
+		n, err := rf.ReadFrom(src)
+		r.bytes += int(n)
+		return n, err
+	}
+	// 底层未实现 ReaderFrom(如测试的 httptest.ResponseRecorder):退化拷贝。
+	// 经 struct{ io.Writer } 包一层绕过 io.CopyBuffer 对 ReaderFrom 的再次
+	// 检测,否则会递归回本方法。
+	return io.CopyBuffer(struct{ io.Writer }{r}, src, make([]byte, 32*1024))
+}
+
 // clientIPFromRequest 解析客户端真实 IP。
 //
 // 生产部署位于 Cloudflare + nginx 反代之后,进到本服务的 RemoteAddr 恒为反代,
 // 转发头(X-Real-IP / X-Forwarded-For)由可信的反代写入。该 IP 同时用于诊断
 // 日志和 per-IP 限流 key(凭证端点、崩溃上报)。转发头只在直连方是内网/回环
 // 地址(nginx 所在的 Docker bridge)时才采信:若服务被误配置到公网可达,
-// 任意外部客户端伪造 X-Real-IP 即可旋转限流键绕过 per-IP 限流。取值顺序与
-// music_server 保持一致。
+// 任意外部客户端伪造 X-Real-IP 即可旋转限流键绕过 per-IP 限流。
+//
+// XFF 取**最后一段**:nginx($proxy_add_x_forwarded_for)把自己实际看到的
+// 直连地址追加在末尾,前面的段全部来自请求方可自由伪造的入站头——取首段
+// 等于把伪造值当限流键。单层可信反代拓扑下,最后一段恒为"反代实际看到的
+// 客户端地址",才是可采信的值。
 func clientIPFromRequest(r *http.Request) string {
 	remote := remoteIP(r.RemoteAddr)
 	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" && isTrustedProxyIP(remote) {
 		return ip
 	}
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" && isTrustedProxyIP(remote) {
-		if idx := strings.IndexByte(xff, ','); idx >= 0 {
-			return strings.TrimSpace(xff[:idx])
+		if idx := strings.LastIndexByte(xff, ','); idx >= 0 {
+			return strings.TrimSpace(xff[idx+1:])
 		}
 		return strings.TrimSpace(xff)
 	}

@@ -36,6 +36,12 @@ type mediaServer struct {
 	crashLimiter   *ipWindowLimiter
 	// 凭证端点 per-IP 限流(独立于崩溃上报限流器)。
 	credentialsLimiter *ipWindowLimiter
+	// 搜索端点 per-IP 限流:公开匿名端点中最重的一个(count+list 两次全表
+	// LIKE 扫描,单 SQLite 连接串行化),必须挡住脚本化滥用。
+	searchLimiter *ipWindowLimiter
+	// 搜索并发闸门:MaxOpenConns(1) 下搜索排队无收益,只会拖垮目录浏览
+	// 主链路;满载快速 503,不让恶意并发灌满连接等待队列。
+	searchGate chan struct{}
 	// youtube 实时端点客户端与独立限流(Data API 配额/yt-dlp 进程资源,见 youtube.go)。
 	yt                    *ytClient
 	youtubeSearchLimiter  *ipWindowLimiter
@@ -84,6 +90,22 @@ func sameFileStat(a, b fs.FileInfo) bool {
 // 凭证端点 per-IP 限流:正常 App 每次启动只拉一次凭证,阈值宽松但可挡匿名批量抓取。
 const credentialsPerMinuteLimit = 30
 
+// 搜索端点 per-IP 限流:正常 TV App 是提交式搜索,30/min 绰绰有余;/api/search
+// 匿名可达且每次请求做两次全表 LIKE 扫描,是最重的公开端点,必须限流。
+const searchPerMinuteLimit = 30
+
+// 搜索并发上限:catalog 用单 SQLite 连接(SetMaxOpenConns(1)),并发搜索只会
+// 在连接上排队并拖累全部公开 API;超载快速失败,保护目录浏览主链路。
+const maxConcurrentSearches = 4
+
+// defaultSearchLimiter/defaultSearchGate 是进程级默认防线:main() 构造时已显式
+// 接线,这里仅作 nil 兜底(测试裸构造 mediaServer 时行为与生产一致),与
+// crashLimiter 的兜底模式相同。
+var (
+	defaultSearchLimiter = newIPWindowLimiter(searchPerMinuteLimit, time.Minute)
+	defaultSearchGate    = make(chan struct{}, maxConcurrentSearches)
+)
+
 // 搜索关键词最大字节数:超长一律拒绝,避免无界 query 驱动全表 LIKE 扫描。
 const maxSearchQueryBytes = 128
 
@@ -109,6 +131,8 @@ func main() {
 		categoriesByID:        indexCategories(content.Categories),
 		crashLimiter:          newIPWindowLimiter(crashReportPerMinuteLimit, time.Minute),
 		credentialsLimiter:    newIPWindowLimiter(credentialsPerMinuteLimit, time.Minute),
+		searchLimiter:         newIPWindowLimiter(searchPerMinuteLimit, time.Minute),
+		searchGate:            make(chan struct{}, maxConcurrentSearches),
 		yt:                    newYTClient(config.VODExtractorURL),
 		youtubeSearchLimiter:  newIPWindowLimiter(youtubeSearchPerMinuteLimit, time.Minute),
 		youtubeResolveLimiter: newIPWindowLimiter(youtubeResolvePerMinuteLimit, time.Minute),
@@ -329,6 +353,33 @@ func (s *mediaServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, err)
 		return
 	}
+	// 本端点匿名可达且是最重的公开查询:参数校验(廉价 400)之后,先限流、
+	// 再过并发闸门,重查询不消耗排队位。
+	limiter := s.searchLimiter
+	if limiter == nil {
+		limiter = defaultSearchLimiter
+	}
+	if !limiter.allow(clientIPFromRequest(r)) {
+		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "请求过于频繁,请稍后再试。"})
+		return
+	}
+	gate := s.searchGate
+	if gate == nil {
+		gate = defaultSearchGate
+	}
+	select {
+	case gate <- struct{}{}:
+		defer func() { <-gate }()
+	default:
+		// 满载:SQLite 单连接下排队只会拖垮目录浏览主链路,快速 503 让
+		// 恶意并发拿不到连接等待队列。
+		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "SERVICE_BUSY", Message: "搜索繁忙,请稍后再试。"})
+		return
+	}
+	// 目录数据变化低频,短缓存既省重复扫描又与限流预算互补(结果一致性
+	// 延迟 30s 对搜索场景无感;providers 用 60s,搜索更新感知更敏感故减半)。
+	// 429/503/400 不带缓存头,只有成功响应可缓存。
+	w.Header().Set("Cache-Control", "public, max-age=30")
 	if s.catalog == nil {
 		s.writeJSON(w, http.StatusOK, SearchResponse{Query: query, Total: 0, Items: []VideoSummary{}})
 		return
@@ -456,10 +507,21 @@ func paginationFromRequest(r *http.Request) (int, int, *apiError) {
 }
 
 func (s *mediaServer) writeJSON(w http.ResponseWriter, status int, payload any) {
+	writeJSONStatus(w, status, payload)
+}
+
+func (s *mediaServer) writeError(w http.ResponseWriter, err error) {
+	writeErrorEnvelope(w, err)
+}
+
+// writeJSONStatus 与 writeErrorEnvelope 是错误/响应包络的自由函数形态:
+// requestLogMiddleware 的 panic 恢复路径没有 mediaServer 接收者,也要写同一
+// 包络;方法形式只是它们的薄包装。
+func writeJSONStatus(w http.ResponseWriter, status int, payload any) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		log.Printf("writeJSON marshal: %v", err)
-		s.writeError(w, &apiError{
+		writeErrorEnvelope(w, &apiError{
 			Status:  http.StatusInternalServerError,
 			Code:    "INTERNAL_ERROR",
 			Message: "服务端内部错误。",
@@ -471,13 +533,13 @@ func (s *mediaServer) writeJSON(w http.ResponseWriter, status int, payload any) 
 	_, _ = w.Write(body)
 }
 
-func (s *mediaServer) writeError(w http.ResponseWriter, err error) {
+func writeErrorEnvelope(w http.ResponseWriter, err error) {
 	var apiErr *apiError
 	if !errors.As(err, &apiErr) {
 		log.Printf("unhandled error: %v", err)
 		apiErr = &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"}
 	}
-	s.writeJSON(w, apiErr.Status, apiErrorEnvelope{Error: apiErrorBody{Code: apiErr.Code, Message: apiErr.Message}})
+	writeJSONStatus(w, apiErr.Status, apiErrorEnvelope{Error: apiErrorBody{Code: apiErr.Code, Message: apiErr.Message}})
 }
 
 func indexCategories(categories []ContentCategory) map[string]ContentCategory {

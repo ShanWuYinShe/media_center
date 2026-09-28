@@ -33,6 +33,7 @@
 | 429 | `RATE_LIMITED` | 触发 per-IP 限流 |
 | 500 | `INTERNAL_ERROR` | 服务端内部错误 |
 | 502 | `UPSTREAM_ERROR` / `RESOLVE_FAILED` | youtube 实时端点：vod_extractor(yt-dlp) 上游失败 |
+| 503 | `SERVICE_BUSY` | 搜索端点并发满载（保护目录浏览主链路，稍后重试） |
 | 503 | `NOT_CONFIGURED` | youtube 实时端点：服务端未配置 API key / 解析服务 |
 
 ## 数据模型
@@ -92,7 +93,9 @@ type VideoSummary = {
 
 ### `GET /api/search?q=关键词&provider=bilibili&page=1&pageSize=20`
 
-在已审核（approved）目录中按关键词子串搜索（匹配标题/简介/作者，大小写不敏感，跨分类去重），按 pinned > score > native_id 排序。**不调任何上游**。`q` 为空返回空结果；`provider` 可选，非空时只搜索该视频源（App 端只支持 bilibili 播放时用它排除其他 provider 的结果）。
+在已审核（approved）目录中按关键词子串搜索（匹配标题/简介/作者，大小写不敏感，跨分类去重），按 pinned > score > native_id 排序。**不调任何上游**。`q` 为空返回空结果（不消耗限流配额）；`provider` 可选，非空时只搜索该视频源（App 端只支持 bilibili 播放时用它排除其他 provider 的结果）。
+
+**限流**：本端点匿名可达且是服务端最重的公开查询（每次请求做两次全表扫描），同一 IP 每分钟超过 30 次返回 429 `RATE_LIMITED`；服务端并发搜索满载（保护目录浏览主链路）返回 503 `SERVICE_BUSY`。成功响应带 `Cache-Control: public, max-age=30`。
 
 ```json
 { "query": "流浪地球", "total": 2, "items": [ { "id": "BV1xxx", "title": "流浪地球", ... } ] }
