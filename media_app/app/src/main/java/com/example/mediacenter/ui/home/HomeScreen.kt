@@ -28,6 +28,8 @@ import com.example.mediacenter.ui.update.UpdateDialog
 import com.example.mediacenter.ui.update.UpdateDialogState
 import com.example.mediacenter.update.AppUpdateHolder
 import com.example.mediacenter.util.NetworkRestoreEffect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun HomeScreen(
@@ -51,7 +53,8 @@ fun HomeScreen(
     var watchEntries by remember { mutableStateOf<List<WatchEntry>>(emptyList()) }
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            watchEntries = WatchHistory.entries(context)
+            // SP 读含 JSON 解码:移 IO 线程,避免每次回首页都在主线程做磁盘 IO
+            watchEntries = withContext(Dispatchers.IO) { WatchHistory.entries(context) }
         }
     }
 

@@ -22,10 +22,20 @@ object AppHttpClient {
     @Volatile private var providerInstalled = false
 
     /** 共享的基础客户端(OkHttp 默认超时),用于无特殊超时需求的场景。 */
-    val shared: OkHttpClient by lazy { newBuilder().build() }
+    val shared: OkHttpClient by lazy { baseBuilder().build() }
 
-    /** 返回默认配置的 Builder,调用方可继续追加超时、Cache、拦截器等配置。 */
-    fun newBuilder(): OkHttpClient.Builder = OkHttpClient.Builder()
+    /**
+     * 返回基于共享客户端的 Builder,调用方可继续追加超时、Cache、拦截器等配置。
+     *
+     * 经由 [shared] 派生:连接池与线程池(Dispatcher)进程内单源复用,各调用方
+     * (API 客户端/图片加载/APK 下载)不再各自建一套连接池。追加的配置只作用于
+     * 新客户端实例,不影响 shared 本身。历史实现每次 `OkHttpClient.Builder()`
+     * 全新建池,与旧注释宣称的"复用"不符。
+     */
+    fun newBuilder(): OkHttpClient.Builder = shared.newBuilder()
+
+    /** shared 的初始构造;独立函数避免 shared 的 lazy 初始化递归调 [newBuilder]。 */
+    private fun baseBuilder(): OkHttpClient.Builder = OkHttpClient.Builder()
 
     /**
      * 把 Conscrypt 安装为进程级首选 JCE Provider。

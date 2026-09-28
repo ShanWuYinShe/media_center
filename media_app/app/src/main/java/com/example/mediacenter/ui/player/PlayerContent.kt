@@ -23,6 +23,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.KeyEventType
@@ -49,8 +50,11 @@ import com.example.mediacenter.util.NetworkRestoreEffect
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 
 @Composable
 internal fun PlayerContent(
@@ -68,11 +72,13 @@ internal fun PlayerContent(
     // 才能命中 HLS 媒体源;progressive mp4 靠 URL 推断也可,统一带上最稳)。
     val stream = playbackResult.options.first()
     var showControls by remember { mutableStateOf(true) }
+    var playerError by remember { mutableStateOf<String?>(null) }
     // BACK 先收起控制条,再退播放页(标准视频播放器行为);收起状态由
     // PlayerScreen 的 BackHandler 兜底退出。Compose 中后注册的可用
     // BackHandler 优先,故此处注册即获得优先级。
-    BackHandler(enabled = showControls) { showControls = false }
-    var playerError by remember { mutableStateOf<String?>(null) }
+    // 错误层(playerError 全屏 / overlayError 盖层)替换了控制条渲染,此时
+    // 收起控制条无任何视觉反馈:禁用本 handler,BACK 直接走兜底退出。
+    BackHandler(enabled = showControls && playerError == null && overlayError == null) { showControls = false }
     var isPlaying by remember { mutableStateOf(false) }
     // 缓冲中提示：卡顿不再表现为“画面冻住不知道在干嘛”
     var isBuffering by remember { mutableStateOf(false) }
@@ -93,6 +99,12 @@ internal fun PlayerContent(
     val controlsFocus = remember { FocusRequester() }
     // 多P视频的分P位置不能跨流恢复,只在单P视频上启用断点续播
     val canResume = playbackResult.pages.totalPages <= 1
+    // 播放错误自动重试:签名地址过期/网络抖动最常见,首次错误自动重载一次
+    // (loadEpoch 驱动,同分P携位续播);再错才显示错误层交手动重试,防无限
+    // 循环。READY 即播放成功,重置计数。
+    var playerAutoRetries by remember { mutableIntStateOf(0) }
+    // READY 回调里的断点读取(SP + JSON 解码)经它移到 IO 线程执行
+    val scope = rememberCoroutineScope()
 
     // 与 PlaybackService 里的播放器异步建立 MediaController 连接。
     // 系统媒体栏/通知/媒体键由服务端 MediaSession 承载,页面只负责驱动。
@@ -163,6 +175,8 @@ internal fun PlayerContent(
             override fun onPlaybackStateChanged(state: Int) {
                 isBuffering = state == Player.STATE_BUFFERING
                 if (state == Player.STATE_READY) {
+                    // 播放成功:自动重试预算重置
+                    playerAutoRetries = 0
                     if (pendingSeekMs > 0L) {
                         // 换源保进度:精确接续优先于断点续播(多P视频换清晰度也走这里)
                         val target = pendingSeekMs
@@ -171,13 +185,27 @@ internal fun PlayerContent(
                     } else if (shouldResume) {
                         shouldResume = false
                         val durationMs = controller?.duration?.coerceAtLeast(0L) ?: 0L
-                        val seekTo = PlaybackPositionStore.resumePosition(context, videoId, durationMs)
-                        if (seekTo > 0) controller?.seekTo(seekTo)
+                        // 断点读取含 SharedPreferences + JSON 解码,READY 回调在主线程;
+                        // 移 IO 读后回主线程 seek(DetailScreen 同款模式)。页面已退出时
+                        // controller 已释放,seekTo 的异常吞掉即可。
+                        scope.launch {
+                            val seekTo = withContext(Dispatchers.IO) {
+                                PlaybackPositionStore.resumePosition(context, videoId, durationMs)
+                            }
+                            if (seekTo > 0) runCatching { controller?.seekTo(seekTo) }
+                        }
                     }
                 }
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                if (playerAutoRetries < 1) {
+                    // 首次错误自动重载一次:loadEpoch 驱动加载 effect 重走,
+                    // 同分P携位续播;playerError 由加载 effect 清空。
+                    playerAutoRetries++
+                    loadEpoch++
+                    return
+                }
                 playerError = friendlyPlaybackError(error)
             }
         }
@@ -272,7 +300,9 @@ internal fun PlayerContent(
     // 否则遥控器按键 seek 后进度条/时间纹丝不动,用户得不到任何反馈。
     // 覆盖层隐藏且播放中时跳过 positionMs/durationMs 写入:这两个状态只被覆盖层消费,
     // 隐藏时无读者,写了也是无效开销(持久化照常,崩溃恢复不依赖 UI 可见)。
-    LaunchedEffect(isPlaying, showControls) {
+    // 换分P必须重启轮询:playbackResult 捕获进协程,不重启则换页后仍按旧页
+    // 持久化(key 带旧 #pN),恢复位置错乱。
+    LaunchedEffect(isPlaying, showControls, playbackResult.pages.currentPage) {
         if (!isPlaying && !showControls) {
             // 暂停瞬间刷一次位置 + 时长用于下次显示，之后不再轮询。
             positionMs = controller?.currentPosition?.coerceAtLeast(0L) ?: 0L
@@ -289,7 +319,13 @@ internal fun PlayerContent(
             }
             tick++
             if (isPlaying && tick % 10 == 0) {
-                PlaybackPositionStore.save(context, videoId, pos)
+                // 与退出保存/恢复加载同一 key(多P带 #pN 页码):裸 videoId 会把
+                // 当前页位置写进首页 key,不带页码重进时按首页时长错误 seek。
+                PlaybackPositionStore.save(
+                    context,
+                    playbackStorageKey(videoId, playbackResult.pages.currentPage),
+                    pos,
+                )
             }
             delay(500)
         }
