@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// 内部管理接口(/internal/*):仅供内网可信调用方(workwork 的 admin)管理分类维护数据库
+// 内部管理接口(/internal/*):仅供内网可信调用方(部署侧管理工具/admin)管理分类维护数据库
 // (catalog 审校 approve/reject/置顶/排序)、触发候选采集(seed)。
 //
 // 安全模型:整组接口由 MEDIA_SERVER_INTERNAL_TOKEN 门禁——令牌为空时整组路由对外表现为

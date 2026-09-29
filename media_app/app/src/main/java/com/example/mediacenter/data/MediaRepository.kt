@@ -88,7 +88,7 @@ class MediaRepository(
         api.search(query, currentProvider).items.orEmpty()
 
     /**
-     * YouTube 实时搜索:不走 catalog,直接调 server 的 YouTube 通道(Data API)。
+     * YouTube 实时搜索:不走 catalog,直接调 server 的 YouTube 通道(ytsearch 实时搜索)。
      * 与 [search] 分开是为了让搜索层按 provider 显式选择通道,失败时仍可回退
      * 本地 catalog 过滤(能搜到已入库的少量内容)。
      */

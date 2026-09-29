@@ -33,7 +33,7 @@ ANDROID_HOME="$HOME/Library/Android/sdk" \
 如需覆盖默认服务端 URL：
 
 ```bash
-./gradlew :app:assembleDebug -PMEDIA_SERVER_URL=https://your-domain.example/api/media
+./gradlew :app:assembleDebug -PMEDIA_SERVER_URL=https://your-domain.example/api/v1
 ```
 
 ## 服务端 media_server

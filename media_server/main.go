@@ -26,8 +26,8 @@ var version = "dev"
 // mediaServer 是目录服务:从 catalog(SQLite)提供 provider 列表、分类列表、
 // 视频列表。播放地址解析与上游调用原则上由 App 端按 provider 自行处理(bilibili
 // 调 B 站 API);唯一例外是 youtube provider 的两个实时端点(见 youtube.go):
-// 搜索走 Data API、解析代理 vod_extractor——YouTube 风控对抗依赖服务端集中
-// 更新 yt-dlp,不适合下沉到 App。
+// 搜索与播放解析均代理 vod_extractor(yt-dlp ytsearch 实时搜索)——YouTube
+// 风控对抗依赖服务端集中更新 yt-dlp,不适合下沉到 App。
 type mediaServer struct {
 	config         AppConfig
 	categories     []ContentCategory
@@ -42,7 +42,7 @@ type mediaServer struct {
 	// 搜索并发闸门:MaxOpenConns(1) 下搜索排队无收益,只会拖垮目录浏览
 	// 主链路;满载快速 503,不让恶意并发灌满连接等待队列。
 	searchGate chan struct{}
-	// youtube 实时端点客户端与独立限流(Data API 配额/yt-dlp 进程资源,见 youtube.go)。
+	// youtube 实时端点客户端与独立限流(yt-dlp 进程资源与 YouTube 风控,见 youtube.go)。
 	yt                    *ytClient
 	youtubeSearchLimiter  *ipWindowLimiter
 	youtubeResolveLimiter *ipWindowLimiter
@@ -412,7 +412,7 @@ func (s *mediaServer) handleProviderRoute(w http.ResponseWriter, r *http.Request
 		s.handleProviderCategories(w, r, provider)
 	case len(parts) == 4 && parts[1] == "categories" && parts[3] == "videos":
 		s.handleProviderCategoryVideos(w, r, provider, parts[2])
-	// youtube 实时端点:搜索(Data API)与播放解析(vod_extractor 代理),见 youtube.go。
+	// youtube 实时端点:搜索与播放解析(均代理 vod_extractor),见 youtube.go。
 	case provider == "youtube" && len(parts) == 2 && parts[1] == "search":
 		s.handleYouTubeSearch(w, r)
 	case provider == "youtube" && len(parts) == 2 && parts[1] == "resolve":

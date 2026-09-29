@@ -17,7 +17,7 @@ import okhttp3.Response
 
 /**
  * YouTube provider 的 App 端 API 客户端:搜索与播放解析都走 media_server 的
- * youtube 实时端点(server 侧调 Data API / 代理 vod_extractor),App 不直接
+ * youtube 实时端点(server 侧经 vod_extractor 代理 yt-dlp),App 不直接
  * 访问 YouTube——解析能力集中在服务端,youtube 风控变化只需服务端更新
  * yt-dlp,App 无需发版。
  *

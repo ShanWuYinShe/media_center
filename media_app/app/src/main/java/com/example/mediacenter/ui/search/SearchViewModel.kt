@@ -34,7 +34,7 @@ data class SearchUiState(
 
 /**
  * 搜索实现说明:优先走服务端搜索(bilibili:approved 目录子串匹配;youtube:
- * Data API 实时搜索),失败时回退——把当前 provider 各分类的 approved 视频列表
+ * 服务端 ytsearch 实时搜索),失败时回退——把当前 provider 各分类的 approved 视频列表
  * **拉取到本地缓存**,再按标题做客户端过滤。
  *
  * 惰性策略:首搜只等前 [FAST_PAGES] 页(秒回),剩余页在后台补全。
@@ -166,7 +166,7 @@ class SearchViewModel(
         // 远程两级(youtube 实时通道 / server 搜索)任一失败置位:两级全失败且
         // 本地也无结果时,把"网络不可用"与"真无结果"区分开,不再静默回退。
         var remoteFailed = false
-        // YouTube 实时搜索:优先调 server 的 YouTube 通道(Data API),不查本地
+        // YouTube 实时搜索:优先调 server 的 YouTube 通道(ytsearch 实时搜索),不查本地
         // catalog(YouTube 内容不要求先入库)。失败仍落到下方本地目录过滤——
         // 至少能搜到已审核入库的 YouTube 内容。
         if (repository.currentProvider == "youtube") {

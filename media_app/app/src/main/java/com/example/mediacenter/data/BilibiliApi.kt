@@ -69,11 +69,8 @@ class BilibiliApi(
 
     /**
      * 解析某 bvid 的可播放直链。返回(播放选项, 多P信息)。
-     * 多P信息包含总页数和各页 cid,供 playNext/playPrevious 切换分页用。
-     */
-    /**
-     * 解析某 bvid 的可播放直链。返回(播放选项, 多P信息)。
-     * id 支持 "bvid_pN" 格式(多P分条目录),自动提取页码。
+     * 多P信息包含总页数和各页 cid,供切换分页用;id 支持 "bvid_pN" 格式
+     * (多P分条目录),自动提取页码。
      */
     suspend fun resolvePlayback(id: String): PlaybackResult = resolvePlayback(id, preferredQuality())
 
