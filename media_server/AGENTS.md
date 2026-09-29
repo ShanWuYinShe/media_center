@@ -1,6 +1,6 @@
 # Media Center Media Server
 
- 本目录（`media_server/`）是 `media_center` 仓库（`ShanWuYinShe/media_center`）的普通子目录，非独立仓库。**本仓库已不再被 `workwork` 以 git submodule 引用**——workwork 已无 `services/media_center` 检出（media/music 已拆分为独立站仓库）；部署编排在本仓库 `deploy/` 内自洽（`media.chaoset.com`）。
+ 本目录（`media_server/`）是 `media_center` 仓库的普通子目录，非独立仓库；部署编排在本仓库 `deploy/` 内自洽（`media.chaoset.com`）。与 workwork 的脱钩背景见根 [AGENTS.md](../AGENTS.md)。
 
 `media_center` 的合规公开视频聚合后端：Go HTTP 服务，以目录服务为主（catalog SQLite 为 system of record）；`youtube` provider 的搜索/解析走受控实时通道（见 `youtube.go`）。
 
@@ -36,7 +36,7 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 ## 路由
 
 对外规范前缀是 `/api/v1`（独立站约定，`main.go` 入口把 `/api/v1/x` 归一为 `/api/x`）；
-下表按内部路由书写，旧 `/api/*` 为过渡期废弃别名，行为与 `/api/v1/*` 完全一致。
+下表按内部路由书写，旧 `/api/*` 为过渡期废弃别名，行为与 `/api/v1/*` 完全一致（过渡期兼容，目标收敛为 404，见用户级 `web-service-conventions`「前缀收敛」；新接口不再新增旧前缀）。
 
 | 方法 | 路径 | 功能 |
 |------|------|------|
