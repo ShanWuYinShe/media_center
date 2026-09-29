@@ -117,7 +117,7 @@ func (c *ytClient) searchVideos(ctx context.Context, query string) ([]VideoSumma
 		return nil, fmt.Errorf("read search body: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("search status %d: %s", resp.StatusCode, truncateBody(raw))
+		return nil, fmt.Errorf("search status %d reason=%s: %s", resp.StatusCode, upstreamFailureReason(raw), truncateBody(raw))
 	}
 	var result ytdlpSearchResult
 	if err := json.Unmarshal(raw, &result); err != nil {
@@ -154,6 +154,19 @@ func truncateBody(body []byte) string {
 	// 上游响应可能是截断/二进制内容;ToValidUTF8 把非法字节序列(如截断点落在
 	// 多字节字符中间)替换为 U+FFFD,避免日志出现半截字符。
 	return strings.ToValidUTF8(string(body), "�")
+}
+
+// upstreamFailureReason 从 vod_extractor 的错误响应体提取失败分类
+// (bot_check/rate_limited/unavailable/geo_blocked/...):分类让 cookies 失效
+// (bot_check 持续出现)在服务端日志里一眼可辨,排障不再依赖进 extractor 容器翻日志。
+func upstreamFailureReason(raw []byte) string {
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return ""
+	}
+	return body.Reason
 }
 
 // ---- vod_extractor(yt-dlp)解析代理 ----
@@ -202,7 +215,7 @@ func (c *ytClient) resolveVideo(ctx context.Context, videoID string) (PlaybackRe
 		return PlaybackResultResponse{}, fmt.Errorf("read extractor body: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return PlaybackResultResponse{}, fmt.Errorf("extractor status %d: %s", resp.StatusCode, truncateBody(raw))
+		return PlaybackResultResponse{}, fmt.Errorf("extractor status %d reason=%s: %s", resp.StatusCode, upstreamFailureReason(raw), truncateBody(raw))
 	}
 	var info ytdlpInfo
 	if err := json.Unmarshal(raw, &info); err != nil {

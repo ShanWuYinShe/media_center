@@ -86,6 +86,67 @@ class ExtractorConfigError(RuntimeError):
     """
 
 
+class ExtractorFailedError(RuntimeError):
+    """yt-dlp 非零退出的失败,带 stderr 特征分类(reason)。
+
+    失败分类让"cookies 失效/风控拦截"(bot_check)与普通失败可区分:
+    media_server 记日志、/health 汇总计数,cookies 过期从"用户报障才发现"
+    变为可告警。分类依赖 yt-dlp 错误文案,匹配不到回退 unknown。
+    """
+
+    def __init__(self, reason, detail=""):
+        super().__init__("extractor failed")
+        self.reason = reason
+        self.detail = detail
+
+
+# 失败计数:按分类累计 + 最近一次记录。ThreadingHTTPServer 多线程读改,
+# 用锁保证计数的读改写原子;快照给 /health 时在锁内复制。
+FAILURE_LOCK = threading.Lock()
+FAILURE_STATS = {"total": 0, "last_reason": None, "last_at": None, "counts": {}}
+
+
+def record_failure(reason):
+    with FAILURE_LOCK:
+        FAILURE_STATS["total"] += 1
+        FAILURE_STATS["last_reason"] = reason
+        FAILURE_STATS["last_at"] = datetime.now(timezone.utc).isoformat()
+        FAILURE_STATS["counts"][reason] = FAILURE_STATS["counts"].get(reason, 0) + 1
+
+
+def failure_snapshot():
+    with FAILURE_LOCK:
+        return {
+            "total": FAILURE_STATS["total"],
+            "counts": dict(FAILURE_STATS["counts"]),
+            "last_reason": FAILURE_STATS["last_reason"],
+            "last_at": FAILURE_STATS["last_at"],
+        }
+
+
+def classify_failure(stderr_text):
+    """按 stderr 特征给 yt-dlp 失败归类(小写匹配,容忍文案前后缀变化)。
+
+    分类依据是 YouTube/yt-dlp 的真实错误文案;上游改文案时分类会退回
+    unknown,不影响服务可用性。
+    """
+    low = (stderr_text or "").lower()
+    if "confirm you're not a bot" in low:
+        return "bot_check"
+    if "http error 429" in low or "too many requests" in low:
+        return "rate_limited"
+    if "video unavailable" in low or "has been removed" in low or "private video" in low:
+        return "unavailable"
+    if (
+        "not available in your country" in low
+        or "geo-restricted" in low
+        or "geo-blocked" in low
+        or "blocked it in your country" in low
+    ):
+        return "geo_blocked"
+    return "unknown"
+
+
 class RequestBodyTimeoutError(OSError):
     """读取请求体超时/中断(客户端慢发或中途断开)。
 
@@ -113,6 +174,9 @@ class Handler(BaseHTTPRequestHandler):
                     # cookies 健康信号:cookies 过期/缺失会让 YouTube 解析与搜索
                     # 全部失败且不产生主动告警,外部监控靠此字段告警(见 README)。
                     "cookies": cookies_health(),
+                    # 失败计数(按分类累计):bot_check 持续增长 = cookies 失效/风控
+                    # 拦截,外部监控据此告警(见 README 监控章节),不必等用户报障。
+                    "failures": failure_snapshot(),
                 },
             )
             return
@@ -160,6 +224,11 @@ class Handler(BaseHTTPRequestHandler):
         except ExtractorConfigError as error:
             # 服务端配置问题(如 cookies 不可用)是 503,不是客户端的 400
             self.send_json(503, {"error": str(error)})
+            return
+        except ExtractorFailedError as error:
+            # 502 body 带 reason 分类(bot_check/rate_limited/...):media_server
+            # 记日志用,普通 RuntimeError 的 502 无 reason(兼容旧客户端只读 error)。
+            self.send_json(502, {"error": str(error), "reason": error.reason})
             return
         except RuntimeError as error:
             self.send_json(502, {"error": str(error)})
@@ -351,16 +420,27 @@ def run_extractor(url, single_video=True):
         stderr=subprocess.PIPE,
         start_new_session=True,
     )
-    stdout, stderr = read_limited_process_output(process)
+    try:
+        stdout, stderr = read_limited_process_output(process)
+    except TimeoutError:
+        record_failure("timeout")
+        raise
+    except RuntimeError:
+        # read_limited_process_output 的 RuntimeError 只有"输出超上限"一种
+        record_failure("output_too_large")
+        raise
     if process.returncode != 0:
         detail = stderr.decode("utf-8", errors="replace").strip()[:2000]
         if detail:
             log_internal(f"yt-dlp exited {process.returncode}: {detail}")
-        raise RuntimeError("extractor failed")
+        reason = classify_failure(detail)
+        record_failure(reason)
+        raise ExtractorFailedError(reason, detail)
 
     try:
         return json.loads(stdout)
     except json.JSONDecodeError as error:
+        record_failure("invalid_json")
         raise RuntimeError("extractor returned invalid JSON") from error
 
 

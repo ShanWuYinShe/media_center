@@ -501,5 +501,90 @@ class HandleErrorSilenceTest(unittest.TestCase):
             parent.assert_called_once()
 
 
+
+
+class ClassifyFailureTest(unittest.TestCase):
+    """yt-dlp stderr 特征分类:bot_check/风控与普通失败可区分,匹配不到回退 unknown。"""
+
+    def test_bot_check(self):
+        stderr = "ERROR: [youtube] abc123: Sign in to confirm you're not a bot."
+        self.assertEqual(server.classify_failure(stderr), "bot_check")
+
+    def test_rate_limited(self):
+        self.assertEqual(server.classify_failure("HTTP Error 429: Too Many Requests"), "rate_limited")
+
+    def test_unavailable(self):
+        self.assertEqual(server.classify_failure("ERROR: [youtube] abc123: Video unavailable"), "unavailable")
+
+    def test_geo_blocked(self):
+        self.assertEqual(
+            server.classify_failure("ERROR: This video is not available in your country."),
+            "geo_blocked",
+        )
+
+    def test_unknown_and_empty(self):
+        self.assertEqual(server.classify_failure("some totally different error"), "unknown")
+        self.assertEqual(server.classify_failure(""), "unknown")
+
+
+class ExtractorFailedReasonTest(unittest.TestCase):
+    """yt-dlp 失败 → 502 body 带 reason 分类,/health failures 计数累计。
+
+    计数是模块全局状态,每个用例先清零,互不污染。
+    """
+
+    def setUp(self):
+        server.FAILURE_STATS.update(
+            {"total": 0, "last_reason": None, "last_at": None, "counts": {}}
+        )
+        self.addCleanup(
+            lambda: server.FAILURE_STATS.update(
+                {"total": 0, "last_reason": None, "last_at": None, "counts": {}}
+            )
+        )
+
+    def test_do_post_returns_reason_and_records(self):
+        handler = server.Handler.__new__(server.Handler)
+        handler.path = "/extract"
+        sent = {}
+
+        def _fake_run(url, single_video=True):
+            # 模拟真实 run_extractor 的失败路径:先记录分类再抛错
+            server.record_failure("bot_check")
+            raise server.ExtractorFailedError("bot_check", "Sign in to confirm...")
+
+        with mock.patch.object(
+            server.socket,
+            "getaddrinfo",
+            return_value=addrinfos("8.8.8.8"),
+        ), mock.patch.object(
+            server,
+            "run_extractor",
+            side_effect=_fake_run,
+        ), mock.patch.object(
+            server.Handler,
+            "read_json_body",
+            return_value={"url": "https://www.youtube.com/watch?v=abc"},
+        ), mock.patch.object(
+            server.Handler,
+            "send_json",
+            side_effect=lambda status, payload: sent.update(status=status, payload=payload),
+        ):
+            handler.do_POST()
+        self.assertEqual(sent["status"], 502)
+        self.assertEqual(sent["payload"]["reason"], "bot_check")
+        self.assertEqual(sent["payload"]["error"], "extractor failed")
+        snap = server.failure_snapshot()
+        self.assertEqual(snap["total"], 1)
+        self.assertEqual(snap["counts"]["bot_check"], 1)
+        self.assertEqual(snap["last_reason"], "bot_check")
+
+    def test_snapshot_returns_isolated_copy(self):
+        server.record_failure("timeout")
+        snap = server.failure_snapshot()
+        snap["counts"]["timeout"] = 999
+        self.assertEqual(server.failure_snapshot()["counts"]["timeout"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
