@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -169,6 +171,21 @@ func upstreamFailureReason(raw []byte) string {
 	return body.Reason
 }
 
+// upstreamError 是 vod_extractor 返回非 200 的结构化失败,供负缓存判定
+// (只缓存真实解析失败,不缓存瞬时繁忙)与日志。
+type upstreamError struct {
+	status int
+	reason string
+	body   string
+}
+
+func (e *upstreamError) Error() string {
+	if e.reason != "" {
+		return fmt.Sprintf("extractor status %d reason=%s: %s", e.status, e.reason, e.body)
+	}
+	return fmt.Sprintf("extractor status %d: %s", e.status, e.body)
+}
+
 // ---- vod_extractor(yt-dlp)解析代理 ----
 
 type ytdlpFormat struct {
@@ -189,6 +206,84 @@ type ytdlpInfo struct {
 	Duration  float64       `json:"duration"`
 	Thumbnail string        `json:"thumbnail"`
 	Formats   []ytdlpFormat `json:"formats"`
+}
+
+// ---- resolve 结果缓存:削 yt-dlp 进程峰值、防同 ID 重试风暴 ----
+//
+// 成功缓存 TTL 15min:YouTube 直链时效约 6h,15min 内复用安全;App 反复进出
+// 播放页不再重复 spawn yt-dlp(解析是全系统最重的上游动作,vod_extractor 并发
+// 上限只有 2)。负缓存 TTL 5min:失败结果(仅限 extractor 真实解析失败 502/
+// 超时 504)短期复用,用户连点重试不再反复撞 YouTube 风控——每次真实解析都在
+// 消耗 cookies 寿命。换 cookies 后最多等 5min 自动恢复;容器重启即清空,可接受。
+const (
+	resolvePositiveCacheTTL = 15 * time.Minute
+	resolveNegativeCacheTTL = 5 * time.Minute
+	maxResolveCacheEntries  = 128
+)
+
+// resolveCacheEntry 是单个视频的缓存项;failure=true 表示负缓存(命中即快速失败)。
+type resolveCacheEntry struct {
+	result    PlaybackResultResponse
+	reason    string
+	failure   bool
+	expiresAt time.Time
+	addedAt   time.Time
+}
+
+// resolveCache 是按 videoID 键的进程内缓存。容量有上限:extract JSON 可达
+// 数 MB,但缓存的是裁剪后的 PlaybackResultResponse(KB 级),128 个上限足够
+// 覆盖真实观看模式,且防止任何情况下的无界增长(容器仅 64M 内存)。
+type resolveCache struct {
+	mu      sync.Mutex
+	entries map[string]resolveCacheEntry
+}
+
+var globalResolveCache = &resolveCache{entries: make(map[string]resolveCacheEntry)}
+
+// lookup 命中返回 (result, reason, true):failure 项 result 为零值、reason 为
+// 失败分类;未命中/已过期返回 false(过期项顺手清除)。
+func (rc *resolveCache) lookup(videoID string) (PlaybackResultResponse, string, bool) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	e, ok := rc.entries[videoID]
+	if !ok {
+		return PlaybackResultResponse{}, "", false
+	}
+	if time.Now().After(e.expiresAt) {
+		delete(rc.entries, videoID)
+		return PlaybackResultResponse{}, "", false
+	}
+	if e.failure {
+		return PlaybackResultResponse{}, e.reason, true
+	}
+	return e.result, "", true
+}
+
+func (rc *resolveCache) store(videoID string, entry resolveCacheEntry) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	now := time.Now()
+	entry.addedAt = now
+	if len(rc.entries) >= maxResolveCacheEntries {
+		// 先清过期;仍满则按加入时间淘汰最旧
+		for id, e := range rc.entries {
+			if now.After(e.expiresAt) {
+				delete(rc.entries, id)
+			}
+		}
+		for len(rc.entries) >= maxResolveCacheEntries {
+			var oldestID string
+			var oldest time.Time
+			first := true
+			for id, e := range rc.entries {
+				if first || e.addedAt.Before(oldest) {
+					oldestID, oldest, first = id, e.addedAt, false
+				}
+			}
+			delete(rc.entries, oldestID)
+		}
+	}
+	rc.entries[videoID] = entry
 }
 
 // resolveVideo 调 vod_extractor 解析视频,返回可播放的完整结果(流选项+清晰度列表)。
@@ -215,7 +310,11 @@ func (c *ytClient) resolveVideo(ctx context.Context, videoID string) (PlaybackRe
 		return PlaybackResultResponse{}, fmt.Errorf("read extractor body: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return PlaybackResultResponse{}, fmt.Errorf("extractor status %d reason=%s: %s", resp.StatusCode, upstreamFailureReason(raw), truncateBody(raw))
+		return PlaybackResultResponse{}, &upstreamError{
+			status: resp.StatusCode,
+			reason: upstreamFailureReason(raw),
+			body:   truncateBody(raw),
+		}
 	}
 	var info ytdlpInfo
 	if err := json.Unmarshal(raw, &info); err != nil {
@@ -455,11 +554,36 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "视频 ID 不合法。"})
 		return
 	}
+	// 缓存优先:成功项直接回放,负缓存项快速失败(不消耗 yt-dlp 进程配额,
+	// 不再撞风控)。未命中才走真实解析。
+	if result, reason, hit := globalResolveCache.lookup(videoID); hit {
+		if reason != "" {
+			log.Printf("youtube resolve %s: cached failure (reason=%s)", videoID, reason)
+			s.writeError(w, &apiError{Status: http.StatusBadGateway, Code: "RESOLVE_FAILED", Message: "播放地址解析失败,该视频可能受限或稍后再试。"})
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+		return
+	}
 	result, err := s.yt.resolveVideo(r.Context(), videoID)
 	if err != nil {
 		log.Printf("youtube resolve %s: %v", videoID, err)
+		// 只负缓存真实解析失败(502 带分类/504 超时);extractor 繁忙(503)
+		// 是瞬时的,缓存会把可用窗口错锁成失败。
+		var ue *upstreamError
+		if errors.As(err, &ue) && (ue.status == http.StatusBadGateway || ue.status == http.StatusGatewayTimeout) {
+			globalResolveCache.store(videoID, resolveCacheEntry{
+				failure:   true,
+				reason:    ue.reason,
+				expiresAt: time.Now().Add(resolveNegativeCacheTTL),
+			})
+		}
 		s.writeError(w, &apiError{Status: http.StatusBadGateway, Code: "RESOLVE_FAILED", Message: "播放地址解析失败,该视频可能受限或稍后再试。"})
 		return
 	}
+	globalResolveCache.store(videoID, resolveCacheEntry{
+		result:    result,
+		expiresAt: time.Now().Add(resolvePositiveCacheTTL),
+	})
 	s.writeJSON(w, http.StatusOK, result)
 }

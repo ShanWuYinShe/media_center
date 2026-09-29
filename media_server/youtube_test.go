@@ -249,6 +249,9 @@ func TestHandleYouTubeSearchUpstreamError(t *testing.T) {
 }
 
 func TestHandleYouTubeResolve(t *testing.T) {
+	// resolve 缓存是全局的:先换空缓存,避免用例间互相污染(成功/失败结果
+	// 都会以 videoID 为键留存 5~15 分钟)。
+	swapResolveCache(t)
 	extractor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/extract" {
 			http.NotFound(w, r)
@@ -301,6 +304,8 @@ func TestHandleYouTubeResolve(t *testing.T) {
 }
 
 func TestHandleYouTubeResolveGuards(t *testing.T) {
+	// 同上:全局 resolve 缓存按 videoID 留存,先隔离。
+	swapResolveCache(t)
 	s := newYouTubeTestServer(t, "")
 
 	// 未配置 extractor → 503
