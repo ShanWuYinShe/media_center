@@ -235,7 +235,13 @@ func pageGlobCond(col string) string {
 // 同一视频的分 P 条目(含 _pN 后缀,如 BV1xx_p1 / BV1xx_p2)会在导入时自动聚合成一条:
 // 以首次出现的标题/描述等元数据为准,时长累加,只创建一条 category_member。这避免了
 // 分 P 被拆成多条独立候选的脏数据,也确保公共 API 的 _pN 过滤层不会意外吞掉整部视频。
-// 返回:videos(元数据写入数)、imported(新增成员数)、approved(其中直接收录数)、skipped(已存在跳过数)。
+//
+// 写入按 importBatchSize 条分批提交:catalog 用单 SQLite 连接(SetMaxOpenConns(1)),
+// 大事务持有唯一连接期间全部公开读(目录浏览/搜索)都要排队,导入千条会卡住全站
+// 数秒到数十秒。校验全部前置——任何一条非法直接报错、一条不写;批间 DB 失败时已
+// 提交批次保留,写路径全幂等(upsert + ON CONFLICT DO NOTHING),重导即可补齐。
+// 返回:videos(元数据写入数)、imported(新增成员数)、approved(其中直接收录数)、skipped(已存在跳过数);
+// 出错时计数为出错前已提交批次的实际值。
 func (c *Catalog) ImportPending(items []CatalogImportItem, reviewer string) (videos int, imported int, approved int, skipped int, err error) {
 	if len(items) == 0 {
 		return 0, 0, 0, 0, nil
@@ -289,7 +295,50 @@ func (c *Catalog) ImportPending(items []CatalogImportItem, reviewer string) (vid
 		}
 		merged = append(merged, item)
 	}
+	// 预处理与校验全部前置(开事务之前):任何一条非法直接报错、一条不写,
+	// 保持"坏输入零写入"的旧语义;归一化结果直接落回 merged。
+	for i := range merged {
+		item := &merged[i]
+		item.CategoryID = strings.TrimSpace(item.CategoryID)
+		item.Video.Provider = strings.ToLower(strings.TrimSpace(item.Video.Provider))
+		item.Video.NativeID = strings.TrimSpace(item.Video.NativeID)
+		item.Video.Title = strings.TrimSpace(item.Video.Title)
+		if item.CategoryID == "" || item.Video.Provider == "" || item.Video.NativeID == "" || item.Video.Title == "" {
+			return 0, 0, 0, 0, fmt.Errorf("import item %d: category/provider/nativeID/title required", i)
+		}
+		if item.Status = strings.TrimSpace(item.Status); item.Status == "" {
+			item.Status = "pending"
+		}
+		if item.Status != "pending" && item.Status != "approved" {
+			return 0, 0, 0, 0, fmt.Errorf("import item %d: invalid status %q (want pending/approved)", i, item.Status)
+		}
+	}
+
 	reviewer = strings.TrimSpace(reviewer)
+	for start := 0; start < len(merged); start += importBatchSize {
+		end := start + importBatchSize
+		if end > len(merged) {
+			end = len(merged)
+		}
+		batchVideos, batchImported, batchApproved, batchSkipped, batchErr := c.importBatch(merged[start:end], reviewer, start)
+		videos += batchVideos
+		imported += batchImported
+		approved += batchApproved
+		skipped += batchSkipped
+		if batchErr != nil {
+			// 已提交批次保留(写路径幂等,重导可补齐);返回已提交部分的计数便于排障。
+			return videos, imported, approved, skipped, batchErr
+		}
+	}
+	return videos, imported, approved, skipped, nil
+}
+
+// importBatchSize 是 ImportPending 单事务的条数上限。
+const importBatchSize = 200
+
+// importBatch 在单个事务里写入一批已校验条目;失败回滚本批(之前的批次已提交,
+// 保留)。offset 仅用于错误信息定位全局条目序号。
+func (c *Catalog) importBatch(batch []CatalogImportItem, reviewer string, offset int) (videos int, imported int, approved int, skipped int, err error) {
 	tx, err := c.db.Begin()
 	if err != nil {
 		return 0, 0, 0, 0, fmt.Errorf("begin import: %w", err)
@@ -299,21 +348,7 @@ func (c *Catalog) ImportPending(items []CatalogImportItem, reviewer string) (vid
 			_ = tx.Rollback()
 		}
 	}()
-	for i, item := range merged {
-		categoryID := strings.TrimSpace(item.CategoryID)
-		provider := strings.ToLower(strings.TrimSpace(item.Video.Provider))
-		nativeID := strings.TrimSpace(item.Video.NativeID)
-		title := strings.TrimSpace(item.Video.Title)
-		if categoryID == "" || provider == "" || nativeID == "" || title == "" {
-			return 0, 0, 0, 0, fmt.Errorf("import item %d: category/provider/nativeID/title required", i)
-		}
-		status := strings.TrimSpace(item.Status)
-		if status == "" {
-			status = "pending"
-		}
-		if status != "pending" && status != "approved" {
-			return 0, 0, 0, 0, fmt.Errorf("import item %d: invalid status %q (want pending/approved)", i, status)
-		}
+	for i, item := range batch {
 		creators, marshalErr := json.Marshal(item.Video.Creators)
 		if marshalErr != nil {
 			return 0, 0, 0, 0, marshalErr
@@ -330,16 +365,16 @@ ON CONFLICT(provider, native_id) DO UPDATE SET
   thumbnail_url=excluded.thumbnail_url,
   source_url=excluded.source_url,
   fetched_at=excluded.fetched_at`,
-			provider, nativeID, title, item.Video.Description, string(creators),
+			item.Video.Provider, item.Video.NativeID, item.Video.Title, item.Video.Description, string(creators),
 			item.Video.DurationSec, strings.TrimSpace(item.Video.Year), strings.TrimSpace(item.Video.ThumbnailURL),
 			strings.TrimSpace(item.Video.SourceURL), time.Now().UTC().Format(time.RFC3339),
 		); err != nil {
-			return 0, 0, 0, 0, fmt.Errorf("import video %d: %w", i, err)
+			return 0, 0, 0, 0, fmt.Errorf("import video %d: %w", offset+i, err)
 		}
 		videos++
 		// pending 成员 reviewer/reviewed_at 留 NULL;approved 直接收录时记录审校留痕。
 		var reviewerVal, reviewedAt any
-		if status == "approved" {
+		if item.Status == "approved" {
 			reviewerVal = reviewer
 			reviewedAt = time.Now().UTC().Format(time.RFC3339)
 		}
@@ -358,16 +393,16 @@ ON CONFLICT(provider, native_id) DO UPDATE SET
 INSERT INTO category_members (category_id, provider, native_id, status, score, pinned, rank, reviewer, reviewed_at, reason)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(category_id, provider, native_id) DO NOTHING`,
-			categoryID, provider, nativeID, status, item.Score, pinnedVal, rankVal, reviewerVal, reviewedAt, reasonVal,
+			item.CategoryID, item.Video.Provider, item.Video.NativeID, item.Status, item.Score, pinnedVal, rankVal, reviewerVal, reviewedAt, reasonVal,
 		)
 		if execErr != nil {
-			err = fmt.Errorf("import member %d: %w", i, execErr)
+			err = fmt.Errorf("import member %d: %w", offset+i, execErr)
 			return 0, 0, 0, 0, err
 		}
 		affected, _ := res.RowsAffected()
 		if affected > 0 {
 			imported++
-			if status == "approved" {
+			if item.Status == "approved" {
 				approved++
 			}
 		} else {
