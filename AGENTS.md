@@ -12,8 +12,7 @@
 - `media_app_legacy/` — 旧版客户端存档（不再开发）
 - `media_server/` — Go 目录服务（provider 列表、分类列表、视频元数据）+ youtube provider 的实时通道（yt-dlp ytsearch 实时搜索，无 Data API 配额；vod_extractor 解析代理，见 `media_server/youtube.go`）。
 - `vod_extractor/` — Python + yt-dlp 独立点播解析服务（YouTube 播放直链解析）。`media_server` 经 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 调用其 `POST /search`（实时搜索）与 `POST /extract`（播放直链解析）。
-  - **硬前提**：YouTube 对数据中心 IP 的所有 player_client 都触发 "Sign in to confirm you're not a bot"，服务器部署必须放置 YouTube cookies（Netscape 格式）到部署目录 `deploy/data/vod/youtube-cookies.txt`（容器只读挂载为 `/config/youtube-cookies.txt`），否则解析与搜索一律失败。
-  - 部署该服务时优先通过 `VOD_EXTRACTOR_EXTRACTOR_ARGS`（如 `youtube:player_client=tv`）与 cookies 双管齐下；cookies 过期后需重新导出。
+  - **硬前提**：YouTube 对数据中心 IP 一律触发 "Sign in to confirm you're not a bot"，服务器部署必须放置 cookies，否则解析与搜索一律失败——cookies 路径与挂载点、`VOD_EXTRACTOR_EXTRACTOR_ARGS`、过期重导出等运维细节以 `vod_extractor/AGENTS.md`「部署硬前提」为唯一维护处，此处不再复制。
 - `deploy/` — 独立站编排（media.chaoset.com）：nginx + media_server + vod_extractor 三服务自洽 compose，版本唯一来源 `deploy/versions.env`；操作细节见 `deploy/README.md`。
 
 App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部署方式。构建期未设置时回落到内置默认 `https://media.chaoset.com/api/v1`（独立站规范前缀）；旧 `https://yinghuoren.com/api/media`（workwork 聚合栈过渡别名）经其过渡反代仍可用，两种前缀在服务端行为一致（见 `media_server/API.md` 路径前缀约定）。
