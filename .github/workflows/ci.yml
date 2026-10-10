@@ -23,7 +23,7 @@ jobs:
       # Go 版本需与 media_server/Dockerfile 的 GO_VERSION、deploy/versions.env 保持一致
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26.8'
+          go-version: '1.26.9'
           cache: true
           cache-dependency-path: media_server/go.sum
 
