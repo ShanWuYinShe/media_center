@@ -66,6 +66,20 @@ deploy/cert/
 # make backup 的宿主侧备份产物
 deploy/backups/
 
+# ----- 本地构建/工具缓存 -----
+# Go/Python 的缓存目录(Agent 沙盒下 GOMODCACHE/GOCACHE/UV_CACHE_DIR 等常被
+# 重定向到 workspace 子目录)与测试/覆盖率产物;体积可达数百 MB,不入库。
+**/.gocache/
+**/.gomodcache/
+**/.gopath/
+**/.uvcache/
+**/.pytest_cache/
+**/.ruff_cache/
+**/__pycache__/
+**/.coverage
+**/.coverage.*
+vod_extractor/uv.lock
+
 # ----- AI Agent 工作目录 -----
 .workwork/
 
