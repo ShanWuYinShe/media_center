@@ -62,6 +62,11 @@ try:
 except OSError:
     SERVICE_VERSION = "dev"
 
+# 模块级默认值:main() 会在启动时用 global 覆盖为真实版本。此处必须存在,
+# 否则任何未经 main() 的入口(如直接构造 Handler 的测试/嵌入式调用)在
+# /health 上抛 NameError——而 /health 正是容器健康检查端点。
+YTDLP_VERSION = "unknown"
+
 
 def _ytdlp_version():
     try:
