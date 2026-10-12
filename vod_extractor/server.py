@@ -129,13 +129,22 @@ def failure_snapshot():
         }
 
 
+# 错误文案里的撇号可能是 ASCII(')也可能是 Unicode 右单引号(’,U+2019)。
+# yt-dlp 实测输出的是后者,只匹配 ASCII 会让真实的风控文案落进 unknown——
+# 而 bot_check 正是 cookies 失效告警的唯一信号(见 README 监控章节)。
+_PUNCT_NORMALIZE = str.maketrans(
+    {"\u2019": "'", "\u2018": "'", "\u02bc": "'", "\u02b9": "'"}
+)
+
+
 def classify_failure(stderr_text):
     """按 stderr 特征给 yt-dlp 失败归类(小写匹配,容忍文案前后缀变化)。
 
     分类依据是 YouTube/yt-dlp 的真实错误文案;上游改文案时分类会退回
-    unknown,不影响服务可用性。
+    unknown,不影响服务可用性。匹配前先把 Unicode 撇号折叠成 ASCII,
+    避免因排版符号差异漏判(实测 yt-dlp 用的是 U+2019)。
     """
-    low = (stderr_text or "").lower()
+    low = (stderr_text or "").translate(_PUNCT_NORMALIZE).lower()
     if "confirm you're not a bot" in low:
         return "bot_check"
     if "http error 429" in low or "too many requests" in low:

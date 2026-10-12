@@ -522,6 +522,25 @@ class ClassifyFailureTest(unittest.TestCase):
             "geo_blocked",
         )
 
+    def test_bot_check_unicode_apostrophe(self):
+        """回归:yt-dlp 实测输出 U+2019 右单引号(’re),而非 ASCII('re)。
+
+        只匹配 ASCII 会让真实风控文案落进 unknown,而 bot_check 正是
+        cookies 失效告警的唯一信号——2026-10-12 线上实测漏判。
+        """
+        real = (
+            "ERROR: [youtube] abc123: Sign in to confirm you\u2019re not a bot. "
+            "Use --cookies-from-browser or --cookies for the authentication."
+        )
+        self.assertEqual(server.classify_failure(real), "bot_check")
+
+    def test_bot_check_other_apostrophe_variants(self):
+        for apostrophe in ("\u2019", "\u2018", "\u02bc", "\u02b9", "'"):
+            text = f"Sign in to confirm you{apostrophe}re not a bot"
+            self.assertEqual(
+                server.classify_failure(text), "bot_check", f"apostrophe U+{ord(apostrophe):04X}"
+            )
+
     def test_unknown_and_empty(self):
         self.assertEqual(server.classify_failure("some totally different error"), "unknown")
         self.assertEqual(server.classify_failure(""), "unknown")
