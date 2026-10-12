@@ -87,6 +87,15 @@ jobs:
           ANDROID_HOME: /usr/local/lib/android/sdk
         run: ./gradlew :app:testDebugUnitTest --no-daemon
 
+      # Android Lint:此前完全未在 CI 跑,UnsafeOptInUsageError 之外的
+      # 新问题(未使用资源、API 版本误用、manifest 权限等)只能靠人眼发现。
+      # lint.xml 已声明项目级 opt-in 选项,直接跑即可。
+      - name: lint
+        working-directory: media_app
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+        run: ./gradlew :app:lintDebug --no-daemon
+
       # legacy 存档变体此前只在发版脚本（scripts/release-apk.sh）里编译，
       # 编译破坏要到发版才发现，这里做低成本兜底（debug 变体，无 R8）。
       - name: legacy assembleDebug
