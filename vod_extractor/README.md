@@ -4,7 +4,7 @@ Internal HTTP wrapper around `yt-dlp` for resolving public VOD playback metadata
 
 `media_server` calls `POST /extract` on the internal Docker network (via `GET /api/v1/providers/youtube/resolve`, see `media_server/youtube.go`) when resolving YouTube playback URLs for the app. Keeping `yt-dlp` here avoids shipping Python and extractor dependencies in the main media API image.
 
-**Deployment requirement**: YouTube serves bot-check failures ("Sign in to confirm you're not a bot") to datacenter IPs on every player client, so server deployments MUST provide a YouTube cookies file (see `VOD_EXTRACTOR_COOKIES_FILE` below). Without cookies, every extraction fails regardless of `VOD_EXTRACTOR_EXTRACTOR_ARGS`.
+**Deployment requirement**: YouTube serves bot-check failures ("Sign in to confirm you're not a bot") to datacenter IPs on every player client, so server deployments MUST provide a YouTube cookies file for **playback extraction** (see `VOD_EXTRACTOR_COOKIES_FILE` below). Without cookies, every `/extract` call fails regardless of `VOD_EXTRACTOR_EXTRACTOR_ARGS`. Search (`/search`) is **not** affected: yt-dlp's flat `ytsearch` listing page does not trigger the bot check, so search keeps working without cookies (verified in production 2026-10-12).
 
 ## API
 
@@ -13,7 +13,9 @@ Internal HTTP wrapper around `yt-dlp` for resolving public VOD playback metadata
 - `POST /search` with JSON body `{ "query": "...", "limit": 20 }` — YouTube search via
   yt-dlp `ytsearch{N}` with `--flat-playlist` (search results page only, no per-video
   extraction). Shares the Data-API-free public frontend path with regular viewers, so
-  there is no quota; costs a few seconds per call and requires cookies just like /extract.
+  there is no quota; costs a few seconds per call. Unlike /extract, it does **not**
+  require cookies: the flat search-results page is not subject to the bot check
+  (verified in production 2026-10-12 — search succeeded with no cookies present).
   Response is the raw yt-dlp playlist JSON (`entries[]`).
 
 ## Runtime limits

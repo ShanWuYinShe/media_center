@@ -52,9 +52,12 @@ media_server/Dockerfile 与 `.github/workflows/ci.yml` 的同名字段仍一致
   在 Cloudflare 为 `https://media.chaoset.com/healthz` 配置 Health Check
   并接通知渠道。
 - **cookies 失效告警**：vod_extractor `GET /health` 返回 `cookies` 字段
-  （present/readable/age_seconds）。cookies 缺失或 age 异常增大意味着
-  YouTube 搜索与解析即将/已经全功能瘫痪，对其告警（可由外部监控定时
-  打内网 /health 或在 media_server 侧观察 502 率）。
+  （present/readable/age_seconds）与 `failures.counts`（按分类累计，风控为
+  `bot_check`）。cookies 缺失/过期或 age 异常增大意味着 **YouTube 解析**已经瘫痪
+  （`/extract` 返回 502 `bot_check`）；**搜索不受影响**——`/search` 走
+  ytsearch flat 列表页，无 cookies 仍然可用（2026-10-12 线上实测）。
+  告警口径：看 `failures.counts.bot_check` 是否持续增长，而非看搜索成功率。
+  可由外部监控定时打内网 /health，或在 media_server 侧观察 resolve 的 502 率。
 
 ## 运维
 

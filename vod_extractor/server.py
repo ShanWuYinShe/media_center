@@ -96,7 +96,8 @@ class ExtractorFailedError(RuntimeError):
 
     失败分类让"cookies 失效/风控拦截"(bot_check)与普通失败可区分:
     media_server 记日志、/health 汇总计数,cookies 过期从"用户报障才发现"
-    变为可告警。分类依赖 yt-dlp 错误文案,匹配不到回退 unknown。
+    变为可告警。分类依赖 yt-dlp 错误文案(撇号已兼容 U+2019),匹配不到
+    回退 unknown。
     """
 
     def __init__(self, reason, detail=""):
@@ -185,8 +186,9 @@ class Handler(BaseHTTPRequestHandler):
                     "ok": True,
                     "version": SERVICE_VERSION,
                     "ytdlp": YTDLP_VERSION,
-                    # cookies 健康信号:cookies 过期/缺失会让 YouTube 解析与搜索
-                    # 全部失败且不产生主动告警,外部监控靠此字段告警(见 README)。
+                    # cookies 健康信号:cookies 过期/缺失会让 YouTube 解析全部失败
+                    # (/search 走 flat 列表页不受影响),且不产生主动告警,外部监控靠
+                    # 此字段告警(见 README)。
                     "cookies": cookies_health(),
                     # 失败计数(按分类累计):bot_check 持续增长 = cookies 失效/风控
                     # 拦截,外部监控据此告警(见 README 监控章节),不必等用户报障。

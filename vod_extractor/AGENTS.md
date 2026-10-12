@@ -8,7 +8,12 @@
 
 ## 部署硬前提（服务器）
 
-YouTube 对数据中心 IP 的所有 player_client 都触发 "Sign in to confirm you're not a bot"：服务器部署必须放置 YouTube cookies（Netscape 格式）到 `deploy/data/vod/youtube-cookies.txt`（容器只读挂载为 `/config/youtube-cookies.txt`），否则解析与搜索一律失败。优先通过 `VOD_EXTRACTOR_EXTRACTOR_ARGS`（如 `youtube:player_client=tv`）与 cookies 双管齐下；cookies 过期后需重新导出。`GET /health` 返回 `cookies` 字段（present/readable/age_seconds）供外部监控告警。
+YouTube 对数据中心 IP 的**播放解析**触发 "Sign in to confirm you're not a bot"。两个端点的实际影响不同（2026-10-12 线上实测）：
+
+- **解析（`POST /extract`）**：必须放置 YouTube cookies（Netscape 格式）到 `deploy/data/vod/youtube-cookies.txt`（容器只读挂载为 `/config/youtube-cookies.txt`），否则一律 502 `bot_check`。
+- **搜索（`POST /search`）**：走 yt-dlp 的 `ytsearch` flat 列表页，**不触发该风控**，无 cookies 时仍可用（实测 cookies 缺失下连续 3 次搜索均 200 / 20 条，失败计数零增长）。注意这只代表搜索可用，不代表解析可用。
+
+优先通过 `VOD_EXTRACTOR_EXTRACTOR_ARGS`（如 `youtube:player_client=tv`）与 cookies 双管齐下；cookies 过期后需重新导出。`GET /health` 返回 `cookies` 字段（present/readable/age_seconds）供外部监控告警，`failures.counts` 按分类累计——cookies 缺失时 `bot_check` 会持续增长（分类匹配已兼容 yt-dlp 输出的 Unicode 撇号 U+2019）。
 
 ## 约束
 
