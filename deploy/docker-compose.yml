@@ -104,9 +104,6 @@ services:
         condition: service_started
     cap_drop:
       - ALL
-    tmpfs:
-      # Dockerfile 声明 VOLUME /cache 但服务未使用；tmpfs 覆盖避免匿名卷累积
-      - /cache
     environment:
       - TZ=Asia/Shanghai
       - HOST=0.0.0.0

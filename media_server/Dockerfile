@@ -45,7 +45,10 @@ COPY --from=builder /out/media_server /app/media_server
 ARG GIT_VERSION=dev
 LABEL org.opencontainers.image.revision="${GIT_VERSION}"
 
-VOLUME ["/config", "/cache", "/app/data"]
+# /config 与 /app/data 由 compose 只读挂载/持久卷;/cache 无代码引用,
+# 不再声明为 VOLUME——声明未使用的卷会在每次容器重建时产生匿名卷累积
+# (此前 compose 被迫用 tmpfs 覆盖来规避)。
+VOLUME ["/config", "/app/data"]
 EXPOSE 8787
 
 # 编排层感知服务假死(Go 死锁/卡住):/health 端点在 main.go ServeHTTP 提供。
