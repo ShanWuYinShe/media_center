@@ -42,8 +42,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.ui.components.TvIconButton
+import androidx.compose.ui.graphics.Brush
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.DividerGray
+import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.TextSecondary
 import com.example.mediacenter.ui.theme.UiIcons
@@ -66,13 +68,19 @@ internal fun ControlsOverlay(
 ) {
     val currentQn = playbackResult.options.firstOrNull()?.qn
     Box(modifier = modifier.background(Color.Black.copy(alpha = 0.55f))) {
-        // 顶部:标题 + 返回
+        // 顶部:标题 + 返回。渐变从屏幕顶向内容区渐隐,避免单色半透黑
+        // 在 OLED 暗场上形成生硬的"色带"割裂画面。
         Row(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.6f))
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.Black.copy(alpha = 0.75f),
+                        1f to Color.Transparent,
+                    ),
+                )
+                .padding(horizontal = ScreenHorizontalPadding, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -88,13 +96,19 @@ internal fun ControlsOverlay(
                 Icon(UiIcons.ArrowBack, contentDescription = null, tint = TextPrimary)
             }
         }
-        // 底部:进度 + 播放控制 + 分P + 清晰度
+        // 底部:进度 + 播放控制 + 分P + 清晰度。渐变自下而上渐隐,
+        // 控制信息贴边处最深,保证 10ft 对比度。
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.65f))
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        1f to Color.Black.copy(alpha = 0.8f),
+                    ),
+                )
+                .padding(horizontal = ScreenHorizontalPadding, vertical = 12.dp),
         ) {
             // 进度条与时间同行(Row 内横向 weight)。此前 Slider 在 Column 里用
             // vertical weight,会把整个底栏撑满全屏高度、遮住整幅画面——已修复。

@@ -31,11 +31,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.ui.theme.AppleBlue
+import com.example.mediacenter.ui.theme.CardSpacing
 import com.example.mediacenter.ui.theme.DividerGray
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.home.VideoCard
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.player.SelectChip
+import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.TextTertiary
 import com.example.mediacenter.util.NetworkRestoreEffect
@@ -62,7 +64,7 @@ fun SearchScreen(
         if (state.error != null && state.query.length >= 2) viewModel.search(state.query)
     })
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = ScreenHorizontalPadding, vertical = 24.dp)) {
         // 进入搜索页即聚焦输入框：遥控器第一下 OK 直接弹出 IME，不用先找输入框
         val searchFocus = remember { FocusRequester() }
         LaunchedEffect(Unit) { searchFocus.requestFocus() }
@@ -115,8 +117,8 @@ fun SearchScreen(
                 // GridCells.Adaptive 让卡片宽度自适应 720p/1080p/4K。
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(280.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(CardSpacing),
+                    verticalArrangement = Arrangement.spacedBy(CardSpacing),
                     contentPadding = PaddingValues(bottom = 32.dp),
                     // 返回搜索结果时焦点回到原结果卡
                     modifier = Modifier.fillMaxSize().focusRestorer(),

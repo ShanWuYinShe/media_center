@@ -48,6 +48,7 @@ import com.example.mediacenter.ui.components.TvIconButton
 import com.example.mediacenter.ui.components.TvScrollableText
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.CardGray
+import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
 import com.example.mediacenter.ui.update.UpdateDialog
 import com.example.mediacenter.ui.update.UpdateDialogState
 import com.example.mediacenter.ui.theme.TextPrimary
@@ -168,7 +169,7 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenHorizontalPadding, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TvIconButton(onClick = onBack, contentDescription = "返回") {
@@ -268,7 +269,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                         text = message,
                         color = TextTertiary,
                         fontSize = 13.sp,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(horizontal = ScreenHorizontalPadding, vertical = 8.dp),
                     )
                 }
             }
@@ -288,14 +289,14 @@ private fun SectionTitle(text: String) {
         text = text,
         color = TextTertiary,
         fontSize = 13.sp,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        modifier = Modifier.padding(horizontal = ScreenHorizontalPadding, vertical = 12.dp),
     )
 }
 
 @Composable
 private fun InfoRow(label: String, value: String) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenHorizontalPadding, vertical = 6.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -316,7 +317,7 @@ private fun ActionRow(label: String, enabled: Boolean = true, onClick: () -> Uni
     Button(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).requiredHeight(48.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenHorizontalPadding, vertical = 6.dp).requiredHeight(48.dp),
         colors = ButtonDefaults.colors(
             containerColor = CardGray,
             focusedContainerColor = AppleBlue,

@@ -49,6 +49,8 @@ import com.example.mediacenter.ui.player.SelectChip
 import com.example.mediacenter.ui.components.TvIconButton
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.CardGray
+import com.example.mediacenter.ui.theme.CardSpacing
+import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.util.NetworkRestoreEffect
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -104,7 +106,7 @@ fun CategoryVideosScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenHorizontalPadding, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TvIconButton(onClick = onBack, contentDescription = "\u8FD4\u56DE") {
@@ -122,7 +124,7 @@ fun CategoryVideosScreen(
 
         // 时长筛选行:全部 / 短片 / 中片 / 长片。
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenHorizontalPadding),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             DurationFilter.entries.forEach { filter ->
@@ -133,7 +135,7 @@ fun CategoryVideosScreen(
                 )
             }
         }
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
         when {
             state.isLoadingInitial -> LoadingIndicator(modifier = Modifier.fillMaxSize())
@@ -178,9 +180,9 @@ private fun CategoryGrid(
     LazyVerticalGrid(
         columns = GridCells.Adaptive(280.dp),
         state = gridState,
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(start = ScreenHorizontalPadding, end = ScreenHorizontalPadding, bottom = 32.dp),
+        horizontalArrangement = Arrangement.spacedBy(CardSpacing),
+        verticalArrangement = Arrangement.spacedBy(CardSpacing),
         // 返回时焦点回到离开前的卡片（配合滚动位置保存）
         modifier = Modifier.fillMaxSize().focusRestorer(),
     ) {
