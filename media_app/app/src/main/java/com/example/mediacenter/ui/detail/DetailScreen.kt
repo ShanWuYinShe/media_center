@@ -66,21 +66,23 @@ fun DetailScreen(
 ) {
     BackHandler(onBack = onBack)
 
-    // Apple TV 式左右分栏:左封面垂直居中,右侧信息+操作区独立滚动。
+    // Apple TV 式左右分栏:左封面顶对齐,右侧信息+操作区独立滚动。
     // 单列长滚动会把播放按钮推到首屏之外,10ft 场景下进入详情页应一眼
     // 看到封面与"播放",一屏完成"看什么/看不看"的决策。
+    // 右列 fillMaxHeight + 内部滚动,首行标题贴顶;封面若垂直居中,会与标题
+    // 错开近半张图的高度、形成两条视觉基线,故与标题同顶线对齐。
     Row(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = ScreenHorizontalPadding, vertical = 36.dp),
         horizontalArrangement = Arrangement.spacedBy(36.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.Top,
     ) {
         AsyncImage(
             model = video.thumbnailUrl,
             contentDescription = video.title,
             // 左列封面占 45% 宽、16:9、圆角;源图为横版封面,裁成竖版海报
-            // 会切掉两侧主体,故保持横版并垂直居中。
+            // 会切掉两侧主体,故保持横版并与右侧标题同顶线。
             modifier = Modifier.weight(0.45f).aspectRatio(16f / 9f).clip(CardShape),
             contentScale = ContentScale.Crop,
             // 图片加载中/失败时以玻璃灰占位

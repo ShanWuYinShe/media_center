@@ -20,6 +20,7 @@ import com.example.mediacenter.data.AppUpdateInfo
 import com.example.mediacenter.ui.components.TvScrollableText
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.CardGray
+import com.example.mediacenter.ui.theme.DividerGray
 import com.example.mediacenter.ui.theme.ErrorRed
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.TextSecondary
@@ -98,7 +99,10 @@ fun UpdateDialog(
                             progress = { state.progress.coerceIn(0f, 1f) },
                             modifier = Modifier.fillMaxWidth(),
                             color = AppleBlue,
-                            trackColor = TextSecondary,
+                            // 轨道是"未完成"的底衬,不应与填充色抢视觉;
+                            // 用项目语义的 DividerGray(≈M3 默认轨道色档位),
+                            // 不用文本灰 TextSecondary。
+                            trackColor = DividerGray,
                         )
                     }
                     is UpdateDialogState.Failed -> Text(state.message, color = ErrorRed)

@@ -2,6 +2,9 @@ package com.example.mediacenter.ui
 
 import android.net.Uri
 import android.os.Bundle
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.navigation.NavType
@@ -66,7 +69,17 @@ private val videoSummaryType = object : NavType<VideoSummary>(isNullableAllowed 
 @Composable
 fun AppNavigation() {
     val navController = rememberNavController()
-    NavHost(navController = navController, startDestination = Routes.HOME) {
+    // 转场:NavHost 默认是 700ms 交叉淡入淡出,10ft 观看距离下偏拖沓,
+    // 换页时上一屏会明显压住下一屏。收敛为短淡入淡出并显式给出
+    // popEnter/popExit,保证进入与返回同节奏,保持 TV 上克制的动效。
+    NavHost(
+        navController = navController,
+        startDestination = Routes.HOME,
+        enterTransition = { fadeIn(tween(220)) },
+        exitTransition = { fadeOut(tween(180)) },
+        popEnterTransition = { fadeIn(tween(220)) },
+        popExitTransition = { fadeOut(tween(180)) },
+    ) {
         composable(Routes.HOME) {
             HomeScreen(
                 onVideoClick = { video -> navController.navigate(Routes.detail(video)) },
