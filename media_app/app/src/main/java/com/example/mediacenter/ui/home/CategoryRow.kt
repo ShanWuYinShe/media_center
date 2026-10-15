@@ -20,6 +20,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.ui.theme.AppleBlue
+import com.example.mediacenter.ui.theme.CardSpacing
+import com.example.mediacenter.ui.theme.RowVerticalSpacing
+import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.TextTertiary
 
@@ -35,9 +38,9 @@ fun CategoryRow(
     progressById: Map<String, Float> = emptyMap(),
     loadFailed: Boolean = false,
 ) {
-    Column(modifier = modifier.padding(vertical = 12.dp)) {
+    Column(modifier = modifier.padding(vertical = RowVerticalSpacing)) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenHorizontalPadding),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -66,12 +69,12 @@ fun CategoryRow(
                 text = if (loadFailed) "\u672C\u5206\u7C7B\u52A0\u8F7D\u5931\u8D25\uFF0C\u8BF7\u5237\u65B0\u91CD\u8BD5" else "\u672C\u5206\u7C7B\u6682\u65E0\u5185\u5BB9",
                 color = if (loadFailed) AppleBlue else TextTertiary,
                 style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                modifier = Modifier.padding(horizontal = ScreenHorizontalPadding, vertical = 8.dp),
             )
         } else {
             LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(horizontal = ScreenHorizontalPadding),
+                horizontalArrangement = Arrangement.spacedBy(CardSpacing),
                 // 焦点恢复：从详情/播放页返回时焦点落回离开前的那张卡片，
                 // 而不是行首（TV 上丢失浏览位置是高频烦恼）。
                 modifier = Modifier.focusRestorer(),

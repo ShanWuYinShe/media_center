@@ -142,7 +142,10 @@ fun HomeScreen(
         }
         when {
             state.isLoading -> item { LoadingIndicator() }
-            state.error != null -> item { ErrorView(message = state.error!!, onRetry = { viewModel.loadHome() }) }
+            state.error != null -> item {
+                // 全屏错误层必须给遥控器一个明确的焦点落点,否则方向键全部落空
+                ErrorView(message = state.error!!, onRetry = { viewModel.loadHome() }, autoFocusRetry = true)
+            }
             state.categories.isEmpty() -> item {
                 ErrorView(message = "\u6682\u65E0\u5206\u7C7B\u6570\u636E")
             }

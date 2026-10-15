@@ -9,12 +9,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,15 +67,26 @@ fun VideoCard(
                     .height(72.dp)
                     .align(Alignment.BottomStart)
                     .background(
+                        // 三段式非线性渐变:封面底部为亮色时,单向渐变的过渡带
+                        // 仍会吞掉第二行标题;中段提前压暗、底端加深,对比更稳。
                         Brush.verticalGradient(
                             0f to Color.Transparent,
-                            1f to Color.Black.copy(alpha = 0.7f),
+                            0.45f to Color.Black.copy(alpha = 0.45f),
+                            1f to Color.Black.copy(alpha = 0.85f),
                         ),
                     ),
             )
             Text(
                 text = video.title,
                 color = TextPrimary,
+                style = LocalTextStyle.current.copy(
+                    // 10ft 距离下微弱投影:标题叠在亮色封面上仍保持可读
+                    shadow = Shadow(
+                        color = Color.Black.copy(alpha = 0.6f),
+                        offset = Offset(0f, 2f),
+                        blurRadius = 8f,
+                    ),
+                ),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.align(Alignment.BottomStart).padding(8.dp),
