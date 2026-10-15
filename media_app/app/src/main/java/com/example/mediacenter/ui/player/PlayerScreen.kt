@@ -48,13 +48,15 @@ fun PlayerScreen(
                     message = "无可用播放地址",
                     onRetry = viewModel::resolvePlayback,
                     modifier = Modifier.fillMaxSize(),
+                    // 全屏错误层必须有明确的遥控器焦点落点(与首页一致)
+                    autoFocusRetry = true,
                 )
             }
         }
         when {
             state.isLoading && result == null -> LoadingIndicator()
             state.error != null && result == null -> ErrorView(
-                message = state.error!!,
+                message = state.error!!, autoFocusRetry = true,
                 onRetry = { viewModel.resolvePlayback() },
                 modifier = Modifier.fillMaxSize(),
             )
