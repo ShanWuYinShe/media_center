@@ -5,8 +5,11 @@ import android.os.Bundle
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Modifier
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -19,6 +22,7 @@ import com.example.mediacenter.ui.home.HomeScreen
 import com.example.mediacenter.ui.player.PlayerScreen
 import com.example.mediacenter.ui.search.SearchScreen
 import com.example.mediacenter.ui.settings.SettingsScreen
+import com.example.mediacenter.ui.theme.BackgroundDark
 import kotlinx.serialization.json.Json
 
 object Routes {
@@ -72,9 +76,13 @@ fun AppNavigation() {
     // 转场:NavHost 默认是 700ms 交叉淡入淡出,10ft 观看距离下偏拖沓,
     // 换页时上一屏会明显压住下一屏。收敛为短淡入淡出并显式给出
     // popEnter/popExit,保证进入与返回同节奏,保持 TV 上克制的动效。
+    // 底色:交叉淡化中段两屏都半透明,不铺底会透出宿主 Activity 的主题
+    // 窗底(Theme.Material 默认深灰,并非设计基线 #111111);各页面根部都
+    // 未自绘背景,故在 NavHost 统一铺 BackgroundDark,静置底色一并归位。
     NavHost(
         navController = navController,
         startDestination = Routes.HOME,
+        modifier = Modifier.fillMaxSize().background(BackgroundDark),
         enterTransition = { fadeIn(tween(220)) },
         exitTransition = { fadeOut(tween(180)) },
         popEnterTransition = { fadeIn(tween(220)) },
