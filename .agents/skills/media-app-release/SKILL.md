@@ -16,7 +16,7 @@ description: media_app 版本号与 APK 发版部署流程。触发：发版、�
 - 无 tag 时 fallback 到 `0.1.0-dev`（不阻断构建）。
 - 发版构建命令：在 `media_app/` 下执行 `./gradlew :app:assembleRelease --no-daemon`（在 tag 上构建即得干净版本号）。
 
-注意：tag 要打在 media_center 仓库（非外层 `workwork` 仓库）；版本号与外层仓库的提交/tag 无关。
+注意：tag 必须打在 media_center 本仓库（`ShanWuYinShe/media_center`），不要打到 workwork 聚合仓或其它仓库；版本号只由本仓库的 `v*` tag 派生。
 
 ## 部署 APK
 
