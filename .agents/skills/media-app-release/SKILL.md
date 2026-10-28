@@ -9,12 +9,12 @@ description: media_app 版本号与 APK 发版部署流程。触发：发版、�
 
 打 tag 通用流程（定 SemVer → 合并 → 主工作树打 tag 推送 → 构建）见全局 `git-workflow`「版本号以 tag 为源」；本 skill 只记 Android 特有部分。
 
-版本号派生（`build.gradle.kts` 构建期自动读取，禁止手改）：`versionName` / `versionCode` 由最近 `v*` tag 自动派生，绝不手动改 versionName/versionCode。
+版本号派生（`media_app/app/build.gradle.kts` 构建期自动读取，禁止手改）：`versionName` / `versionCode` 由最近 `v*` tag 自动派生，绝不手动改 versionName/versionCode。
 
 - `versionName`：取 tag（`v1.1.0` → `1.1.0`）；tag 后有新 commit 则带 `-dev.N` 后缀（如 `1.1.0-dev.3`）。
 - `versionCode`：从 SemVer 派生 `major*100000 + minor*1000 + patch`（见 `semverToCode`，忽略 dev 后缀），整数比较可靠。容量：patch 0..999、minor 0..99。
 - 无 tag 时 fallback 到 `0.1.0-dev`（不阻断构建）。
-- 发版构建命令：`./gradlew :app:assembleRelease --no-daemon`（在 tag 上构建即得干净版本号）。
+- 发版构建命令：在 `media_app/` 下执行 `./gradlew :app:assembleRelease --no-daemon`（在 tag 上构建即得干净版本号）。
 
 注意：tag 要打在 media_center 仓库（非外层 `workwork` 仓库）；版本号与外层仓库的提交/tag 无关。
 
