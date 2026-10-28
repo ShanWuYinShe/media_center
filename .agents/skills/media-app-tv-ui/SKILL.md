@@ -5,9 +5,7 @@ description: media_app TV 界面专属设计约定：Apple TV 视觉基线、焦
 
 # media_app TV UI/UX 设计约定（项目专属）
 
-**通用约束**（可操作面积用 `requiredHeight`/`requiredSize` 不被父布局压缩、长文本 `maxLines`+`TextOverflow.Ellipsis` 且不挤压主操作区、图标不用 Unicode 字符、屏幕级返回用 `BackHandler`、焦点切换用 `FocusRequester`/`focusProperties` 而非空间猜测、焦点态与选中态语义分离）**见用户级 skill `mobile-ui-conventions`，本文件不复述。**
-
-以下为本项目特有的视觉与交互设计：
+**通用约束**（可操作面积、长文本截断、图标与无障碍、系统级返回、焦点切换与焦点态语义）**见用户级 skill `mobile-ui-conventions`，本文件不复述**；以下只记本项目特有的视觉与交互设计。
 
 - **Apple TV 视觉基线**：OLED 深色背景、玻璃灰卡片、Apple Blue 作为**唯一强调色**；文字层级保持 Primary/Secondary/Tertiary 灰阶，不新增不一致的强调色。
 - **TV 焦点态**：焦点态统一使用 Apple Blue 背景 + 白色文字/图标 + `GlassBorderFocused` 近白外框；`selected` 只表达当前分类/选项，**不应强过焦点态**。
