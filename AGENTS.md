@@ -15,7 +15,7 @@
   - **硬前提**：YouTube 对数据中心 IP 的**播放解析**触发 "Sign in to confirm you're not a bot"，故解析必须放置 cookies；**搜索**走 ytsearch flat 列表页不受影响，无 cookies 仍可用（2026-10-12 线上实测）。cookies 路径与挂载点、`VOD_EXTRACTOR_EXTRACTOR_ARGS`、过期重导出等运维细节以 `vod_extractor/AGENTS.md`「部署硬前提」为唯一维护处，此处不再复制。
 - `deploy/` — 独立站编排（media.chaoset.com）：nginx + media_server + vod_extractor 三服务自洽 compose，版本唯一来源 `deploy/versions.env`；操作细节见 `deploy/README.md`。
 
-App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部署方式。构建期未设置时回落到内置默认 `https://media.chaoset.com/api/v1`（独立站规范前缀）；旧 `https://yinghuoren.com/api/media`（workwork 聚合栈过渡别名）经其过渡反代仍可用，两种前缀在服务端行为一致（见 `media_server/API.md` 路径前缀约定）。
+App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部署方式。构建期未设置时回落到内置默认 `https://media.chaoset.com/api/v1`（独立站规范前缀）；旧 `https://yinghuoren.com/api/media`（workwork 聚合栈过渡别名）**已不再由 workwork 反代**：workwork 侧 nginx 已删除该 location，旧前缀改由 **CF 边缘 308 重定向**到 `media.chaoset.com/api/*`（2026-10-31 复核：`workwork/services/admin/configs/nginx.conf.tmpl` 注释明确「本机不再反代，旧路径落到 404 兜底」；`media_server` 代码里无 `/api/media` 前缀处理）。排障时查 CF 规则，不要查 nginx。
 
 ## media_app（详见 media_app/AGENTS.md 与 skill）
 

@@ -11,7 +11,7 @@ API 约定见仓库根 AGENTS.md「API 约定」：业务接口规范前缀 `/ap
    前缀；与 workwork 的 NGINX_IPV6/XRAY_IPV6 同池不同址）。写入 `.env` 的
    `MEDIA_IPV6`，并在 Cloudflare 加 `media.chaoset.com` AAAA 记录指向该地址
    （DNS 操作须在服务器上执行——CF token 有来源 IP 白名单；token 归档在
-   `~/work/mac-migration-backup/cf_token_and_cert/`）。
+   `~/work/dogod/cf_token_and_cert/`）。
 2. **证书**：`cert/` 放 `server_cert.pem` / `server_cert.key`（已有
    `*.chaoset.com` 通配符 Origin 证书，有效期至 2041-09，备份同上路径，无需重签）
    与 `cloudflare-origin-pull.pem`（CF Origin Pull CA，同在备份）。
