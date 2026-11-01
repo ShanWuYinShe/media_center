@@ -41,8 +41,9 @@ const (
 	youtubeSearchLimit = 20
 )
 
-// resolve 端到端超时:vod_extractor 自身 30s 超时,留 10s 余量给网络与 JSON 解析。
-const youtubeResolveTimeout = 40 * time.Second
+// resolve 端到端超时:vod_extractor 自身 60s 超时(Deno 求解签名 + PO Token
+// 生成冷启动实测 25–30s),留 10s 余量给网络与 JSON 解析。
+const youtubeResolveTimeout = 70 * time.Second
 
 // search 端到端超时:yt-dlp flat 模式抓搜索结果页通常数秒,30s 覆盖慢网。
 const youtubeSearchTimeout = 30 * time.Second

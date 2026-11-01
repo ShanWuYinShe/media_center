@@ -24,9 +24,10 @@ import okhttp3.Request
 class YouTubeApi(
     private val mediaApi: MediaApi,
     private val client: OkHttpClient = AppHttpClient.newBuilder()
-        // 解析代理会等 vod_extractor 跑完 yt-dlp(秒级),15s 的目录超时不够。
+        // 解析代理会等 vod_extractor 跑完 yt-dlp + Deno 挑战求解 + PO Token；
+        // 冷启动实测 25–30s，服务端超时 70s，这里留到 90s。
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(45, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
         .build(),
     private val json: Json = Json {
         ignoreUnknownKeys = true

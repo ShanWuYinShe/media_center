@@ -230,7 +230,7 @@ func main() {
 // apiTimeout 是普通 API 路由的超时上限。http.Server.WriteTimeout 之所以置空,
 // 是为了让大文件下载(/api/app/download)不被砍断;这里用 TimeoutHandler 把超时
 // 保护精确施加在 API 路由上,下载端点在 ServeHTTP 里优先匹配、绕过此包裹。
-const apiTimeout = 60 * time.Second
+const apiTimeout = 75 * time.Second
 
 // apiV1Prefix 是独立站(media.chaoset.com)部署的对外规范业务前缀
 // (web-service-conventions:业务接口一律 /api/v1/)。内部路由仍以 /api 书写,
