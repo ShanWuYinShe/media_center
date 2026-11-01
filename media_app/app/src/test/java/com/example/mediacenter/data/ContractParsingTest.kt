@@ -131,6 +131,29 @@ class ContractParsingTest {
     }
 
     @Test
+    fun `解析合集队列响应`() {
+        val resp = json.decodeFromString<VideoCollectionResponse>(
+            "{\"collection\":{\"id\":\"6435849\",\"title\":\"大熊DOTA\",\"total\":2}," +
+                "\"currentIndex\":0,\"items\":[{\"id\":\"BV1a\",\"title\":\"EP1\"}," +
+                "{\"id\":\"BV1b\",\"title\":\"EP2\"}]}",
+        )
+        assertEquals("6435849", resp.collection!!.id)
+        assertEquals("大熊DOTA", resp.collection!!.title)
+        assertEquals(0, resp.currentIndex)
+        assertEquals(listOf("BV1a", "BV1b"), resp.items!!.map { it.id })
+    }
+
+    @Test
+    fun `合集为空时解析为 null 与空数组`() {
+        val resp = json.decodeFromString<VideoCollectionResponse>(
+            "{\"collection\":null,\"currentIndex\":-1,\"items\":[]}",
+        )
+        assertNull(resp.collection)
+        assertEquals(-1, resp.currentIndex)
+        assertTrue(resp.items!!.isEmpty())
+    }
+
+    @Test
     fun `youtube resolve 解析音视频分离字段`() {
         // 1080P+ 走 DASH:视频轨 url + 独立 audioUrl/audioMimeType
         val resp = json.decodeFromString<YouTubeResolveResponse>(

@@ -65,6 +65,23 @@ data class SearchResponse(
     val nextPageToken: String? = null,
 )
 
+// 合集(如 B 站 ugc_season)元信息;total 是已审核剧集数量。
+@Serializable
+data class VideoCollectionInfo(
+    val id: String,
+    val title: String = "",
+    val total: Int = 0,
+)
+
+// /providers/{provider}/videos/{id}/collection 的响应:
+// items 只含已审核剧集,currentIndex 是当前视频在 items 中的下标(-1=不在队列)。
+@Serializable
+data class VideoCollectionResponse(
+    val collection: VideoCollectionInfo? = null,
+    val currentIndex: Int = -1,
+    val items: List<VideoSummary>? = null,
+)
+
 // PlaybackOption 表示一条真实可播放的流(BilibiliApi 按指定 qn 解析后产出;
 // YouTube 由 server 解析后一次返回全部清晰度档位,见 YouTubeApi)。
 // 每个选项的 url 都是对应 qn 的实际流地址;B 站切清晰度需按新 qn 重新解析,

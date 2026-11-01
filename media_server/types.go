@@ -54,6 +54,22 @@ type VideosResponse struct {
 // 子串匹配(标题/简介/作者),跨分类去重。youtube 实时搜索端点
 // (/api/providers/youtube/search)复用本结构;Total 为 int64 是因为该端点透传
 // YouTube 的 pageInfo.totalResults,本地目录搜索的 total 在传入处做转换。
+// VideoCollectionInfo 是合集元信息;Total 是“已审核剧集”的数量,不是来源
+// 合集的全量集数(未过审的剧集不会出现在播放队列里)。
+type VideoCollectionInfo struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Total int    `json:"total"`
+}
+
+// VideoCollectionResponse 是 /providers/{provider}/videos/{id}/collection 的响应:
+// Items 只含已审核剧集,CurrentIndex 为当前视频在 Items 中的下标(-1 表示不在队列)。
+type VideoCollectionResponse struct {
+	Collection   *VideoCollectionInfo `json:"collection"`
+	CurrentIndex int                  `json:"currentIndex"`
+	Items        []VideoSummary       `json:"items"`
+}
+
 type SearchResponse struct {
 	Query         string         `json:"query"`
 	Total         int64          `json:"total"`

@@ -19,6 +19,8 @@ import kotlinx.coroutines.launch
 
 data class PlayerUiState(
     val playbackResult: PlaybackResult? = null,
+    // 服务端下发的合集队列(仅 approved 剧集);无合集/加载失败为 null。
+    val collection: PlaybackCollection? = null,
     val isLoading: Boolean = true,
     val error: String? = null,
 )
@@ -38,7 +40,32 @@ class PlayerViewModel(
     // 解析任务:快速连续切换清晰度/分P时取消旧的,避免旧响应覆盖新选择
     private var resolveJob: Job? = null
 
-    init { resolvePlayback() }
+    init {
+        resolvePlayback()
+        loadCollection()
+    }
+
+    // 合集队列与播放解析并行加载:合集失败绝不能影响视频播放/解析。
+    private fun loadCollection() {
+        viewModelScope.launch {
+            try {
+                // catalog 的多P条可能是 bvid_pN,合集关系按 base bvid 存。
+                val lookupID = if (repository.currentProvider == "bilibili") {
+                    parsePageId(videoId).first
+                } else {
+                    videoId
+                }
+                val collection = playbackCollectionFrom(repository.collectionFor(lookupID))
+                if (collection != null) {
+                    _uiState.value = _uiState.value.copy(collection = collection)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.w("Player", "load collection failed: ${e.message}", e)
+            }
+        }
+    }
 
     fun resolvePlayback() = launch { resolve(currentQn, currentPage) }
 

@@ -79,6 +79,11 @@ class MediaApi(
         )
     }
 
+    /** 某视频所在合集的“已审核剧集”播放队列;不在合集时 collection 为 null。 */
+    suspend fun videoCollection(provider: String, videoId: String): VideoCollectionResponse = get(
+        pathSegments = listOf("providers", provider, "videos", videoId, "collection"),
+    )
+
     /** 服务端搜索(approved 目录,按 provider 过滤,跨分类去重排序)。 */
     suspend fun search(
         query: String,

@@ -140,6 +140,13 @@ fun AppNavigation() {
                 videoTitle = title,
                 initialPage = page,
                 onBack = { navController.popBackStack() },
+                onNextVideo = { next ->
+                    // 自动连播替换当前播放页而不是压栈:返回时回到进入播放器
+                    // 之前的详情/首页,而不是倒着退回上一集。
+                    navController.navigate(Routes.player(next.id, next.title, 0)) {
+                        popUpTo(backStackEntry.destination.id) { inclusive = true }
+                    }
+                },
             )
         }
         composable(Routes.SEARCH) {

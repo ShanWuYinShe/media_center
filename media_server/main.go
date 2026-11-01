@@ -430,6 +430,8 @@ func (s *mediaServer) handleProviderRoute(w http.ResponseWriter, r *http.Request
 		s.handleProviderCategories(w, r, provider)
 	case len(parts) == 4 && parts[1] == "categories" && parts[3] == "videos":
 		s.handleProviderCategoryVideos(w, r, provider, parts[2])
+	case len(parts) == 4 && parts[1] == "videos" && parts[3] == "collection":
+		s.handleVideoCollection(w, r, provider, parts[2])
 	// youtube 实时端点:搜索与播放解析(均代理 vod_extractor),见 youtube.go。
 	case provider == "youtube" && len(parts) == 2 && parts[1] == "search":
 		s.handleYouTubeSearch(w, r)
@@ -438,6 +440,35 @@ func (s *mediaServer) handleProviderRoute(w http.ResponseWriter, r *http.Request
 	default:
 		s.writeError(w, &apiError{Status: http.StatusNotFound, Code: "NOT_FOUND", Message: "请求的资源不存在。"})
 	}
+}
+
+// handleVideoCollection 返回某视频所在合集的“已审核剧集”播放队列。
+// 未入合集/合集内没有已审核剧集时返回 collection=null + 空 items(200),
+// 让 App 静默退化为不连播,而不是把正常视频当成错误。
+func (s *mediaServer) handleVideoCollection(w http.ResponseWriter, r *http.Request, provider, videoID string) {
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	resp := VideoCollectionResponse{CurrentIndex: -1, Items: []VideoSummary{}}
+	videoID = strings.TrimSpace(videoID)
+	if s.catalog == nil || videoID == "" {
+		s.writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	queue, ok, err := s.catalog.CollectionForVideo(provider, videoID)
+	if err != nil {
+		log.Printf("collection for video provider=%s id=%s: %v", provider, videoID, err)
+		s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"})
+		return
+	}
+	if !ok {
+		s.writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	resp.Collection = &VideoCollectionInfo{ID: queue.ID, Title: queue.Title, Total: len(queue.Items)}
+	resp.CurrentIndex = queue.CurrentIndex
+	for _, cv := range queue.Items {
+		resp.Items = append(resp.Items, s.summaryFromCatalogVideo(cv))
+	}
+	s.writeJSON(w, http.StatusOK, resp)
 }
 
 // handleProviderCategories 返回某 provider 有 approved 视频的分类列表。

@@ -516,3 +516,51 @@ func TestInternalReviewFlow(t *testing.T) {
 		t.Fatalf("review missing: want 404, got %d", w.Code)
 	}
 }
+
+func TestInternalCollectionsReplaceAndExport(t *testing.T) {
+	s, c := newInternalTestServer(t, "secret")
+	seedTestMember(t, c, "movies", "bilibili", "BV1ep1", "EP1", 10)
+	seedTestMember(t, c, "movies", "bilibili", "BV1ep2", "EP2", 10)
+	if _, err := c.SetMemberStatus("movies", "bilibili", "BV1ep1", "approved", "tester"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+
+	payload := map[string]any{
+		"provider": "bilibili",
+		"collections": []map[string]any{
+			{"id": "season-1", "title": "合集", "videoIds": []string{"BV1ep1", "BV1ep2"}},
+		},
+	}
+	w := doInternal(s, http.MethodPost, "/internal/catalog/collections", "secret", payload)
+	if w.Code != http.StatusOK {
+		t.Fatalf("collections: %d (%s)", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"collections":1`) || !strings.Contains(w.Body.String(), `"members":2`) {
+		t.Fatalf("counts body = %s", w.Body.String())
+	}
+
+	// 未授权/缺 provider 必须拒绝。
+	if w := doInternal(s, http.MethodPost, "/internal/catalog/collections", "", payload); w.Code != http.StatusUnauthorized {
+		t.Fatalf("no token: got %d", w.Code)
+	}
+	if w := doInternal(s, http.MethodPost, "/internal/catalog/collections", "secret", map[string]any{}); w.Code != http.StatusBadRequest {
+		t.Fatalf("missing provider: got %d", w.Code)
+	}
+
+	// overview 带合集计数
+	w = doInternal(s, http.MethodGet, "/internal/catalog/overview", "secret", nil)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"collections":1`) {
+		t.Fatalf("overview = %d %s", w.Code, w.Body.String())
+	}
+
+	// export 带合集快照
+	w = doInternal(s, http.MethodGet, "/internal/catalog/export", "secret", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("export: %d", w.Code)
+	}
+	for _, want := range []string{`"collections"`, `"id":"season-1"`, `"videoIds":["BV1ep1","BV1ep2"]`} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("export missing %s: %s", want, w.Body.String())
+		}
+	}
+}

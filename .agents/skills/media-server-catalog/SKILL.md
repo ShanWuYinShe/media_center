@@ -31,3 +31,10 @@ description: media_server catalog 分类数据与审核体系。触发：改分�
 - 1080P+ 常见形态是"纯视频 DASH 轨 + 纯音频轨"：`/providers/youtube/resolve` 的 option 会带 `audioUrl`/`audioMimeType`，App 端 `PlaybackMediaSourceFactory` 读 MediaItem extras 后用 `MergingMediaSource` 合流（MediaController 不能直接传 MediaSource）。
 - 每档高度只留一条候选：H.264 > VP9 > AV1，其次帧率，再优先合一 progressive/HLS，最后码率；没有音轨的纯视频格式直接丢弃（不能返回无声视频）。
 - resolve 结果进程内缓存（成功 15min / 失败 5min），同 videoID 在途请求用单飞合并；负缓存判定必须用 failure 标志，不能看 reason 是否为空。
+
+## 合集与自动连播（2026-11-01）
+
+- 合集表：`collections` + `collection_members`（provider/collection_id/native_id/position），只存分组关系，不新增视频、不改审核状态。
+- 写入：`POST /internal/catalog/collections` 全量替换某 provider 的合集快照（内部令牌）；公开接口 `GET /providers/{p}/videos/{id}/collection` 只返回其中 `approved` 剧集，按合集列表顺序，`currentIndex=-1` 表示当前视频不在队列。
+- 采集：`scripts/sync-bilibili-collections.py` 从 B 站 `view.ugc_season` 提取有序剧集；服务器 IP 被 B 站风控，脚本在可访问 B 站的开发机运行，经 SSH 隧道写内部接口。发现一个合集后会跳过其剧集，减少请求；`--dry-run/--output/--limit` 便于调试。
+- 删除/替换：合集写入是事务内全量替换；`DeleteMember` 删除孤儿视频时同步清理 collection_members。

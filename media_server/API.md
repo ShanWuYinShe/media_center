@@ -103,6 +103,26 @@ type VideoSummary = {
 }
 ```
 
+### `GET /api/providers/{provider}/videos/{videoId}/collection`
+
+返回该视频所在合集（如 B 站 `ugc_season`）的**已审核**剧集播放队列，供 App 片尾自动连播。
+
+```json
+{
+  "collection": { "id": "6435849", "title": "大熊DOTA", "total": 2 },
+  "currentIndex": 0,
+  "items": [
+    { "id": "BV1a", "title": "EP1", "durationSeconds": 1714 },
+    { "id": "BV1c", "title": "EP3", "durationSeconds": 2179 }
+  ]
+}
+```
+
+- `items` 只包含 `approved` 剧集，顺序与来源合集列表一致；未过审剧集不会出现（审核关卡不被绕过）。
+- `currentIndex` 是当前视频在 `items` 中的下标；当前视频未过审/不在队列时为 `-1`。
+- 视频不在任何合集，或合集内没有已审核剧集时返回 `{"collection":null,"currentIndex":-1,"items":[]}`（200，不是错误）。
+- 合集关系由采集工具通过内部接口写入，不属于公开 API。
+
 ### `GET /api/search?q=关键词&provider=bilibili&page=1&pageSize=20`
 
 在已审核（approved）目录中按关键词子串搜索（匹配标题/简介/作者，大小写不敏感，跨分类去重），按 pinned > score > native_id 排序。**不调任何上游**。`q` 为空返回空结果（不消耗限流配额）；`provider` 可选，非空时只搜索该视频源（App 端只支持 bilibili 播放时用它排除其他 provider 的结果）。

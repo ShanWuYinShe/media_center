@@ -101,6 +101,10 @@ class MediaRepository(
         maxDurationSeconds,
     )
 
+    /** 某视频所在合集的已审核剧集队列(用于自动连播);失败由调用方静默降级。 */
+    suspend fun collectionFor(videoId: String): VideoCollectionResponse =
+        api.videoCollection(currentProvider, videoId)
+
     /** 服务端搜索(当前 provider 内,approved 目录)。失败时由调用方回退本地过滤。 */
     suspend fun search(query: String, page: Int = 1, pageSize: Int = 30): SearchResponse =
         api.search(query, currentProvider, page, pageSize)

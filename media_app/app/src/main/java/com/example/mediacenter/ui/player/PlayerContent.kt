@@ -74,6 +74,9 @@ internal fun PlayerContent(
     onSelectPage: (Int) -> Unit,
     onRetryResolve: () -> Unit,
     onBack: () -> Unit,
+    // 片尾自动连播:多P下一页优先,其次是合集队列的下一集(由 PlayerScreen 计算)
+    hasAutoNext: Boolean,
+    onAutoNext: () -> Unit,
 ) {
     val context = LocalContext.current
     // 当前流:YouTube 的选项带 mimeType(HLS m3u8 无扩展名,必须显式声明
@@ -114,6 +117,10 @@ internal fun PlayerContent(
     // (loadEpoch 驱动,同分P携位续播);再错才显示错误层交手动重试,防无限
     // 循环。READY 即播放成功,重置计数。
     var playerAutoRetries by remember { mutableIntStateOf(0) }
+    // 每个流(换P/换清晰度)只允许触发一次自动连播,避免 ENDED 重复回调导致连跳。
+    var autoNextTriggered by remember { mutableStateOf(false) }
+    val currentHasAutoNext by rememberUpdatedState(hasAutoNext)
+    val currentOnAutoNext by rememberUpdatedState(onAutoNext)
     // READY 回调里的断点读取(SP + JSON 解码)经它移到 IO 线程执行
     val scope = rememberCoroutineScope()
 
@@ -185,6 +192,10 @@ internal fun PlayerContent(
 
             override fun onPlaybackStateChanged(state: Int) {
                 isBuffering = state == Player.STATE_BUFFERING
+                if (state == Player.STATE_ENDED && currentHasAutoNext && !autoNextTriggered) {
+                    autoNextTriggered = true
+                    currentOnAutoNext()
+                }
                 if (state == Player.STATE_READY) {
                     // 播放成功:自动重试预算重置
                     playerAutoRetries = 0
@@ -221,6 +232,19 @@ internal fun PlayerContent(
             }
         }
     }
+    // 换流/换P后重新允许自动连播;同一流内 ENDED 只触发一次。
+    LaunchedEffect(stream, playbackResult.pages.currentPage) {
+        autoNextTriggered = false
+    }
+    // 合集队列是并行网络请求,极短视频可能在队列到达前就播完:队列晚到时
+    // 如果播放器已处于 ENDED,补触发一次(否则用户停在最后一帧没有下一步)。
+    LaunchedEffect(hasAutoNext) {
+        if (hasAutoNext && !autoNextTriggered && controller?.playbackState == Player.STATE_ENDED) {
+            autoNextTriggered = true
+            onAutoNext()
+        }
+    }
+
     // 播放器参数要"随时读到最新值":分P切换只改 playbackResult,不会重建
     // 这个 effect;若闭包直接捕获参数,退出时会把位置写到首P的 key、并把
     // 首P的页码写进观看历史。

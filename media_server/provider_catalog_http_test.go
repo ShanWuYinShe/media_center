@@ -307,3 +307,43 @@ func TestProviderCategoriesFollowConfigOrder(t *testing.T) {
 		t.Fatalf("categories order = %+v, want [zeta alpha]", body.Items)
 	}
 }
+
+func TestVideoCollectionHTTP(t *testing.T) {
+	c := openTestCatalog(t)
+	for _, id := range []string{"BV1ep1", "BV1ep2", "BV1ep3"} {
+		mustUpsert(t, c, "bilibili", id, id, 600)
+	}
+	approveTo(t, c, "movies", "bilibili", "BV1ep1")
+	approveTo(t, c, "movies", "bilibili", "BV1ep3")
+	// ep2 未过审:合集关系里存在,但不得出现在播放队列。
+	if _, err := c.AddPendingMember("movies", "bilibili", "BV1ep2", 1); err != nil {
+		t.Fatalf("add pending: %v", err)
+	}
+	if _, _, err := c.ReplaceCollections("bilibili", []CollectionImport{
+		{ID: "season-1", Title: "测试合集", VideoIDs: []string{"BV1ep1", "BV1ep2", "BV1ep3"}},
+	}); err != nil {
+		t.Fatalf("replace collections: %v", err)
+	}
+	s := &mediaServer{
+		categoriesByID: map[string]ContentCategory{"movies": {ID: "movies", Title: "电影"}},
+		catalog:        c,
+	}
+
+	var body VideoCollectionResponse
+	rec := getJSON(t, s, "/api/v1/providers/bilibili/videos/BV1ep1/collection", &body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if body.Collection == nil || body.Collection.ID != "season-1" || body.Collection.Title != "测试合集" || body.Collection.Total != 2 {
+		t.Fatalf("collection = %+v", body.Collection)
+	}
+	if body.CurrentIndex != 0 || len(body.Items) != 2 || body.Items[0].ID != "BV1ep1" || body.Items[1].ID != "BV1ep3" {
+		t.Fatalf("queue index=%d items=%+v", body.CurrentIndex, body.Items)
+	}
+
+	// 无合集:200 + null + 空数组,App 可静默退化。
+	rec = getJSON(t, s, "/api/v1/providers/bilibili/videos/BV1none/collection", &body)
+	if rec.Code != http.StatusOK || body.Collection != nil || body.Items == nil || len(body.Items) != 0 {
+		t.Fatalf("no collection response = %+v body=%s", body, rec.Body.String())
+	}
+}

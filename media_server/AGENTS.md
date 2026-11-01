@@ -46,6 +46,7 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 | GET | `/api/providers` | 有哪些视频源 |
 | GET | `/api/providers/{provider}/categories` | 某源的分类 |
 | GET | `/api/providers/{provider}/categories/{catId}/videos` | 某分类视频列表(分页；可选 `minDurationSeconds`/`maxDurationSeconds` 时长筛选) |
+| GET | `/api/providers/{provider}/videos/{id}/collection` | 某视频所在合集的已审核剧集队列(自动连播用) |
 | GET | `/api/search?q=&provider=` | approved 目录关键词搜索(分页,限流 30/min/IP,并发满载 503) |
 | GET | `/api/providers/credentials` | Provider 凭证下发(需 X-App-Token,限流 30/min/IP) |
 | GET | `/api/providers/youtube/search?q=` | YouTube 实时搜索(需 X-App-Token,限流 8/min/IP) |
@@ -53,4 +54,4 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 | GET | `/api/app/update?versionCode=N&variant=` | App 更新检查(variant: normal/legacy) |
 | GET | `/api/app/download?variant=` | App APK 下载 |
 | POST | `/api/crash/report` | App 崩溃上报(限流 10/min/IP) |
-| POST | `/internal/catalog/*` | 管理接口(需 X-Internal-Token;独立站部署不对公网暴露,经宿主机调用) |
+| POST | `/internal/catalog/*` | 管理接口(需 X-Internal-Token;独立站部署不对公网暴露,经宿主机调用;`/internal/catalog/collections` 写入合集快照) |

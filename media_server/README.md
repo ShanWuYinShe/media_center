@@ -11,6 +11,7 @@ youtube provider 是受控例外——实时搜索与播放直链解析经内网
 - `GET /api/providers`：有哪些视频源。
 - `GET /api/providers/{provider}/categories`：某视频源有哪些分类。
 - `GET /api/providers/{provider}/categories/{categoryId}/videos`：某分类下已审核的视频列表（分页；可选 `minDurationSeconds`/`maxDurationSeconds`）。
+- `GET /api/providers/{provider}/videos/{videoId}/collection`：视频所在合集的已审核剧集队列（App 片尾自动连播）。
 - youtube provider 额外提供实时端点（见 `youtube.go`，均经 vod_extractor）。
 
 ## API
@@ -43,6 +44,23 @@ youtube provider 是受控例外——实时搜索与播放直链解析经内网
 - `MEDIA_SERVER_APP_UPDATE_MANIFEST`：App 更新清单路径，默认 `/config/app-update.json`。
 - `MEDIA_SERVER_APP_UPDATE_APK`：App 更新 APK 路径，默认 `/config/media-center-app.apk`。
 - `MEDIA_SERVER_CRASH_DIR`：App 崩溃上报落盘目录，默认 `data/crash-reports`。
+
+## 合集同步（B 站 ugc_season）
+
+合集只存分组关系，不新增视频、不改审核状态；公开队列只返回其中 `approved` 的剧集。
+服务器 IP 访问 B 站会被风控，采集脚本应在可访问 B 站的开发机运行，经 SSH 隧道写入：
+
+```bash
+# 服务器容器 IP
+IP=$(ssh workwork-server "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' media_center-media_server-1")
+ssh -N -L 18787:$IP:8787 workwork-server &
+TOKEN=$(ssh workwork-server "grep '^MEDIA_SERVER_INTERNAL_TOKEN=' ~/media_center/deploy/.env | cut -d= -f2-")
+MEDIA_SERVER_INTERNAL_TOKEN="$TOKEN" scripts/sync-bilibili-collections.py \
+  --catalog-url http://127.0.0.1:18787/api/v1 \
+  --internal-url http://127.0.0.1:18787 --push
+```
+
+脚本从 B 站 `view.ugc_season` 提取合集与有序剧集，按 `episodes` 原始顺序写入；同合集其他剧集会被自动跳过，减少 B 站请求。`--dry-run` 只统计，`--output` 可先导出快照。
 
 ## 数据模型
 
