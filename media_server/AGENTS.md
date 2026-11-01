@@ -19,7 +19,7 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 
 ## catalog 与内容审核（详见 skill media-server-catalog）
 
-分类数据模型、导入与审核流程、youtube 实时搜索受控例外已移入 skill media-server-catalog。
+分类数据模型、导入与审核流程、youtube 实时搜索受控例外见 skill media-server-catalog。
 
 ## 架构
 
