@@ -85,11 +85,16 @@ type VideoSummary = {
 { "items": [{ "id": "movies", "title": "电影", "description": "院线电影" }] }
 ```
 
+`youtube` 是例外：内容不入 catalog，分类由服务端内置（音乐/科技/游戏/纪录片/电影/学习）；
+未配置 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 时返回空数组。分类 ID 形如 `youtube-music`。
+
 ### `GET /api/providers/{provider}/categories/{categoryId}/videos?page=1&pageSize=20&minDurationSeconds=600&maxDurationSeconds=2699`
 
 返回某分类下已审核的视频列表（分页，按 pinned > rank > score 排序）。
 
 `minDurationSeconds` / `maxDurationSeconds` 为可选的时长筛选（单位秒，**含边界**），用于「短片/中片/长片」等档位；两者可单独使用。启用筛选时时长缺失的视频会被排除，`total` 为筛选后的总数。参数非数字、负数或 `min > max` 返回 400 `BAD_REQUEST`。
+
+`provider=youtube` 时该端点把分类映射为一次实时 ytsearch：需要 `X-App-Token`，与 YouTube 搜索共用每 IP 每分钟 12 次限流；只支持第 1 页（`page=2` 返回空页），`total` 为本次返回条数，时长筛选参数被忽略。
 
 ```json
 {
@@ -149,7 +154,7 @@ type VideoSummary = {
 
 YouTube **实时搜索**：经 vod_extractor 的 yt-dlp `ytsearch`（flat 模式抓搜索结果页）。与观众浏览器走同一条 YouTube 公开前端，**无 Data API 每日配额**；代价是单次搜索耗时秒级。flat 列表页不触发播放风控，**无 cookies 仍可用**（2026-10-12 线上实测）；播放解析才必须带 cookies。结果不写 catalog，仅供 App 即时展示与播放——审核关卡只约束进入分类列表的 catalog 数据，此端点不绕过它（不产生任何入库）。
 
-**鉴权/限流**：同凭证接口的 `X-App-Token` 要求；同一 IP 每分钟 8 次。单页固定 20 条，无翻页令牌（TV 搜索每键即时出结果，够用）。
+**鉴权/限流**：同凭证接口的 `X-App-Token` 要求；同一 IP 每分钟 12 次。单页固定 20 条，无翻页令牌（TV 搜索每键即时出结果，够用）。
 
 ```json
 {
@@ -171,7 +176,7 @@ YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返�
 
 **格式选择**：每档高度只保留一条最佳候选（H.264 > VP9 > AV1，其次帧率，再优先音视频合一的 progressive/HLS）。YouTube 的 1080P+ 档位通常只有纯视频轨 + 纯音频轨：此时 `url` 是视频轨、`audioUrl` 是最高码率音轨，App 需用 `MergingMediaSource` 合流播放；没有可用音轨的纯视频格式不会下发（避免无声视频）。
 
-**鉴权/限流**：`X-App-Token` 同上；同一 IP 每分钟 20 次。端到端超时 40s（yt-dlp 解析需秒级时间）。
+**鉴权/限流**：`X-App-Token` 同上；同一 IP 每分钟 20 次。端到端超时 70s（Deno 签名求解 + PO Token 冷启动实测 25–30s）。
 
 ```json
 {

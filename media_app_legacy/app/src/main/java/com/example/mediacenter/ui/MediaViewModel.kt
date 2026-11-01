@@ -5,11 +5,12 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.mediacenter.data.ApiException
 import com.example.mediacenter.data.ContentCategory
-import com.example.mediacenter.data.MediaRepository
+import com.example.mediacenter.data.MediaRepositoryApi
 import com.example.mediacenter.data.PlaybackOption
 import com.example.mediacenter.data.PlaybackPages
 import com.example.mediacenter.data.PlaybackQuality
 import com.example.mediacenter.data.PlaybackResult
+import com.example.mediacenter.data.ProviderInfo
 import com.example.mediacenter.data.VideoDetails
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.log.AppLog
@@ -28,6 +29,8 @@ import kotlinx.coroutines.sync.withPermit
 
 data class MediaUiState(
     val query: String = "",
+    val providers: List<ProviderInfo> = emptyList(),
+    val currentProvider: String = "bilibili",
     val categories: List<ContentCategory> = emptyList(),
     // 不再硬编码具体 ID(服务端分类列表会演进,旧 ID 例如 "documentaries"
     // 会导致 404)。初始为 null,等 categories 拉到后由 loadCategoriesAndSearch
@@ -79,7 +82,7 @@ fun VideoSummary.matchesDuration(filter: DurationFilter): Boolean {
 
 /** 按当前状态输出展示列表:搜索模式与"全部"档不过滤,其余按时长筛选。 */
 fun MediaUiState.displayItems(): List<VideoSummary> =
-    if (query.isNotBlank() || durationFilter == DurationFilter.ALL) items
+    if (currentProvider == "youtube" || query.isNotBlank() || durationFilter == DurationFilter.ALL) items
     else items.filter { it.matchesDuration(durationFilter) }
 
 /**
@@ -116,8 +119,8 @@ private const val PlaybackRecoveryBackoffStepMs = 1_500L
 // 复位,使 [MaxPlaybackRecoveryAttempts] 上限永远失效,陷入“刷新地址→重建播放器”的
 // 无限恢复循环,持续吃内存/CPU/网络直至进程被杀、重启回首页。
 
-class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
-    private val mutableState = MutableStateFlow(MediaUiState())
+class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
+    private val mutableState = MutableStateFlow(MediaUiState(currentProvider = repository.currentProvider))
     val state: StateFlow<MediaUiState> = mutableState
 
     // HTTPS 握手失败后是否已降级到明文 HTTP(供诊断弹窗显示)。
@@ -304,7 +307,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                                 items = response.items,
                                 loading = if (isSilent || state.isContentScreen) state.loading else false,
                                 // 关键词搜索是一次性客户端聚合(已拉取多页),不分页;仅分类浏览才支持 loadMore。
-                                canLoadMore = query.isBlank() && response.items.size >= PageSize,
+                                canLoadMore = query.isBlank() && repository.currentProvider != "youtube" && response.items.size >= PageSize,
                                 page = 1,
                                 loadMoreError = null,
                             )
@@ -315,7 +318,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                                 categoryId,
                                 response.items,
                                 page = 1,
-                                canLoadMore = response.items.size >= PageSize,
+                                canLoadMore = repository.currentProvider != "youtube" && response.items.size >= PageSize,
                             )
                         }
                         // 后台预取列表视频的播放地址,用户点详情时直接可用。
@@ -374,6 +377,8 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
      * 请求后 loadingMore 永久卡 true,后续翻页全被挡死。
      */
     private suspend fun fetchMorePage(): Boolean {
+        // YouTube 分类是单页实时 ytsearch,没有翻页令牌。
+        if (repository.currentProvider == "youtube") return false
         val current = mutableState.value
         if (current.loading || current.loadingMore || !current.canLoadMore || current.loadMoreError != null) return false
         val nextPage = current.page + 1
@@ -391,7 +396,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     items = merged,
                     loadingMore = false,
                     loadMoreError = null,
-                    canLoadMore = response.items.size >= PageSize,
+                    canLoadMore = repository.currentProvider != "youtube" && response.items.size >= PageSize,
                     page = nextPage,
                 )
             }
@@ -402,7 +407,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     current.selectedCategoryId,
                     latest.items,
                     page = nextPage,
-                    canLoadMore = response.items.size >= PageSize,
+                    canLoadMore = repository.currentProvider != "youtube" && response.items.size >= PageSize,
                 )
             }
             // 后台预取新增视频的播放地址。
@@ -538,7 +543,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                         categoryId,
                         response.items,
                         page = 1,
-                        canLoadMore = response.items.size >= PageSize,
+                        canLoadMore = repository.currentProvider != "youtube" && response.items.size >= PageSize,
                     )
                 }
                 .onFailure { error ->
@@ -547,7 +552,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         }
     }
 
-    fun openDetails(video: VideoSummary) {
+    fun openDetails(video: VideoSummary, autoPlay: Boolean = false) {
         detailsJob?.cancel()
         detailsJob = viewModelScope.launch {
             mutableState.update { it.copy(loading = true, error = null) }
@@ -559,9 +564,11 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                     it.copy(selected = details.copy(playbackOptions = cached.options), loading = false,
                             currentPages = cached.pages)
                 }
+                if (autoPlay) cached.options.firstOrNull()?.let { play(it) }
                 return@launch
             }
             mutableState.update { it.copy(selected = details, loading = false) }
+            var autoPlayOption: PlaybackOption? = null
             runCatchingCancellable { repository.playbackOptions(details) }
                 .onSuccess { result ->
                     currentPlaybackQn = result.options.firstOrNull()?.qn ?: 0
@@ -571,6 +578,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                                    currentPages = result.pages,
                                    availableQualities = result.availableQualities)
                     }
+                    if (autoPlay) autoPlayOption = result.options.firstOrNull()
                 }
                 .onFailure { error ->
                     mutableState.update { state ->
@@ -578,6 +586,7 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
                         state.copy(error = error.message ?: "解析播放地址失败")
                     }
                 }
+            autoPlayOption?.let { play(it) }
         }
     }
 
@@ -1075,6 +1084,30 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
         }
     }
 
+    /** 切换视频源:清空当前源缓存/列表,重新拉 provider 分类。 */
+    fun selectProvider(provider: String) {
+        if (provider == repository.currentProvider) return
+        repository.selectProvider(provider)
+        searchJob?.cancel()
+        loadMoreJob?.cancel()
+        detailsJob?.cancel()
+        recoveryJob?.cancel()
+        playbackPrefetchJob?.cancel()
+        categoryRefreshJob?.cancel()
+        categoryListCache.clear()
+        playbackCache.clear()
+        prefetchedPlaybackIds.clear()
+        pendingAutoAdvanceFromId = null
+        mutableState.update {
+            MediaUiState(
+                providers = it.providers,
+                currentProvider = provider,
+                loading = true,
+            )
+        }
+        loadCategoriesAndSearch()
+    }
+
     fun retry() {
         val current = mutableState.value
         if (current.items.isNotEmpty() && current.loadMoreError != null) {
@@ -1141,8 +1174,17 @@ class MediaViewModel(private val repository: MediaRepository) : ViewModel() {
     private fun loadCategoriesAndSearch() {
         loadHomeJob?.cancel()
         loadHomeJob = viewModelScope.launch {
-            // 启动时拉取 provider 凭证(如 bilibili SESSDATA),失败时静默降级。
-            repository.refreshCredentials()
+            // 拉取 provider 列表(含实时源 youtube);失败不阻塞分类加载,
+            // 沿用当前 provider(网络错误会在 categories 处统一暴露)。
+            runCatchingCancellable { repository.providers() }
+                .onSuccess { providers ->
+                    mutableState.update {
+                        it.copy(providers = providers, currentProvider = repository.currentProvider)
+                    }
+                }
+                .onFailure { error ->
+                    AppLog.w("Search", "load providers failed: ${error.message}", error)
+                }
             // 分类加载失败自动重试:最多 MAX_HOME_AUTO_RETRIES 次(退避见
             // HOME_AUTO_RETRY_BACKOFF_MS),覆盖老盒子"开机 WiFi 未就绪 /
             // 网络闪断"的场景;重试期间用户切走则放弃,最终失败才落错误态。
@@ -1269,7 +1311,7 @@ private const val MAX_SEARCH_AUTO_RETRIES = 2
 private val SEARCH_AUTO_RETRY_BACKOFF_MS = longArrayOf(2_000L, 4_000L)
 
 class MediaViewModelFactory(
-    private val repository: MediaRepository,
+    private val repository: MediaRepositoryApi,
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {

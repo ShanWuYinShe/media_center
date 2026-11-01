@@ -151,6 +151,7 @@ internal fun MainActivity.homeFocusTargetFor(state: MediaUiState): HomeFocusTarg
                     ?.let(HomeFocusTarget::Video)
                     ?: state.items.firstOrNull()?.id?.let(HomeFocusTarget::Video)
             }
+            homeFocusArea == HomeFocusArea.Hero -> HomeFocusTarget.HeroPlay
             homeFocusArea == HomeFocusArea.Search -> HomeFocusTarget.Search
             homeFocusArea == HomeFocusArea.Filter -> HomeFocusTarget.Filter(state.durationFilter.id)
             else -> homeDefaultCategoryTarget(state)

@@ -17,6 +17,7 @@ enum class PillIcon {
     Search,
     Close,
     Play,
+    Settings,
 }
 
 class ThumbnailImageView(context: Context) : View(context) {
@@ -142,6 +143,24 @@ class PillIconView(
                 path.lineTo(w * 0.82f, h * 0.50f)
                 path.close()
                 canvas.drawPath(path, fillPaint)
+            }
+            PillIcon.Settings -> {
+                val radius = w.coerceAtMost(h) * 0.28f
+                val cx = w * 0.5f
+                val cy = h * 0.5f
+                canvas.drawCircle(cx, cy, radius, paint)
+                for (i in 0 until 8) {
+                    val angle = i * Math.PI / 4.0
+                    val inner = radius * 1.35f
+                    val outer = radius * 1.85f
+                    canvas.drawLine(
+                        (cx + Math.cos(angle) * inner).toFloat(),
+                        (cy + Math.sin(angle) * inner).toFloat(),
+                        (cx + Math.cos(angle) * outer).toFloat(),
+                        (cy + Math.sin(angle) * outer).toFloat(),
+                        paint,
+                    )
+                }
             }
         }
     }

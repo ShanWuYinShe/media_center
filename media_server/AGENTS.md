@@ -47,11 +47,11 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 | GET | `/api/health` | 健康检查公网别名(经 nginx 前缀重写,排障可直接 curl) |
 | GET | `/api/providers` | 有哪些视频源 |
 | GET | `/api/providers/{provider}/categories` | 某源的分类 |
-| GET | `/api/providers/{provider}/categories/{catId}/videos` | 某分类视频列表(分页；可选 `minDurationSeconds`/`maxDurationSeconds` 时长筛选) |
+| GET | `/api/providers/{provider}/categories/{catId}/videos` | 某分类视频列表(分页；可选 `minDurationSeconds`/`maxDurationSeconds` 时长筛选)；youtube 分类映射为实时 ytsearch，需 `X-App-Token`、仅第 1 页 |
 | GET | `/api/providers/{provider}/videos/{id}/collection` | 某视频所在合集的已审核剧集队列(自动连播用) |
 | GET | `/api/search?q=&provider=` | approved 目录关键词搜索(分页,限流 30/min/IP,并发满载 503) |
 | GET | `/api/providers/credentials` | Provider 凭证下发(需 X-App-Token,限流 30/min/IP) |
-| GET | `/api/providers/youtube/search?q=` | YouTube 实时搜索(需 X-App-Token,限流 8/min/IP) |
+| GET | `/api/providers/youtube/search?q=` | YouTube 实时搜索(需 X-App-Token,限流 12/min/IP) |
 | GET | `/api/providers/youtube/resolve?id=` | YouTube 播放解析(需 X-App-Token,限流 20/min/IP) |
 | GET | `/api/app/update?versionCode=N&variant=` | App 更新检查(variant: normal/legacy) |
 | GET | `/api/app/download?variant=` | App APK 下载 |

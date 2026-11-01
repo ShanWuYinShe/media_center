@@ -417,13 +417,19 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
                     when (keyCode) {
                         KeyEvent.KEYCODE_DPAD_UP -> {
                             if (pos >= columns) return@setOnKeyListener false
-                            activity.homeDefaultCategoryTarget(activity.currentState)?.let { target ->
-                                activity.homeFocusArea = HomeFocusArea.Category
-                                // 保存滚动位置防止 RecyclerView 因焦点离开而重置到第一列
-                                activity.savedGridState = activity.homeVideoRecycler?.layoutManager?.onSaveInstanceState()
-                                activity.requestHomeFocus(target)
+                            // 首行上移:有 Hero 回 Hero 主按钮,否则回分类栏。
+                            activity.savedGridState = activity.homeVideoRecycler?.layoutManager?.onSaveInstanceState()
+                            if (activity.homeHeroVideo(activity.currentState) != null) {
+                                activity.homeFocusArea = HomeFocusArea.Hero
+                                activity.requestHomeFocus(HomeFocusTarget.HeroPlay)
                                 true
-                            } ?: false
+                            } else {
+                                activity.homeDefaultCategoryTarget(activity.currentState)?.let { target ->
+                                    activity.homeFocusArea = HomeFocusArea.Category
+                                    activity.requestHomeFocus(target)
+                                    true
+                                } ?: false
+                            }
                         }
                         KeyEvent.KEYCODE_DPAD_LEFT -> pos % columns == 0
                         KeyEvent.KEYCODE_DPAD_RIGHT -> {

@@ -1,38 +1,61 @@
 package com.example.mediacenter.data
 
+import android.content.SharedPreferences
 import com.example.mediacenter.log.AppLog
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MediaRepository(
     private val api: MediaApi,
     private val bilibiliApi: BilibiliApi = BilibiliApi(),
     private val youtubeApi: YouTubeApi = YouTubeApi(api),
-) {
-    // 当前选中的 provider(默认 bilibili)。loadProviders 取到列表后自动选第一个。
-    @Volatile var currentProvider: String = "bilibili"
+    private val prefs: SharedPreferences? = null,
+) : MediaRepositoryApi {
+    // 当前选中的 provider(默认 bilibili)。首次加载 providers 后仅在无持久化
+    // 选择/原选择下线时自动选第一个;之后以用户选择为准。
+    @Volatile override var currentProvider: String =
+        prefs?.getString(KEY_CURRENT_PROVIDER, null) ?: "bilibili"
         private set
+    private val providerInitialized = AtomicBoolean(false)
 
     // HTTPS 握手失败后是否已降级到明文 HTTP(供诊断弹窗显示)。
-    val httpFallbackActive: Boolean
+    override val httpFallbackActive: Boolean
         get() = api.httpFallbackActive
 
     private companion object {
+        const val KEY_CURRENT_PROVIDER = "current_provider"
         // 客户端关键词搜索时最多拉取的分类页数(每页 ≤ pageSize 条),用于扩大命中范围。
         // 服务端单分类通常几百条,5 页 × 18 ≈ 90 条已足够覆盖常见搜索词。
         const val SEARCH_MAX_PAGES = 5
     }
 
-    suspend fun providers(): List<ProviderInfo> {
+    override suspend fun providers(): List<ProviderInfo> {
         refreshCredentials()
         val items = api.providers().items.orEmpty()
-        if (items.isNotEmpty()) {
-            currentProvider = items.first().id
+        if (items.isNotEmpty() && !providerInitialized.getAndSet(true)) {
+            val restored = prefs?.getString(KEY_CURRENT_PROVIDER, null)
+            if (restored.isNullOrEmpty() || items.none { it.id == restored }) {
+                currentProvider = items.first().id
+                persistProvider()
+            }
         }
         return items
     }
 
+    /** 用户手动切换视频源,并持久化到 SharedPreferences。 */
+    override fun selectProvider(provider: String) {
+        if (provider == currentProvider) return
+        currentProvider = provider
+        persistProvider()
+        AppLog.i("Repo", "switch provider to $provider")
+    }
+
+    private fun persistProvider() {
+        prefs?.edit()?.putString(KEY_CURRENT_PROVIDER, currentProvider)?.apply()
+    }
+
     // 从 server 拉取 provider 凭证并注入到对应的 API 客户端。
     // 失败时静默降级为无凭证模式(不影响基本播放)。
-    suspend fun refreshCredentials() {
+    override suspend fun refreshCredentials() {
         try {
             val response = api.credentials()
             for (cred in response.credentials.orEmpty()) {
@@ -46,9 +69,7 @@ class MediaRepository(
     }
 
     // 兼容包装:ViewModel 仍调 categories() 无参版本。
-    suspend fun categories(): List<ContentCategory> = api.categories(currentProvider).items.orEmpty()
-
-    suspend fun categories(provider: String): List<ContentCategory> = api.categories(provider).items.orEmpty()
+    override suspend fun categories(): List<ContentCategory> = api.categories(currentProvider).items.orEmpty()
 
     // 服务端无全局 search endpoint;分类浏览用 categoryVideos,关键词搜索在已加载的
     // 分类数据上做客户端标题/简介过滤。query 非空时拉取多页(最多 SEARCH_MAX_PAGES)
@@ -56,21 +77,38 @@ class MediaRepository(
     //
     // 例外:youtube provider 的关键词搜索走实时上游通道(Data API,见 YouTubeApi)——
     // YouTube 内容不要求先入库,分类内过滤搜不到实时内容;此时忽略 categoryId。
-    suspend fun search(
+    override suspend fun search(
         query: String,
         categoryId: String?,
-        page: Int = 1,
-        pageSize: Int = 18,
+        page: Int,
+        pageSize: Int,
     ): SearchResponse {
         val trimmed = query.trim()
-        if (currentProvider == "youtube" && trimmed.isNotEmpty()) {
-            val resp = youtubeApi.search(trimmed)
+        if (currentProvider == "youtube") {
+            if (trimmed.isNotEmpty()) {
+                val resp = youtubeApi.search(trimmed)
+                val items = resp.items.orEmpty()
+                return SearchResponse(
+                    query = query,
+                    page = 1,
+                    pageSize = items.size,
+                    total = items.size,
+                    items = items,
+                )
+            }
+            if (categoryId == null) {
+                return SearchResponse(query = query, page = page, pageSize = pageSize)
+            }
+            // YouTube 分类由服务端 /providers/youtube/categories/{id}/videos
+            // 映射为一次实时 ytsearch;单页结果,始终从第 1 页取。
+            val resp = api.categoryVideos(currentProvider, categoryId, page = 1, pageSize = 20)
+            val items = resp.items.orEmpty()
             return SearchResponse(
                 query = query,
                 page = 1,
-                pageSize = resp.items.orEmpty().size,
-                total = resp.items.orEmpty().size,
-                items = resp.items.orEmpty(),
+                pageSize = items.size,
+                total = items.size,
+                items = items,
             )
         }
         if (categoryId == null) {
@@ -117,7 +155,7 @@ class MediaRepository(
 
     // 兼容包装:不再调 server details 接口,本地从 VideoSummary 构造 VideoDetails。
     // server 只提供目录数据(id/title/desc/thumb),播放地址由 playbackOptions 按需解析。
-    fun details(video: VideoSummary): VideoDetails {
+    override fun details(video: VideoSummary): VideoDetails {
         return VideoDetails(
             id = video.id,
             title = video.title,
@@ -129,20 +167,20 @@ class MediaRepository(
 
     // 解析播放地址:按 provider 分发。bilibili 走 WBI 签名 + view + playurl;
     // youtube 交给 server 的解析代理(一次返回全部清晰度档,切档由播放层换源)。
-    suspend fun playbackOptions(video: VideoDetails): PlaybackResult = when (currentProvider) {
+    override suspend fun playbackOptions(video: VideoDetails): PlaybackResult = when (currentProvider) {
         "youtube" -> youtubeApi.resolvePlayback(video.id)
         else -> bilibiliApi.resolvePlayback(video.id)
     }
 
     // 指定清晰度解析播放地址。youtube 端 qn 被忽略(server 忽略该参数,返回全档)。
-    suspend fun playbackOptions(video: VideoDetails, qn: Int): PlaybackResult = when (currentProvider) {
+    override suspend fun playbackOptions(video: VideoDetails, qn: Int): PlaybackResult = when (currentProvider) {
         "youtube" -> youtubeApi.resolvePlayback(video.id)
         else -> bilibiliApi.resolvePlayback(video.id, qn)
     }
 
     // 解析多P视频指定分页的播放地址。多P是 bilibili catalog 的概念
     // (youtube 恒单页,正常流程不会走到这里,守卫防误用)。
-    suspend fun resolvePagePlayback(bvid: String, pageIndex: Int): List<PlaybackOption> {
+    override suspend fun resolvePagePlayback(bvid: String, pageIndex: Int): List<PlaybackOption> {
         if (currentProvider != "bilibili") {
             throw IllegalStateException("「${currentProvider}」视频源不支持多P切换")
         }

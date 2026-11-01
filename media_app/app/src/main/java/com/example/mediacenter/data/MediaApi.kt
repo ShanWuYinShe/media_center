@@ -70,6 +70,8 @@ class MediaApi(
         return get(
             pathSegments = listOf("providers", provider, "categories", categoryId, "videos"),
             query = query,
+            // YouTube 分类由服务端实时 ytsearch 提供,与 youtube/search 同一鉴权。
+            headers = if (provider == "youtube") appTokenHeaders() else emptyMap(),
         )
     }
 

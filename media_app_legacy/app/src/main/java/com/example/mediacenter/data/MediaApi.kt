@@ -88,6 +88,8 @@ class MediaApi(
             "page" to page.toString(),
             "pageSize" to pageSize.toString(),
         ),
+        // YouTube 分类由服务端实时 ytsearch 提供,与 youtube/search 同一鉴权。
+        headers = if (provider == "youtube") appTokenHeaders() else emptyMap(),
     )
 
     suspend fun appUpdate(currentVersionCode: Int): AppUpdateInfo? {

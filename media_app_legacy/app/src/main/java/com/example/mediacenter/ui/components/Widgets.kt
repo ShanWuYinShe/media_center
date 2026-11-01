@@ -155,14 +155,16 @@ internal fun MainActivity.primaryPill(
             },
         )
         fun update(focused: Boolean) {
+            // 与新版一致:主操作常态即 Apple Blue,焦点只增加近白外框/缩放,
+            // 不再用旧版“白底黑字”主按钮。
             row.background = rounded(
-                if (focused) Colors.APPLE_BLUE else Colors.TEXT_PRIMARY,
+                Colors.APPLE_BLUE,
                 999,
                 if (focused) 3 else 0,
                 if (focused) Colors.GLASS_BORDER_FOCUSED else Color.TRANSPARENT,
             )
             row.elevationCompat(if (focused) dp(10).toFloat() else dp(2).toFloat())
-            val contentColor = if (focused) Colors.TEXT_PRIMARY else Colors.DEEP_SPACE
+            val contentColor = Colors.TEXT_PRIMARY
             textView.setTextColor(contentColor)
             iconView?.setIconColor(contentColor)
             row.animate().cancel()

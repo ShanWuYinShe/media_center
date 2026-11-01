@@ -1,6 +1,6 @@
 # Android TV App
 
-> **已存档**（legacy 变体，面向 Android 4.4 老盒子；服务端仍经 `/api/app/update?variant=legacy` 提供更新，但本目录不再开发新功能）。
+> **API 19 兼容变体**：面向 Android 4.4 老盒子。视觉 tokens（深色背景 / 玻璃卡片 / Apple Blue / 焦点外框）、TopBar+Hero、视频源切换与 YouTube 分类已与新版对齐；架构上使用 `MediaRepositoryApi` 契约与纯函数展示模型。为兼容旧设备仍用原生 View + RecyclerView，不引入 Compose / Coil 2.x / TV Material。
 
 这个目录只包含 Android TV 客户端。服务端实现为[本仓库](../media_server/)的 `media_server`（部署编排在本仓库 `deploy/` 内，非 workwork 自有代码；早前 workwork 以 submodule 引用构建的方式已废弃）。App 只需要一个服务端地址 `MEDIA_SERVER_URL`，未设置时回落到内置默认 `https://media.chaoset.com/api/v1`。
 
@@ -13,7 +13,7 @@
 3. 打包调试 APK：使用 **Build > Build Bundle(s) / APK(s) > Build APK(s)**。
 4. 打包发布 APK：使用 **Build > Generate Signed Bundle / APK...**。
 
-App 现在按 Android 4.4.2/API 19 作为主目标设计，使用单一原生 View UI，不再维护 API 21+ 专用 Compose 变体，也不打包 Compose、Coil 2.x、TV Material 等 API 21+ 依赖。
+App 仍按 Android 4.4.2/API 19 设计，使用原生 View UI（不打包 Compose、Coil 2.x、TV Material 等 API 21+ 依赖），但视觉与交互口径跟随新版；老旧低内存盒子优先保证启动速度、焦点稳定与图片缓存上限。
 
 ## B 站多 P 视频支持
 

@@ -30,7 +30,7 @@ import (
 
 // 搜索/解析限流(per-IP,每分钟)。搜索比解析更重(抓搜索结果页),阈值更保守。
 const (
-	youtubeSearchPerMinuteLimit  = 8
+	youtubeSearchPerMinuteLimit  = 12
 	youtubeResolvePerMinuteLimit = 20
 	// resolve 响应(yt-dlp JSON)读取上限。完整 JSON 通常数百 KB(含全部格式
 	// 与清单),20MB 与 vod_extractor 的 VOD_EXTRACTOR_MAX_OUTPUT_BYTES 对齐。

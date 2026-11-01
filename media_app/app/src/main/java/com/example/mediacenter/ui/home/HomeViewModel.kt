@@ -127,6 +127,13 @@ class HomeViewModel(
                     currentProvider = repository.currentProvider,
                 )
                 val cats = repository.categories()
+                // YouTube 分类由实时 ytsearch 提供:每次都是 yt-dlp 上游调用,
+                // 并发必须比目录源更保守,避免打满解析服务并发/触发限流。
+                val categoryConcurrency = if (repository.currentProvider == "youtube") {
+                    HOME_YOUTUBE_CATEGORY_CONCURRENCY
+                } else {
+                    HOME_CATEGORY_CONCURRENCY
+                }
                 // 并行拉取各分类第一页,避免分类多时首页加载时间线性增长。
                 // 用信号量限制并发(弱网/老设备上打满连接池会互相拖慢);
                 // 单个分类失败(超时/5xx)不拖垮整个首页:该分类显示失败文案,
@@ -136,7 +143,7 @@ class HomeViewModel(
                 // 手动重试)都全量重拉所有分类,弱网盒子上重复开销大且慢;缓存命中
                 // 直接秒开,超时/切 provider 才真正请求。缓存只存成功结果。
                 val results = coroutineScope {
-                    val semaphore = Semaphore(HOME_CATEGORY_CONCURRENCY)
+                    val semaphore = Semaphore(categoryConcurrency)
                     cats.map { cat ->
                         async {
                             semaphore.withPermit {
@@ -213,6 +220,8 @@ class HomeViewModel(
         // 首页并行拉取分类第一页的并发上限:弱网/老设备上超过该值的并发
         // 只会互相抢占连接与带宽,整体更慢。
         const val HOME_CATEGORY_CONCURRENCY = 4
+        // YouTube 分类是实时 yt-dlp 搜索(服务端解析并发仅 2),首页限 2 路。
+        const val HOME_YOUTUBE_CATEGORY_CONCURRENCY = 2
         // 分类第一页缓存有效期:10 分钟内重进首页直接用缓存,不重复请求。
         const val FirstPageCacheTtlMs = 10 * 60 * 1000L
         // 缓存条目上限(防御性兜底,正常分类数量远小于此)。

@@ -187,6 +187,15 @@ func (s *mediaServer) handleVideoCollection(w http.ResponseWriter, r *http.Reque
 // handleProviderCategories 返回某 provider 有 approved 视频的分类列表。
 func (s *mediaServer) handleProviderCategories(w http.ResponseWriter, r *http.Request, provider string) {
 	w.Header().Set("Cache-Control", "public, max-age=60")
+	// YouTube 内容只存在于实时搜索,不在 catalog;分类由服务端内置映射。
+	if provider == "youtube" {
+		items := []PublicCategory{}
+		if s.youtubeRealtimeEnabled() {
+			items = publicYouTubeCategories()
+		}
+		s.writeJSON(w, http.StatusOK, CategoriesResponse{Items: items})
+		return
+	}
 	if s.catalog == nil {
 		s.writeJSON(w, http.StatusOK, CategoriesResponse{Items: []PublicCategory{}})
 		return
@@ -230,6 +239,11 @@ func (s *mediaServer) handleProviderCategories(w http.ResponseWriter, r *http.Re
 
 // handleProviderCategoryVideos 返回某 provider 某分类下 approved 视频列表(分页)。
 func (s *mediaServer) handleProviderCategoryVideos(w http.ResponseWriter, r *http.Request, provider, categoryID string) {
+	// YouTube 分类不走 catalog,由实时 ytsearch 提供;鉴权/限流在 handler 内处理。
+	if provider == "youtube" {
+		s.handleYouTubeCategoryVideos(w, r, categoryID)
+		return
+	}
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	page, pageSize, err := paginationFromRequest(r)
 	if err != nil {

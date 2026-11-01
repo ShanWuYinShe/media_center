@@ -83,6 +83,7 @@ class CategoryVideosViewModel(
                 noMore = false,
             )
         }
+        val isYouTube = repository.currentProvider == "youtube"
         requestJob = viewModelScope.launch {
             try {
                 val response = repository.catalogPage(
@@ -94,10 +95,14 @@ class CategoryVideosViewModel(
                 // 请求期间用户可能又切了档位:只接受与当前状态匹配的结果。
                 _uiState.update { state ->
                     if (state.categoryId != categoryId || state.filter != filter) return@update state
+                    val items = response.items.orEmpty()
                     state.copy(
-                        items = response.items.orEmpty(),
+                        items = items,
                         page = response.page.coerceAtLeast(1),
                         total = response.total,
+                        // YouTube 分类是单页实时搜索结果,首屏即终结翻页。
+                        noMore = isYouTube || items.isEmpty() ||
+                            (response.total > 0 && items.size >= response.total),
                         isLoadingInitial = false,
                     )
                 }
@@ -113,6 +118,8 @@ class CategoryVideosViewModel(
     }
 
     fun loadMore() {
+        // YouTube 分类是单页实时结果,没有翻页令牌。
+        if (repository.currentProvider == "youtube") return
         val state = _uiState.value
         if (state.isLoadingInitial || state.isLoadingMore || state.loadMoreFailed || state.noMore) return
         if (state.total > 0 && state.items.size >= state.total) return
@@ -120,6 +127,7 @@ class CategoryVideosViewModel(
         val categoryId = state.categoryId
         val nextPage = state.page + 1
         _uiState.update { it.copy(isLoadingMore = true, loadMoreFailed = false) }
+        val isYouTube = repository.currentProvider == "youtube"
         requestJob = viewModelScope.launch {
             try {
                 val response = repository.catalogPage(

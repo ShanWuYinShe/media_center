@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.ui.components.EmptyStateView
 import com.example.mediacenter.ui.components.ErrorView
@@ -47,6 +48,8 @@ fun CategoryVideosScreen(
     viewModel: CategoryVideosViewModel = viewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    // YouTube 分类是单页实时搜索,时长筛选需要上游过滤,当前不支持;隐藏筛选行。
+    val isYouTubeProvider = MediaRepositoryHolder.repository.currentProvider == "youtube"
 
     BackHandler(onBack = onBack)
 
@@ -86,21 +89,24 @@ fun CategoryVideosScreen(
         }
 
         // 时长筛选行:全部 / 短片 / 中片 / 长片。切换即按新档位向服务端重新拉取。
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenHorizontalPadding),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("时长", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
-            DurationFilter.entries.forEach { filter ->
-                TvChip(
-                    label = filter.label,
-                    selected = filter == state.filter,
-                    onClick = { viewModel.selectFilter(filter) },
-                )
+        // YouTube 分类来自实时搜索,没有服务端时长过滤,不展示无效筛选。
+        if (!isYouTubeProvider) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenHorizontalPadding),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("时长", color = TextSecondary, style = MaterialTheme.typography.bodySmall)
+                DurationFilter.entries.forEach { filter ->
+                    TvChip(
+                        label = filter.label,
+                        selected = filter == state.filter,
+                        onClick = { viewModel.selectFilter(filter) },
+                    )
+                }
             }
+            Spacer(modifier = Modifier.height(16.dp))
         }
-        Spacer(modifier = Modifier.height(16.dp))
 
         // 用 weight 占满剩余高度,让加载/错误/空态在可视区真正居中;
         // 直接 fillMaxSize 会拿到整屏约束,和上方标题/筛选重叠。

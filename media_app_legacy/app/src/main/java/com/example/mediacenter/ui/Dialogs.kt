@@ -25,6 +25,7 @@ import java.util.Date
 import java.util.Locale
 import com.example.mediacenter.MainActivity
 import com.example.mediacenter.data.PlaybackPages
+import com.example.mediacenter.data.ProviderInfo
 import com.example.mediacenter.ui.components.dp
 import com.example.mediacenter.ui.components.elevationCompat
 import com.example.mediacenter.ui.components.frameMatch
@@ -40,6 +41,7 @@ import com.example.mediacenter.ui.components.withStartMargin
 import com.example.mediacenter.ui.components.withEndMargin
 import com.example.mediacenter.ui.components.withTopMargin
 import com.example.mediacenter.ui.theme.Colors
+import com.example.mediacenter.ui.theme.HomeFocusArea
 import com.example.mediacenter.update.AppUpdateResult
 import com.example.mediacenter.update.InstallLaunchResult
 
@@ -348,6 +350,34 @@ internal fun MainActivity.showOptionListDialog(
             }
         }
     }.show()
+}
+
+/** 视频源显示名:B站/YouTube;未知源回退 id。 */
+internal fun providerDisplayName(provider: ProviderInfo, currentProvider: String? = null): String {
+    val name = provider.name?.takeIf { it.isNotBlank() } ?: provider.id
+    return if (provider.id == currentProvider) "$name ✓" else name
+}
+
+/** 视频源切换弹窗;选中后由 ViewModel 清空缓存并重新加载分类。 */
+internal fun MainActivity.showProviderDialog(
+    providers: List<ProviderInfo>,
+    currentProvider: String,
+) {
+    if (providers.isEmpty()) return
+    val currentIndex = providers.indexOfFirst { it.id == currentProvider }.takeIf { it >= 0 }
+    showOptionListDialog(
+        title = "选择视频源",
+        options = providers.map { it.name?.takeIf { name -> name.isNotBlank() } ?: it.id },
+        currentIndex = currentIndex,
+        onSelect = { index ->
+            val provider = providers.getOrNull(index)?.id ?: return@showOptionListDialog
+            if (provider == currentProvider) return@showOptionListDialog
+            homeFocusArea = HomeFocusArea.Category
+            pendingHomeFocus = null
+            rememberedCategoryId = null
+            viewModel.selectProvider(provider)
+        },
+    )
 }
 
 internal fun MainActivity.promptInstallUpdate(result: AppUpdateResult.ReadyToInstall) {
