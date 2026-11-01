@@ -130,9 +130,9 @@ internal fun formatTime(ms: Long): String {
 }
 
 internal fun MainActivity.gridColumns(): Int {
-    val width = resources.displayMetrics.widthPixels
-    val available = width - dp(96)
-    return max(1, (available + dp(16)) / (dp(116) + dp(16)))
+    // TV 首页固定 3 列大卡片：10ft 观看距离下 4 列以上文字会明显变小，
+    // 老人更难读；与新版 Compose 首页保持一致。
+    return 3
 }
 
 internal fun MainActivity.posterCardWidth(columns: Int): Int {

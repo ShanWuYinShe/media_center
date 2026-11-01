@@ -28,6 +28,7 @@ import com.example.mediacenter.ui.components.frameMatch
 import com.example.mediacenter.ui.components.label
 import com.example.mediacenter.ui.components.letterSpacingCompat
 import com.example.mediacenter.ui.components.pill
+import com.example.mediacenter.ui.components.rounded
 import com.example.mediacenter.ui.components.formatDurationSeconds
 import com.example.mediacenter.ui.components.linearMatch
 import com.example.mediacenter.ui.components.primaryPill
@@ -61,7 +62,7 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
         // 这些固定值由 tvDensity 统一换算,因此在任意分辨率/上报 density 下都按比例缩放,
         // 既符合规范又能灵活适配所有设备,无需写死像素或临时比例。
         val hPad = dp(56)
-        val vPad = dp(40)
+        val vPad = dp(96)
         val heroEndGap = dp(44)
         val heroW = minOf(dp(480), (resources.displayMetrics.widthPixels * 0.42f).toInt())
         val heroH = (heroW / 1.6f).toInt()
@@ -85,6 +86,22 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
             clipChildren = false
         }
         screen.addView(row, frameMatch())
+        // 与新版一致:返回入口带文字，触摸/鼠标可直接点；遥控器仍有 BACK 键。
+        val backButton = label("返回", 17f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(20), 0, dp(20), 0)
+            background = rounded(Colors.GlassFill, 999, 1, Colors.GlassBorder)
+            isFocusable = false
+            isClickable = true
+            setOnClickListener { viewModel.back() }
+        }
+        screen.addView(
+            backButton,
+            FrameLayout.LayoutParams(wrap(), dp(48), Gravity.TOP or Gravity.START).apply {
+                leftMargin = hPad
+                topMargin = dp(28)
+            },
+        )
         var detailFocusRegistered = false
         fun registerDetailFocus(target: DetailFocusTarget, view: View) {
             if (!detailFocusRegistered && detailFocusTarget == target) {

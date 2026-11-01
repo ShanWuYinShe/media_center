@@ -87,6 +87,9 @@ class MainActivity : ComponentActivity() {
     internal var rememberedCategoryId: String? = null
     internal val rememberedVideoFocusByCategory = mutableMapOf<String, String>()
     internal var pendingHomeFocus: HomeFocusTarget? = null
+    // 首次进入首页只把焦点放到当前分类标签一次；之后从详情/播放/搜索返回
+    // 仍按用户最后所在区域恢复，不被强制拉回分类栏。
+    internal var homeInitialFocusApplied = false
     internal var pendingCategorySelect: Runnable? = null
     internal var prefetchedVisibleVideoIds: List<String> = emptyList()
     internal var homeVideoRecycler: RecyclerView? = null

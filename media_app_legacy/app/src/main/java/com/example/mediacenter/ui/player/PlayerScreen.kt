@@ -52,8 +52,7 @@ import com.example.mediacenter.ui.config.playbackErrorMessage
 import com.example.mediacenter.ui.config.playbackMimeType
 import com.example.mediacenter.ui.config.playbackRequestHeaders
 import com.example.mediacenter.ui.theme.Colors
-import com.example.mediacenter.ui.views.TransportIcon
-import com.example.mediacenter.ui.views.TransportIconView
+import com.example.mediacenter.ui.views.PlayPauseGlyphView
 
 internal fun MainActivity.renderPlayer(state: MediaUiState) {
         val stream = state.playing ?: return
@@ -188,7 +187,9 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
             overlay.animate().alpha(0f).setDuration(400).start()
         }
         fun shouldAutoHideOverlay(): Boolean {
-            return nextPlayer.playWhenReady && nextPlayer.playbackState != Player.STATE_ENDED
+            // 只有真正 READY 播放时才自动收起；缓冲/切集时保留信息层，
+            // 否则老人只看到黑屏转圈，不知道当前在做什么。
+            return nextPlayer.playWhenReady && nextPlayer.playbackState == Player.STATE_READY
         }
         fun updateOverlayAutoHide() {
             overlay.removeCallbacks(hideOverlay)
@@ -211,15 +212,6 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
             updateOverlayAutoHide()
         }
         fun controlsVisible(): Boolean = overlay.alpha > 0.5f
-        fun isDirectionalDpad(keyCode: Int): Boolean {
-            return keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
-                keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ||
-                keyCode == KeyEvent.KEYCODE_DPAD_UP ||
-                keyCode == KeyEvent.KEYCODE_DPAD_DOWN
-        }
-        fun isPrimaryDpadAction(keyCode: Int): Boolean {
-            return keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER
-        }
         fun playFromCurrentPosition() {
             if (nextPlayer.playbackState == Player.STATE_ENDED) {
                 nextPlayer.seekTo(0)
@@ -247,7 +239,6 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
         val longPressMs = 450L
         var centerDownTime = 0L
         var centerConsumedByLong = false
-        var centerRevealOnly = false
         fun isCenterKey(keyCode: Int): Boolean =
             keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER
 
@@ -264,10 +255,8 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
                 if (event.action == KeyEvent.ACTION_UP) {
                     if (!isCenterKey(keyCode)) return@setOnKeyListener false
                     val handledByLong = centerConsumedByLong
-                    val revealOnly = centerRevealOnly
                     centerConsumedByLong = false
-                    centerRevealOnly = false
-                    if (!handledByLong && !revealOnly) {
+                    if (!handledByLong) {
                         if (event.eventTime - centerDownTime >= longPressMs) {
                             togglePlayerOrientation()
                             showOverlay()
@@ -278,20 +267,13 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
                     return@setOnKeyListener true
                 }
                 if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
-                if ((isDirectionalDpad(keyCode) || isPrimaryDpadAction(keyCode)) && !controlsVisible()) {
-                    showOverlay()
-                    if (isCenterKey(keyCode) && event.repeatCount == 0) {
-                        centerDownTime = event.eventTime
-                        centerConsumedByLong = false
-                        centerRevealOnly = true
-                    }
-                    return@setOnKeyListener true
-                }
+                // 控制层隐藏时方向键也直接生效：先亮出信息层，再继续走下面的
+                // seek/切集分支，不需要“第一下只唤出、第二下才操作”。
+                if (!controlsVisible()) showOverlay()
                 if (isCenterKey(keyCode)) {
                     if (event.repeatCount == 0) {
                         centerDownTime = event.eventTime
                         centerConsumedByLong = false
-                        centerRevealOnly = false
                         event.startTracking()
                     } else if (event.isLongPress && !centerConsumedByLong) {
                         togglePlayerOrientation()
@@ -336,13 +318,19 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
                         showOverlay()
                         true
                     }
-                    // DPAD_UP/DOWN:误按率最高——双击确认(长按连发也不连续切)。
+                    // 上下键直接切上一/下一集；长按连发不连续切，避免误按跳多集。
                     KeyEvent.KEYCODE_DPAD_UP -> {
-                        if (event.repeatCount == 0) guardedVideoSwitch(false) { viewModel.playPrevious(); showOverlay() }
+                        if (event.repeatCount == 0) {
+                            viewModel.playPrevious()
+                            showOverlay()
+                        }
                         true
                     }
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        if (event.repeatCount == 0) guardedVideoSwitch(true) { viewModel.playNext(); showOverlay() }
+                        if (event.repeatCount == 0) {
+                            viewModel.playNext()
+                            showOverlay()
+                        }
                         true
                     }
                     // MENU/INFO 键:多清晰度视频弹清晰度选择;只有一种清晰度时
@@ -396,16 +384,41 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
             visibility = if (nextPlayer.playbackState == Player.STATE_BUFFERING) View.VISIBLE else View.GONE
         }
         screen.addView(bufferingSpinner, FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER))
+        // 中央播放状态：暂停时常驻 ▶，播放时短暂显示 ❚❚ 后淡出。
+        val centerGlyph = PlayPauseGlyphView(this)
+        val centerGlyphWrap = FrameLayout(this).apply {
+            background = rounded(Color.argb(140, 0, 0, 0), 999)
+            alpha = 0f
+            isFocusable = false
+            addView(centerGlyph, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.CENTER))
+        }
+        screen.addView(centerGlyphWrap, FrameLayout.LayoutParams(dp(96), dp(96), Gravity.CENTER))
+        fun updateCenterGlyph() {
+            val playing = nextPlayer.playWhenReady &&
+                nextPlayer.playbackState != Player.STATE_ENDED &&
+                nextPlayer.playbackState != Player.STATE_IDLE
+            centerGlyph.setPlaying(playing)
+            centerGlyphWrap.animate().cancel()
+            centerGlyphWrap.visibility = View.VISIBLE
+            if (playing) {
+                centerGlyphWrap.alpha = 1f
+                centerGlyphWrap.animate().alpha(0f).setStartDelay(700).setDuration(300).start()
+            } else {
+                centerGlyphWrap.alpha = 1f
+            }
+        }
         screen.addView(overlay, frameMatch())
         nextPlayer.addListener(object : Player.Listener {
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 syncOverlayVisibilityForPlaybackState()
+                updateCenterGlyph()
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 bufferingSpinner.visibility =
                     if (playbackState == Player.STATE_BUFFERING) View.VISIBLE else View.GONE
                 syncOverlayVisibilityForPlaybackState()
+                updateCenterGlyph()
             }
 
             // 拿到真实分辨率后自动判定是否需要把画面旋转到 TV 横屏上;
@@ -417,49 +430,19 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
             }
         })
         applyPlayerVideoRotation()
+        updateCenterGlyph()
+        // 触摸：整屏点按播放/暂停；进度条是只读指示器，不参与焦点。
+        screen.setOnClickListener { togglePlayback() }
         setContent(screen)
         screen.requestFocus()
         showOverlay()
     }
 
-// UP/DOWN 切集的双击确认状态(文件级单例,进程内存活;见 guardedVideoSwitch)
-private var pendingSwitchIsNext = false
-private var pendingSwitchAtMs = 0L
-
-/**
- * DPAD_UP/DOWN 切上一/下一集的双击确认：这两个键在遥控器上最容易误按，
- * 直接切会打断播放并触发网络加载。第一次只 Toast 提示，2.5s 内同方向再按
- * 才真正切换。MEDIA_PREVIOUS/NEXT 专用键语义明确，不经此确认直通。
- */
-internal fun MainActivity.guardedVideoSwitch(isNext: Boolean, action: () -> Unit): Boolean {
-    val now = android.os.SystemClock.elapsedRealtime()
-    val confirmed = pendingSwitchIsNext == isNext && now - pendingSwitchAtMs < 2500L
-    pendingSwitchIsNext = isNext
-    pendingSwitchAtMs = now
-    if (confirmed) {
-        action()
-    } else {
-        android.widget.Toast.makeText(
-            this,
-            if (isNext) "再按一次下键切换下一集" else "再按一次上键切换上一集",
-            android.widget.Toast.LENGTH_SHORT,
-        ).show()
-    }
-    return true
-}
-
 internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlayer, state: MediaUiState): FrameLayout {
-        val playingIndex = state.playingVideo
-            ?.let { current -> state.items.indexOfFirst { it.id == current.id } }
-            ?: -1
-        val previousTitle = if (playingIndex > 0) state.items[playingIndex - 1].title else null
-        val nextTitle = if (playingIndex >= 0 && playingIndex + 1 < state.items.size) state.items[playingIndex + 1].title else null
-        val hasPrevious = previousTitle != null
-        val hasNext = nextTitle != null || state.canLoadMore
         val videoTitle = state.playingVideo?.title?.takeIf { it.isNotBlank() } ?: "正在播放"
         val overlay = FrameLayout(this)
 
-        // ---------------------- 顶部:标题 + 状态 ----------------------
+        // ---------------------- 顶部:返回 + 标题 + 集数/清晰度 ----------------------
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.TOP
@@ -469,42 +452,46 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
                 intArrayOf(Color.argb(204, 0, 0, 0), Color.TRANSPARENT),
             )
         }
-        top.addView(
-            label(videoTitle, 26f, Colors.TEXT_PRIMARY, bold = true, maxLines = 2).apply {
-                letterSpacingCompat(-0.01f)
-            },
-            linearMatch(),
-        )
-        state.currentPages?.let { pages ->
-            if (pages.totalPages > 1) {
-                val pageTitle = pages.pageTitles.getOrNull(pages.currentPage)?.takeIf { it.isNotBlank() }
-                val pageLabel = pageTitle ?: "第${pages.currentPage + 1}集"
-                top.addView(
-                    label("$pageLabel · ${pages.currentPage + 1}/${pages.totalPages}", 16f, Colors.TEXT_SECONDARY, maxLines = 1),
-                    LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(8)),
-                )
-            }
-        }
-        val statusDot = View(this).apply { background = rounded(Colors.APPLE_BLUE, 999) }
-        val statusText = label("", 15f, Colors.TEXT_SECONDARY, bold = true, maxLines = 1)
-        // 快捷键提示(发现性):仅在当前场景下相关时显示。
-        val hints = buildList {
-            if (hasPrevious || hasNext) add("连按两次上下键 切换视频")  // 双击确认防误切;不用 ▲▼ Unicode 字形(老盒子字体栈可能缺字)
-            if (state.availableQualities.size > 1) add("MENU 键切换清晰度")
-        }
-        val statusRow = LinearLayout(this).apply {
+        val titleRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(statusDot, LinearLayout.LayoutParams(dp(9), dp(9)).withEndMargin(dp(10)))
-            addView(statusText, linearWrap())
-            hints.forEach { hint ->
+        }
+        // 触摸/鼠标可点的返回；电视端不参与焦点遍历，BACK 键仍然是主路径。
+        val backButton = label("返回", 17f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(20), 0, dp(20), 0)
+            background = rounded(Colors.GlassFill, 999, 1, Colors.GlassBorder)
+            isFocusable = false
+            isClickable = true
+            setOnClickListener { viewModel.back() }
+        }
+        titleRow.addView(backButton, LinearLayout.LayoutParams(wrap(), dp(48)).withEndMargin(dp(18)))
+        val titleColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(
+                label(videoTitle, 30f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
+                    letterSpacingCompat(-0.01f)
+                },
+                linearMatch(),
+            )
+            val meta = buildList {
+                state.currentPages?.let { pages ->
+                    if (pages.totalPages > 1) {
+                        add("第 ${pages.currentPage + 1} / ${pages.totalPages} 集")
+                    }
+                }
+                stream.label.takeIf { it.isNotBlank() }?.let { add(it) }
+            }.joinToString(" · ")
+            if (meta.isNotBlank()) {
                 addView(
-                    label(hint, 13f, Colors.TEXT_TERTIARY, maxLines = 1),
-                    LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(16)),
+                    label(meta, 20f, Colors.TEXT_SECONDARY, maxLines = 1),
+                    LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(6)),
                 )
             }
         }
-        top.addView(statusRow, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(14)))
+        titleRow.addView(titleColumn, LinearLayout.LayoutParams(0, wrap(), 1f))
+        top.addView(titleRow, LinearLayout.LayoutParams(match(), wrap()))
         overlay.addView(top, FrameLayout.LayoutParams(match(), wrap(), Gravity.TOP))
 
         // ---------------------- 底部:玻璃传输栏 ----------------------
@@ -518,38 +505,10 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
             )
         }
 
-        // 播放/暂停、快退/快进、上/下集全部由遥控器按键直接驱动(见底部按键提示),不在画面上
-        // 放可点击/可聚焦的控制按钮——那是触屏播放器的交互。这里只保留状态(顶部“正在播放/已暂停”)、
-        // 进度条与画面比例指示等只读信息。`transportIcon` 仅用于画面比例指示的小图标。
-        fun transportIcon(icon: TransportIcon, enabled: Boolean): TransportIconView =
-            TransportIconView(this, icon).apply {
-                setIconColor(Colors.TEXT_PRIMARY)
-                alpha = if (enabled) 1f else 0.3f
-                isFocusable = false
-                isClickable = false
-            }
-
-        // 画面旋转只读指示:由长按 OK/MENU 键直接切换,这里展示当前角度,非交互。
-        val orientationRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            addView(
-                transportIcon(TransportIcon.Aspect, true),
-                LinearLayout.LayoutParams(dp(18), dp(18)).withEndMargin(dp(8)),
-            )
-            addView(
-                label("画面 · ${videoRotationLabel()}", 13f, Colors.TEXT_TERTIARY, maxLines = 1)
-                    .apply { gravity = Gravity.CENTER }
-                    .also { orientationIndicator = it },
-                linearWrap(),
-            )
-        }
-        bottom.addView(
-            orientationRow,
-            LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(12)),
-        )
-
-        // 进度条:缓冲段 + 已播段 + 拖动点。
+        // 播放/暂停、快退/快进、上/下集全部由遥控器按键直接驱动，不在画面上
+        // 放可点击/可聚焦的控制按钮——那是触屏播放器的交互。这里只保留进度与
+        // 大号按键说明；播放状态由屏幕中央的三角形/两条竖杠表达。
+        // 进度条:缓冲段 + 已播段 + 拖动点。只读，不参与焦点。
         val bufferedFill = View(this).apply {
             background = rounded(Color.argb(64, 255, 255, 255), 999)
             pivotX = 0f
@@ -567,34 +526,38 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
         val progressTrack = FrameLayout(this).apply {
             background = rounded(Color.argb(38, 255, 255, 255), 999)
             clipChildren = false
-            addView(bufferedFill, FrameLayout.LayoutParams(match(), dp(6), Gravity.START or Gravity.CENTER_VERTICAL))
-            addView(progressFill, FrameLayout.LayoutParams(match(), dp(6), Gravity.START or Gravity.CENTER_VERTICAL))
-            addView(progressKnob, FrameLayout.LayoutParams(dp(14), dp(14), Gravity.START or Gravity.CENTER_VERTICAL))
+            addView(bufferedFill, FrameLayout.LayoutParams(match(), dp(8), Gravity.START or Gravity.CENTER_VERTICAL))
+            addView(progressFill, FrameLayout.LayoutParams(match(), dp(8), Gravity.START or Gravity.CENTER_VERTICAL))
+            addView(progressKnob, FrameLayout.LayoutParams(dp(16), dp(16), Gravity.START or Gravity.CENTER_VERTICAL))
         }
-        val timeCurrent = label("0:00", 14f, Colors.TEXT_SECONDARY, bold = true, maxLines = 1)
-        val timeTotal = label("0:00", 14f, Colors.TEXT_TERTIARY, maxLines = 1)
+        val timeCurrent = label("0:00", 18f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1)
+        val timeTotal = label("0:00", 18f, Colors.TEXT_SECONDARY, maxLines = 1)
         val scrubberRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(timeCurrent, LinearLayout.LayoutParams(wrap(), wrap()).withEndMargin(dp(16)))
-            addView(progressTrack, LinearLayout.LayoutParams(0, dp(14), 1f))
+            addView(progressTrack, LinearLayout.LayoutParams(0, dp(18), 1f))
             addView(timeTotal, LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(16)))
         }
         bottom.addView(scrubberRow, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(24)))
 
-        val hintBase = "方向键唤出控制层 · OK 播放/暂停 · ← → 快退/快进 10 秒 · 长按 OK 旋转画面"
-        val hintText = buildString {
-            append(hintBase)
-            if (hasPrevious) append(" · ↑ 上一个")
-            if (hasNext) append(" · ↓ 下一个")
-        }
-        val hint = label(
-            hintText,
-            13f,
-            Colors.TEXT_TERTIARY,
+        val keyHints = label(
+            "← 快退10秒    → 快进10秒    ↑ 上一集    ↓ 下一集    OK 播放/暂停",
+            17f,
+            Colors.TEXT_PRIMARY,
             maxLines = 1,
         ).apply { gravity = Gravity.CENTER }
-        bottom.addView(hint, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(16)))
+        bottom.addView(keyHints, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(18)))
+        val secondaryHint = label(
+            buildString {
+                append("长按 ← → 连续快退/快进")
+                if (state.availableQualities.size > 1) append(" · MENU 键切换清晰度")
+            },
+            14f,
+            Colors.TEXT_SECONDARY,
+            maxLines = 1,
+        ).apply { gravity = Gravity.CENTER }
+        bottom.addView(secondaryHint, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(6)))
 
         overlay.addView(bottom, FrameLayout.LayoutParams(match(), wrap(), Gravity.BOTTOM))
 
@@ -626,36 +589,15 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
                 overlay.postDelayed(this, 300)
             }
         }
-        fun updatePlaybackGlyph() {
-            val isPlaying = player.playWhenReady && player.playbackState != Player.STATE_ENDED
-            statusText.setTextIfChanged(when {
-                player.playbackState == Player.STATE_ENDED -> "已结束 · ${stream.label.ifBlank { "默认" }}"
-                player.playbackState == Player.STATE_BUFFERING -> "缓冲中 · ${stream.label.ifBlank { "默认" }}"
-                player.playWhenReady -> "正在播放 · ${stream.label.ifBlank { "默认" }}"
-                else -> "已暂停 · ${stream.label.ifBlank { "默认" }}"
-            })
-            val dotColor = when {
-                player.playbackState == Player.STATE_BUFFERING -> Colors.TEXT_TERTIARY
-                isPlaying -> Colors.APPLE_BLUE
-                else -> Colors.TEXT_SECONDARY
-            }
-            statusDot.background = rounded(dotColor, 999)
-        }
         val listener = object : Player.Listener {
-            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                updatePlaybackGlyph()
-            }
-
             override fun onPlaybackStateChanged(playbackState: Int) {
                 updateProgress()
-                updatePlaybackGlyph()
             }
         }
         player.addListener(listener)
         overlay.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(view: View) {
                 updateProgress()
-                updatePlaybackGlyph()
                 overlay.post(progressTick)
             }
 

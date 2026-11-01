@@ -49,6 +49,7 @@ fun PagedVideoGrid(
     modifier: Modifier = Modifier,
     firstItemFocusRequester: FocusRequester? = null,
     firstItemUpFocusRequester: FocusRequester? = null,
+    progressById: Map<String, Float> = emptyMap(),
 ) {
     val gridState = rememberLazyGridState()
 
@@ -101,6 +102,7 @@ fun PagedVideoGrid(
                 video = video,
                 onClick = { onItemClick(video) },
                 modifier = Modifier.fillMaxWidth().then(firstModifier),
+                progress = progressById[video.id],
             )
         }
         if (isLoadingMore || loadMoreFailed) {

@@ -23,7 +23,7 @@ private val TvTypography = Typography(
     bodyLarge = TextStyle(fontSize = 18.sp, lineHeight = 26.sp),
     bodyMedium = TextStyle(fontSize = 16.sp, lineHeight = 24.sp),
     bodySmall = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
-    labelLarge = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.Medium),
+    labelLarge = TextStyle(fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium),
 )
 
 @Composable

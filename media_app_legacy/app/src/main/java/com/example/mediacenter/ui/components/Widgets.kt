@@ -71,7 +71,7 @@ internal fun MainActivity.iconPill(
         val iconView = PillIconView(this, icon).apply {
             setIconColor(Colors.TEXT_PRIMARY)
         }
-        val textView = label(text, 15f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
+        val textView = label(text, 17f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
             gravity = Gravity.CENTER
         }
         row.addView(iconView, LinearLayout.LayoutParams(dp(18), dp(18)))
@@ -186,7 +186,7 @@ internal fun MainActivity.pill(
         onFocusChange: ((Boolean) -> Unit)? = null,
         onClick: () -> Unit,
     ): TextView {
-        return label(text, 15f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
+        return label(text, 17f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
             gravity = Gravity.CENTER
             minHeight = dp(heightDp)
             setPadding(dp(horizontalPaddingDp), 0, dp(horizontalPaddingDp), 0)

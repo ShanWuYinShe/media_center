@@ -164,6 +164,25 @@ class PlayerViewModel(
         return true
     }
 
+    /** 遥控器 ↓：手动切下一集（多P下一页或合集下一集）。 */
+    fun playNextManual(): Boolean = onPlaybackEnded()
+
+    /** 遥控器 ↑：手动切上一集（多P上一页或合集上一集）。 */
+    fun playPreviousManual(): Boolean {
+        val state = _uiState.value
+        val pages = state.playbackResult?.pages
+        if (pages != null && pages.currentPage > 0) {
+            selectPage(pages.currentPage - 1)
+            return true
+        }
+        val collection = state.collection ?: return false
+        if (collection.currentIndex > 0) {
+            _episodeEvents.tryEmit(collection.items[collection.currentIndex - 1])
+            return true
+        }
+        return false
+    }
+
     private fun updateNext() {
         val state = _uiState.value
         _uiState.value = state.copy(next = nextPlayback(state.playbackResult, state.collection))

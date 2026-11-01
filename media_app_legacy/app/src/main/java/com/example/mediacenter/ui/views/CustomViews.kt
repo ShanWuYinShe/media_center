@@ -317,3 +317,52 @@ class WarningGlyphView(context: Context) : View(context) {
 
 // 播放请求 User-Agent:必须用桌面浏览器标识。部分上游 CDN(如 bilibili)对
 // 含 "Android" 的 UA 做防盗链拦截会返回 403(实测桌面 Chrome / 裸 Mozilla 可 206,
+
+/**
+ * 播放页中央状态图标：暂停时画三角形（▶），播放时画两条竖杠（❚❚）。
+ *
+ * 不用 Unicode 字形：老盒子字体栈缺 ▲▼/❚ 一类符号会显示豆腐块；
+ * Canvas 自绘在 API 19 上稳定，也避免为新图标引入扩展包。
+ */
+class PlayPauseGlyphView(context: Context) : View(context) {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Colors.TEXT_PRIMARY
+    }
+    private val path = Path()
+    private var playing: Boolean = false
+
+    fun setPlaying(value: Boolean) {
+        if (playing == value) return
+        playing = value
+        invalidate()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        if (w <= 0f || h <= 0f) return
+        if (playing) {
+            val barWidth = w * 0.18f
+            val gap = w * 0.14f
+            val top = h * 0.16f
+            val bottom = h * 0.84f
+            val left = (w - barWidth * 2 - gap) / 2f
+            val radius = barWidth / 2f
+            // Canvas#drawRoundRect(l,r,r,l,...) 是 API 21；API 19 用 RectF 重载。
+            val barRect = RectF()
+            barRect.set(left, top, left + barWidth, bottom)
+            canvas.drawRoundRect(barRect, radius, radius, paint)
+            barRect.set(left + barWidth + gap, top, left + barWidth * 2 + gap, bottom)
+            canvas.drawRoundRect(barRect, radius, radius, paint)
+        } else {
+            path.reset()
+            path.moveTo(w * 0.22f, h * 0.14f)
+            path.lineTo(w * 0.22f, h * 0.86f)
+            path.lineTo(w * 0.84f, h * 0.5f)
+            path.close()
+            canvas.drawPath(path, paint)
+        }
+    }
+}

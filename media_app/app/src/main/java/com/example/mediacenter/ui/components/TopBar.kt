@@ -70,7 +70,7 @@ fun TopBar(
             Text(
                 text = "Media Center",
                 color = TextPrimary,
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold,
                 letterSpacing = 0.2.sp,
                 maxLines = 1,
@@ -91,22 +91,39 @@ fun TopBar(
                             imageVector = Icons.Default.ArrowDropDown,
                             contentDescription = null,
                             tint = TextPrimary,
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(20.dp),
                         )
                     },
                 )
                 Spacer(Modifier.width(8.dp))
             }
-            TvIconButton(
+            // 10ft 下纯图标(齿轮/放大镜)辨认成本高，尤其对老人；按钮一律带文字。
+            TvChip(
+                label = "设置",
                 onClick = onSettingsClick,
-                contentDescription = "设置",
-            ) {
-                Icon(Icons.Default.Settings, contentDescription = null, tint = TextPrimary)
-            }
-            Spacer(Modifier.width(4.dp))
-            TvIconButton(
+                leading = {
+                    Icon(
+                        Icons.Default.Settings,
+                        contentDescription = null,
+                        tint = TextPrimary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                },
+            )
+            Spacer(Modifier.width(8.dp))
+            TvChip(
+                label = "搜索",
                 onClick = onSearchClick,
-                contentDescription = "搜索",
+                leading = {
+                    Icon(
+                        Icons.Default.Search,
+                        contentDescription = null,
+                        tint = TextPrimary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                },
                 modifier = Modifier
                     .then(
                         if (searchFocusRequester != null) {
@@ -122,9 +139,7 @@ fun TopBar(
                             Modifier
                         },
                     ),
-            ) {
-                Icon(Icons.Default.Search, contentDescription = null, tint = TextPrimary)
-            }
+            )
         }
     }
 }

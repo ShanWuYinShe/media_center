@@ -48,7 +48,7 @@ import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.update.AppUpdateHolder
 import com.example.mediacenter.update.UpdateCheckResult
 import com.example.mediacenter.ui.components.TvDialogButton
-import com.example.mediacenter.ui.components.TvIconButton
+import com.example.mediacenter.ui.components.TvBackButton
 import com.example.mediacenter.ui.components.TvScrollableText
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.CardGray
@@ -181,14 +181,12 @@ fun SettingsScreen(onBack: () -> Unit) {
             modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenHorizontalPadding, vertical = ScreenVerticalPadding),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TvIconButton(onClick = onBack, contentDescription = "返回") {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = TextPrimary)
-            }
+            TvBackButton(onClick = onBack)
             Text(
                 text = "设置",
                 color = TextPrimary,
                 style = MaterialTheme.typography.headlineMedium,
-                modifier = Modifier.padding(start = 8.dp),
+                modifier = Modifier.padding(start = 16.dp),
             )
         }
 

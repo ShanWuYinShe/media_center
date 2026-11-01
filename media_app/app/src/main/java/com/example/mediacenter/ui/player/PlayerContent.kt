@@ -4,10 +4,24 @@ import androidx.activity.compose.BackHandler
 import android.content.Intent
 import android.os.Bundle
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -19,16 +33,19 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -54,6 +71,7 @@ internal fun PlayerContent(
     videoId: String,
     videoTitle: String,
     playbackResult: PlaybackResult,
+    collection: PlaybackCollection?,
     overlayError: String?,
     onSelectQuality: (Int) -> Unit,
     onSelectPage: (Int) -> Unit,
@@ -62,18 +80,20 @@ internal fun PlayerContent(
     // 片尾自动连播:多P下一页优先,其次是合集队列的下一集(由 PlayerScreen 计算)
     hasAutoNext: Boolean,
     onAutoNext: () -> Unit,
-    nextEpisodeTitle: String?,
-    onNextEpisode: (() -> Unit)?,
+    // 遥控器 ↑/↓ 手动切集
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
 ) {
     val context = LocalContext.current
     // 当前流:YouTube 的选项带 mimeType(HLS m3u8 无扩展名,必须显式声明
     // 才能命中 HLS 媒体源;progressive mp4 靠 URL 推断也可,统一带上最稳)。
     val stream = playbackResult.options.first()
     var showControls by remember { mutableStateOf(true) }
-    // 唤出控制条的那次按键:KeyDown 时记录,KeyUp 继续消费。仅判断 showControls
-    // 不够——KeyUp 到达时它已经是 true,会放行给刚获得焦点的播放按钮造成暂停。
-    var revealKey by remember { mutableStateOf<Key?>(null) }
+    var showOptions by remember { mutableStateOf(false) }
     var playerError by remember { mutableStateOf<String?>(null) }
+    // 最近一次 Up/Down 切集时间：遥控器长按方向键会连发 KeyDown，
+    // 不做节流会在几百毫秒内连跳好几集（老人误按率更高）。
+    var lastEpisodeSwitchMs by remember { mutableLongStateOf(0L) }
     // BACK 先收起控制条,再退播放页(标准视频播放器行为);收起状态由
     // PlayerScreen 的 BackHandler 兜底退出。Compose 中后注册的可用
     // BackHandler 优先,故此处注册即获得优先级。
@@ -97,9 +117,8 @@ internal fun PlayerContent(
     var pendingSeekMs by remember { mutableLongStateOf(0L) }
     // 上次加载流所属的分P,用于判定"换清晰度"与"换分P"
     var lastPage by remember { mutableIntStateOf(playbackResult.pages.currentPage) }
-    val controlsFocus = remember { FocusRequester() }
-    // 控制条隐藏时承接遥控器焦点:否则唯一可聚焦的控件被移出组合,焦点
-    // 落回 Window 根,Box 上的 onPreviewKeyEvent 收不到事件,控制条再也唤不出。
+    // 控制条隐藏时承接遥控器焦点:全局按键始终由播放器根节点处理，
+    // 控制层只做信息展示，不抢焦点。
     val playerFocus = remember { FocusRequester() }
     // 多P视频的分P位置不能跨流恢复,只在单P视频上启用断点续播
     val canResume = playbackResult.pages.totalPages <= 1
@@ -375,19 +394,17 @@ internal fun PlayerContent(
 
     // 播放中自动隐藏控制条；显示期间任何按键(浏览分P/清晰度等)都会通过
     // lastInteractionMs 重启本 effect，重新计满 4s——不会在操作中途突然消失。
-    LaunchedEffect(showControls, isPlaying, lastInteractionMs) {
-        if (showControls && isPlaying) {
+    LaunchedEffect(showControls, isPlaying, lastInteractionMs, showOptions) {
+        if (showControls && isPlaying && !showOptions) {
             delay(AUTO_HIDE_DELAY_MS)
             showControls = false
         }
     }
-    // 控制条显示时聚焦默认按钮;隐藏时把焦点交给播放器根节点。
-    // overlayError/playerError 期间由错误层的重试按钮持有焦点,不要抢。
-    LaunchedEffect(showControls, overlayError, playerError, controller) {
+    // 焦点只交给播放器根节点：控制层没有可聚焦的播放/快进按钮，方向键
+    // 始终是全局操作，不会出现"先移动焦点再按 OK"的多余步骤。
+    LaunchedEffect(controller, overlayError, playerError) {
         if (controller == null || overlayError != null || playerError != null) return@LaunchedEffect
-        runCatching {
-            if (showControls) controlsFocus.requestFocus() else playerFocus.requestFocus()
-        }
+        runCatching { playerFocus.requestFocus() }
     }
 
     // 断网恢复:播放错误源于网络时,网络可用后自动重试一次(解析 + 重新加载)
@@ -431,32 +448,95 @@ internal fun PlayerContent(
         return
     }
 
+    val hasOptions = playbackResult.pages.totalPages > 1 ||
+        playbackResult.availableQualities.size > 1
+
+    fun revealControls() {
+        showControls = true
+        lastInteractionMs = System.currentTimeMillis()
+    }
+
+    fun seekBy(deltaMs: Long) {
+        val target = (controller.currentPosition + deltaMs).coerceAtLeast(0L)
+        val duration = controller.duration
+        controller.seekTo(if (duration > 0) target.coerceAtMost(duration) else target)
+    }
+
+    fun togglePlayback() {
+        if (controller.isPlaying) controller.pause() else controller.play()
+    }
+
+    fun switchEpisode(next: Boolean) {
+        val now = System.currentTimeMillis()
+        // 长按方向键会连发 KeyDown；700ms 内只切一次，避免连跳多集。
+        if (now - lastEpisodeSwitchMs < EpisodeSwitchThrottleMs) return
+        lastEpisodeSwitchMs = now
+        if (next) onNext() else onPrevious()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .focusRequester(playerFocus)
             .focusable()
             .onPreviewKeyEvent { event ->
-                if (event.key !in CONTROL_KEYS) return@onPreviewKeyEvent false
-                if (!showControls) {
-                    if (event.type == KeyEventType.KeyDown) {
-                        showControls = true
-                        revealKey = event.key
-                        lastInteractionMs = System.currentTimeMillis()
+                val down = event.type == KeyEventType.KeyDown
+                val up = event.type == KeyEventType.KeyUp
+                when (event.key) {
+                    Key.DirectionLeft -> {
+                        if (down) {
+                            seekBy(-SEEK_STEP_MS)
+                            revealControls()
+                        }
+                        true
                     }
-                    // 必须连 KeyUp 一起吞掉:显示控制条后焦点会落到播放按钮,
-                    // 漏掉的 KeyUp 会触发一次点击,把"唤出控制条"变成"暂停"。
-                    return@onPreviewKeyEvent true
+                    Key.DirectionRight -> {
+                        if (down) {
+                            seekBy(SEEK_STEP_MS)
+                            revealControls()
+                        }
+                        true
+                    }
+                    Key.DirectionUp -> {
+                        if (down) {
+                            switchEpisode(next = false)
+                            revealControls()
+                        }
+                        true
+                    }
+                    Key.DirectionDown -> {
+                        if (down) {
+                            switchEpisode(next = true)
+                            revealControls()
+                        }
+                        true
+                    }
+                    Key.DirectionCenter, Key.Enter -> {
+                        // OK 在抬起时切换：避免长按产生一串 KeyDown 把播放/暂停
+                        // 反复切换；按住期间只保证控制条可见。
+                        if (down) revealControls()
+                        if (up) {
+                            togglePlayback()
+                            revealControls()
+                        }
+                        true
+                    }
+                    Key.MediaPlayPause -> {
+                        if (down) {
+                            togglePlayback()
+                            revealControls()
+                        }
+                        true
+                    }
+                    Key.Menu -> {
+                        if (down && hasOptions) {
+                            showOptions = true
+                            revealControls()
+                        }
+                        true
+                    }
+                    else -> false
                 }
-                if (event.type == KeyEventType.KeyUp && event.key == revealKey) {
-                    revealKey = null
-                    return@onPreviewKeyEvent true
-                }
-                if (event.type == KeyEventType.KeyDown) {
-                    // 控制条已显示：本次按键用于操作，重置自动隐藏计时
-                    lastInteractionMs = System.currentTimeMillis()
-                }
-                false
             },
     ) {
         AndroidView(
@@ -471,10 +551,33 @@ internal fun PlayerContent(
             onRelease = { view -> view.player = null },
             modifier = Modifier.fillMaxSize(),
         )
+        // 触摸：左侧 30% 快退、右侧 30% 快进、中间播放/暂停。
+        // 放在控制层下方，点顶部返回/选集胶囊时不会误触。
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures { offset ->
+                        revealControls()
+                        val width = size.width.coerceAtLeast(1)
+                        when {
+                            offset.x < width * 0.3f -> seekBy(-SEEK_STEP_MS)
+                            offset.x > width * 0.7f -> seekBy(SEEK_STEP_MS)
+                            else -> togglePlayback()
+                        }
+                    }
+                },
+        )
         // 缓冲指示：画面未停但流没跟上时给出“正在加载”反馈
         if (isBuffering) {
             LoadingIndicator(modifier = Modifier.fillMaxSize())
         }
+        // 中央播放状态：暂停时常驻 ▶，恢复播放时短暂显示 ❚❚ 后淡出。
+        // 放在缓冲指示之后，暂停/缓冲时三角形不会被转圈盖住。
+        PlaybackStateGlyph(
+            isPlaying = isPlaying,
+            modifier = Modifier.align(Alignment.Center),
+        )
         // 控制条与解析失败错误层互斥渲染：错误层盖在控制条上时，
         // 焦点可能落在被遮挡的控件上（看不见却拿到焦点）。
         if (overlayError != null) {
@@ -490,25 +593,75 @@ internal fun PlayerContent(
             ControlsOverlay(
                 videoTitle = videoTitle,
                 playbackResult = playbackResult,
-                isPlaying = isPlaying,
+                collection = collection,
                 positionMs = positionMs,
                 durationMs = durationMs,
-                controlsFocus = controlsFocus,
-                onTogglePlay = {
-                    if (controller.isPlaying) controller.pause() else controller.play()
-                },
-                onSeek = { controller.seekTo(it) },
-                // 相对快进/快退:以播放器当前位置为准,无需等 duration 就绪
-                onSeekBy = { delta ->
-                    controller.seekTo((controller.currentPosition + delta).coerceAtLeast(0L))
-                },
-                onSelectQuality = onSelectQuality,
-                onSelectPage = onSelectPage,
-                nextEpisodeTitle = nextEpisodeTitle,
-                onNextEpisode = onNextEpisode,
+                onOptionsClick = { showOptions = true },
                 onBack = onBack,
                 modifier = Modifier.fillMaxSize(),
             )
         }
+        if (showOptions) {
+            PlaybackOptionsDialog(
+                playbackResult = playbackResult,
+                onSelectQuality = onSelectQuality,
+                onSelectPage = onSelectPage,
+                onDismiss = { showOptions = false },
+            )
+        }
     }
 }
+
+@Composable
+private fun PlaybackStateGlyph(
+    isPlaying: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    var visible by remember { mutableStateOf(!isPlaying) }
+    LaunchedEffect(isPlaying) {
+        visible = true
+        if (isPlaying) {
+            delay(800)
+            visible = false
+        }
+    }
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = modifier,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(96.dp)
+                .background(Color.Black.copy(alpha = 0.55f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (isPlaying) {
+                Row(
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.height(44.dp),
+                ) {
+                    repeat(2) {
+                        Box(
+                            modifier = Modifier
+                                .width(13.dp)
+                                .fillMaxHeight()
+                                .background(Color.White, RoundedCornerShape(2.dp)),
+                        )
+                    }
+                }
+            } else {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(56.dp),
+                )
+            }
+        }
+    }
+}
+
+private const val EpisodeSwitchThrottleMs = 700L

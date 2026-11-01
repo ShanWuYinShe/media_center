@@ -9,7 +9,7 @@
 ## 仓库结构
 
 - `media_app/` — Android TV + Kotlin + Jetpack Compose + Media3 客户端
-- `media_app_legacy/` — 早期客户端存档目录（不再开发）
+- `media_app_legacy/` — API 19 原生 View/RecyclerView 兼容客户端（老电视/盒子，与新版保持同一 UI 语义）
 - `media_server/` — Go 目录服务（provider 列表、分类列表、视频元数据）+ youtube provider 的实时通道（yt-dlp ytsearch 实时搜索，无 Data API 配额；vod_extractor 解析代理，见 `media_server/youtube.go`）。
 - `vod_extractor/` — Python + yt-dlp 独立点播解析服务（YouTube 播放直链解析）。`media_server` 经 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 调用其 `POST /search`（实时搜索）与 `POST /extract`（播放直链解析）。
   - **硬前提**：YouTube 对数据中心 IP 的**播放解析**触发 "Sign in to confirm you're not a bot"，故解析必须放置 cookies；**搜索**走 ytsearch flat 列表页不受影响，无 cookies 仍可用（验证方式：线上实测）。cookies 路径与挂载点、`VOD_EXTRACTOR_EXTRACTOR_ARGS`、过期重导出等运维细节以 `vod_extractor/AGENTS.md`「部署硬前提」为唯一维护处，此处不再复制。

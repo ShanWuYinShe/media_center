@@ -53,37 +53,7 @@ data class MediaUiState(
     val currentPages: PlaybackPages? = null,
     // 当前视频全部可用清晰度(播放页清晰度切换弹窗数据源)。
     val availableQualities: List<PlaybackQuality> = emptyList(),
-    // 时长筛选(分类浏览用):ALL 不过滤;搜索模式(query 非空)忽略该筛选。
-    val durationFilter: DurationFilter = DurationFilter.ALL,
 )
-
-/**
- * 时长筛选档位(分类浏览用):按视频时长把列表收窄,数据来自 VideoSummary 的
- * durationSeconds(服务端 catalog 已有字段,无需额外请求)。
- * 阈值:短片 < 10 分钟;中片 10~45 分钟;长片 > 45 分钟。
- */
-enum class DurationFilter(val id: String, val label: String) {
-    ALL("all", "全部"),
-    SHORT("short", "短片"),
-    MEDIUM("medium", "中片"),
-    LONG("long", "长片"),
-}
-
-/** 视频是否命中某档时长筛选;时长缺失(null)的视频只出现在"全部"里。 */
-fun VideoSummary.matchesDuration(filter: DurationFilter): Boolean {
-    val seconds = durationSeconds ?: return false
-    return when (filter) {
-        DurationFilter.ALL -> true
-        DurationFilter.SHORT -> seconds < 10 * 60
-        DurationFilter.MEDIUM -> seconds in 10 * 60 until 45 * 60
-        DurationFilter.LONG -> seconds >= 45 * 60
-    }
-}
-
-/** 按当前状态输出展示列表:搜索模式与"全部"档不过滤,其余按时长筛选。 */
-fun MediaUiState.displayItems(): List<VideoSummary> =
-    if (currentProvider == "youtube" || query.isNotBlank() || durationFilter == DurationFilter.ALL) items
-    else items.filter { it.matchesDuration(durationFilter) }
 
 /**
  * 项目级"取消友好"的 runCatching:遇到 [CancellationException] **重抛**,
@@ -444,40 +414,10 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         }
     }
 
-    /**
-     * 筛选自动补页:时长筛选选中后,若筛选结果不足一屏(RecyclerView 内容比视口
-     * 短时不产生滚动,onScrolled 不会触发翻页),自动补拉后续页直到铺满或没有更多。
-     * 每页 18 条,最多补 [FilterAutoFillMaxPages] 页兜底。
-     */
-    private fun fillFilteredScreen() {
-        val current = mutableState.value
-        if (current.query.isNotBlank() || current.durationFilter == DurationFilter.ALL) return
-        if (loadMoreJob?.isActive == true) return
-        loadMoreJob = viewModelScope.launch {
-            repeat(FilterAutoFillMaxPages) {
-                val s = mutableState.value
-                if (s.loading || !s.canLoadMore || s.loadMoreError != null) return@launch
-                if (s.displayItems().size >= FilterAutoFillTarget) return@launch
-                if (!fetchMorePage()) return@launch
-            }
-        }
-    }
-
     fun retryLoadMore() {
         if (mutableState.value.loadMoreError == null) return
         mutableState.update { it.copy(loadMoreError = null) }
         loadMore()
-    }
-
-    /**
-     * 时长筛选切换(分类浏览筛选行回调)。只更新筛选状态,列表渲染层
-     * ([MediaUiState.displayItems])即时生效;已加载数据无需重新请求。
-     * 选中非"全部"档位后自动补拉后续页(见 [fillFilteredScreen])。
-     */
-    fun selectDurationFilter(filter: DurationFilter) {
-        if (mutableState.value.durationFilter == filter) return
-        mutableState.update { it.copy(durationFilter = filter) }
-        if (filter != DurationFilter.ALL) fillFilteredScreen()
     }
 
     fun selectCategory(category: ContentCategory) {
@@ -1293,11 +1233,6 @@ private const val MaxCategoryCacheEntries = 24
 private const val MaxPlaybackCacheEntries = 32
 private const val MaxPrefetchedIds = 128
 
-// 时长筛选自动补页:筛选结果不足一屏(RecyclerView 无滚动则 onScrolled 不触发)
-// 时自动补拉,直到铺满 [FilterAutoFillTarget] 条;每页 18 条,最多补
-// [FilterAutoFillMaxPages] 页兜底,防止无限拉取。
-private const val FilterAutoFillTarget = 12
-private const val FilterAutoFillMaxPages = 4
 
 // 首页分类加载失败自动重试:最多额外重试 MAX_HOME_AUTO_RETRIES 次,
 // 退避 2s/4s/8s。老 TV 盒子开机时 WiFi/路由未就绪很常见,单次失败直接

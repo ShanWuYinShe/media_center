@@ -14,8 +14,6 @@ import com.example.mediacenter.MainActivity
 import com.example.mediacenter.data.ContentCategory
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.ui.MediaUiState
-import com.example.mediacenter.ui.DurationFilter
-import com.example.mediacenter.ui.displayItems
 import com.example.mediacenter.ui.exitSearchMode
 import com.example.mediacenter.ui.homeCategoryKey
 import com.example.mediacenter.ui.homeDefaultCategoryTarget
@@ -59,6 +57,17 @@ import com.example.mediacenter.ui.views.PillIcon
 import com.example.mediacenter.ui.views.PillIconView
 
 internal fun MainActivity.renderHome(state: MediaUiState) {
+        // 首次进入且分类已就绪：焦点明确落在当前分类标签，而不是搜索按钮。
+        // 老人打开电视后左右键即可换类，不需要先找到/避开顶栏操作。
+        if (!homeInitialFocusApplied && !searchVisible && state.query.isBlank() &&
+            state.playing == null && state.selected == null && state.categories.isNotEmpty()
+        ) {
+            val initialCategory = state.selectedCategoryId
+                ?.takeIf { id -> state.categories.any { it.id == id } }
+                ?: state.categories.first().id
+            homeFocusArea = HomeFocusArea.Category
+            pendingHomeFocus = HomeFocusTarget.Category(initialCategory)
+        }
         clearHomeVideoList()
         val screen = FrameLayout(this).apply {
             background = appBackground()
@@ -102,21 +111,11 @@ internal fun MainActivity.renderHome(state: MediaUiState) {
         } else {
             content.addView(searchModeBar(state.query, ::registerFocusTarget), linearMatch())
         }
-        // 时长筛选行:仅分类浏览模式显示(搜索模式顶部已被搜索栏替换)。
-        if (state.query.isBlank() && state.currentProvider != "youtube") {
-            content.addView(
-                homeFilterBar(state.durationFilter, hasHero = homeHeroVideo(state) != null, registerFocusTarget = ::registerFocusTarget),
-                linearMatch(),
-            )
+        if (state.query.isBlank()) {
+            content.addView(homeSectionHeader(state), linearMatch())
         }
-        val heroVideo = homeHeroVideo(state)
-        if (heroVideo != null) {
-            content.addView(
-                homeHero(heroVideo, ::registerFocusTarget),
-                LinearLayout.LayoutParams(match(), dp(230)).apply { topMargin = dp(4) },
-            )
-        }
-
+        // 首页只有一个分类网格：分类标签在顶栏，不再有 Hero / 时长筛选 /
+        // “查看全部”这类需要二次瞄准的入口。
         val body = FrameLayout(this).apply {
             clipChildren = true
             clipToPadding = true
@@ -125,22 +124,14 @@ internal fun MainActivity.renderHome(state: MediaUiState) {
         if (state.items.isEmpty()) {
             resetHomeDetailsPrefetch()
         }
-        // 按时长筛选后的展示列表(ALL/搜索模式不过滤)。
-        val displayItems = state.displayItems()
+        val displayItems = state.items
         when {
             state.loading && state.items.isEmpty() -> body.addView(centeredLoading("正在加载…"), frameMatch())
             state.error != null && state.items.isEmpty() -> body.addView(errorState(state.error, viewModel::retry, state.autoRetrying), frameMatch())
             displayItems.isEmpty() -> body.addView(
                 emptyState(
-                    when {
-                        state.query.isNotBlank() -> "没有找到相关内容"
-                        state.durationFilter != DurationFilter.ALL -> "当前筛选下暂无内容"
-                        else -> "当前分类暂无内容"
-                    },
-                    // 筛选导致空结果时给一键出口，不用自己摸索回到筛选栏
-                    action = if (state.durationFilter != DurationFilter.ALL) {
-                        "清除筛选" to { viewModel.selectDurationFilter(DurationFilter.ALL) }
-                    } else null,
+                    if (state.query.isNotBlank()) "没有找到相关内容" else "当前分类暂无内容",
+                    action = null,
                 ),
                 frameMatch(),
             )
@@ -173,6 +164,34 @@ internal fun MainActivity.renderHome(state: MediaUiState) {
         }
 
         setContent(screen)
+        // 首次焦点在真实布局/窗口获得焦点后重试：每次 render 都会重建 View，
+        // 且应用启动转场期间 requestFocus 可能返回 false。只重试有限次数，
+        // 成功即停；用户已经开始操作（焦点不在分类）则立即放弃，不抢焦点。
+        if (!homeInitialFocusApplied && !searchVisible && state.query.isBlank() &&
+            state.playing == null && state.selected == null
+        ) {
+            val attempts = intArrayOf(0)
+            val focusRunnable = object : Runnable {
+                override fun run() {
+                    if (homeInitialFocusApplied) return
+                    if (attempts[0]++ >= 24) return
+                    val target = homeDefaultCategoryTarget(currentState) ?: return
+                    val view = screen.findViewWithTag<View>(target.viewTag())
+                    val requested = view?.requestFocus() == true
+                    val realCategory = target is HomeFocusTarget.Category &&
+                        target.id != HomeFocusNoCategoryKey
+                    if (requested && view.isFocused && realCategory) {
+                        homeInitialFocusApplied = true
+                        pendingHomeFocus = null
+                    } else {
+                        // 分类尚未加载时先落在占位 chip，不算完成；继续等真实分类
+                        // 到达后再把焦点迁过去，避免搜索按钮抢走首屏焦点。
+                        screen.postDelayed(this, 180)
+                    }
+                }
+            }
+            screen.postDelayed(focusRunnable, 180)
+        }
     }
 
 internal fun MainActivity.homeTopBar(
@@ -228,8 +247,8 @@ internal fun MainActivity.homeTopBar(
             pill(
                 text = providerName,
                 selected = false,
-                heightDp = 48,
-                horizontalPaddingDp = 18,
+                heightDp = 54,
+                horizontalPaddingDp = 22,
                 onClick = { showProviderDialog(state.providers, state.currentProvider) },
                 onFocusChange = { focused -> if (focused) homeFocusArea = HomeFocusArea.Search },
             ).apply {
@@ -256,9 +275,12 @@ internal fun MainActivity.homeTopBar(
         } else {
             null
         }
-        val settingsButton = circleIconButton(
+        val settingsButton = iconPill(
+            text = "设置",
             icon = PillIcon.Settings,
-            contentDescription = "设置与诊断",
+            selected = false,
+            heightDp = 54,
+            horizontalPaddingDp = 18,
             onClick = { showSystemInfoDialog() },
             onFocusChange = { focused -> if (focused) homeFocusArea = HomeFocusArea.Search },
         ).apply {
@@ -287,9 +309,12 @@ internal fun MainActivity.homeTopBar(
             }
         }.also { registerFocusTarget(HomeFocusTarget.Settings, it) }
 
-        val searchButton = circleIconButton(
+        val searchButton = iconPill(
+            text = "搜索",
             icon = PillIcon.Search,
-            contentDescription = "搜索",
+            selected = false,
+            heightDp = 54,
+            horizontalPaddingDp = 18,
             onClick = {
                 cancelPendingCategorySelect()
                 homeFocusArea = HomeFocusArea.Search
@@ -307,17 +332,11 @@ internal fun MainActivity.homeTopBar(
                 if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
                 when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        if (homeHeroVideo(currentState) != null) {
-                            homeFocusArea = HomeFocusArea.Hero
-                            requestHomeFocus(HomeFocusTarget.HeroPlay)
+                        currentState.items.firstOrNull()?.let { video ->
+                            homeFocusArea = HomeFocusArea.Video
+                            requestHomeFocus(HomeFocusTarget.Video(video.id))
                             true
-                        } else {
-                            currentState.items.firstOrNull()?.let { video ->
-                                homeFocusArea = HomeFocusArea.Video
-                                requestHomeFocus(HomeFocusTarget.Video(video.id))
-                                true
-                            } ?: false
-                        }
+                        } ?: false
                     }
                     KeyEvent.KEYCODE_DPAD_LEFT -> {
                         requestHomeFocus(HomeFocusTarget.Settings)
@@ -341,8 +360,8 @@ internal fun MainActivity.homeTopBar(
             val chip = pill(
                 text = category.title,
                 selected = category.id == selectedId,
-                heightDp = 48,
-                horizontalPaddingDp = 22,
+                heightDp = 54,
+                horizontalPaddingDp = 24,
                 onClick = {
                     cancelPendingCategorySelect()
                     searchVisible = false
@@ -366,23 +385,12 @@ internal fun MainActivity.homeTopBar(
                     when (keyCode) {
                         KeyEvent.KEYCODE_DPAD_UP -> true
                         KeyEvent.KEYCODE_DPAD_DOWN -> {
-                            // 进入下方内容前先落在时长筛选行(取消任何挂起的分类切换防抖,
-                            // 避免迟到的切换在用户已进入下方后触发整屏重建、弹走焦点)。
+                            // 分类栏直接进入下方网格首个视频；没有 Hero/筛选行，
+                            // 老人按一次下键就能开始选片。
                             cancelPendingCategorySelect()
-                            if (currentState.currentProvider == "youtube") {
-                                // YouTube 分类无时长筛选行,直接进 Hero/网格。
-                                if (homeHeroVideo(currentState) != null) {
-                                    homeFocusArea = HomeFocusArea.Hero
-                                    requestHomeFocus(HomeFocusTarget.HeroPlay)
-                                } else {
-                                    homeFocusArea = HomeFocusArea.Video
-                                    currentState.items.firstOrNull()?.id
-                                        ?.let { requestHomeFocus(HomeFocusTarget.Video(it)) }
-                                }
-                            } else {
-                                homeFocusArea = HomeFocusArea.Filter
-                                requestHomeFocus(HomeFocusTarget.Filter(currentState.durationFilter.id))
-                            }
+                            homeFocusArea = HomeFocusArea.Video
+                            currentState.items.firstOrNull()?.id
+                                ?.let { requestHomeFocus(HomeFocusTarget.Video(it)) }
                             true
                         }
                         KeyEvent.KEYCODE_DPAD_LEFT -> {
@@ -420,7 +428,7 @@ internal fun MainActivity.homeTopBar(
                 }
             }
             registerFocusTarget(HomeFocusTarget.Category(category.id), chip)
-            chipRow.addView(chip, LinearLayout.LayoutParams(wrap(), dp(48)).withEndMargin(dp(12)))
+            chipRow.addView(chip, LinearLayout.LayoutParams(wrap(), dp(54)).withEndMargin(dp(12)))
         }
 
         // 分类加载失败(categories 为空)时分类栏也要有可聚焦元素:
@@ -466,84 +474,16 @@ internal fun MainActivity.homeTopBar(
             setPadding(0, 0, dp(4), 0)
         }
         if (providerChip != null) {
-            row.addView(providerChip, LinearLayout.LayoutParams(wrap(), dp(48)).withStartMargin(dp(12)))
+            row.addView(providerChip, LinearLayout.LayoutParams(wrap(), dp(54)).withStartMargin(dp(12)))
         }
-        row.addView(settingsButton, LinearLayout.LayoutParams(dp(54), dp(54)).withStartMargin(dp(8)))
-        row.addView(searchButton, LinearLayout.LayoutParams(dp(54), dp(54)).withStartMargin(dp(8)))
+        row.addView(settingsButton, LinearLayout.LayoutParams(wrap(), dp(54)).withStartMargin(dp(8)))
+        row.addView(searchButton, LinearLayout.LayoutParams(wrap(), dp(54)).withStartMargin(dp(8)))
         container.addView(row, LinearLayout.LayoutParams(match(), wrap()))
         container.addView(
             scroll,
             LinearLayout.LayoutParams(match(), wrap()).apply { topMargin = dp(2) },
         )
         return container
-    }
-
-/**
- * 时长筛选行(分类浏览模式、分类栏下方):全部 / 短片 / 中片 / 长片。
- *
- * 焦点导航:上 → 分类栏;下 → 视频网格(首个**筛选后**可见视频)。
- * 网格顶行按"上"仍回分类栏(保持既有肌肉记忆),筛选行通过分类栏"下"进入。
- * 筛选即时生效:选中即更新 state.durationFilter,渲染层过滤,无需重新请求。
- */
-internal fun MainActivity.homeFilterBar(
-        current: DurationFilter,
-        hasHero: Boolean,
-        registerFocusTarget: (HomeFocusTarget, View) -> Unit,
-    ): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(2), 0, dp(8))
-            clipChildren = false
-            clipToPadding = false
-        }
-        DurationFilter.entries.forEach { filter ->
-            val chip = pill(
-                text = filter.label,
-                selected = filter == current,
-                heightDp = 48,
-                horizontalPaddingDp = 18,
-                onClick = { viewModel.selectDurationFilter(filter) },
-                onFocusChange = { focused ->
-                    if (focused) homeFocusArea = HomeFocusArea.Filter
-                },
-            ).apply {
-                setOnKeyListener { _, keyCode, event ->
-                    if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
-                    when (keyCode) {
-                        KeyEvent.KEYCODE_DPAD_UP -> {
-                            // 回分类栏:取消挂起的分类防抖,避免迟到的分类切换弹走焦点。
-                            cancelPendingCategorySelect()
-                            homeFocusArea = HomeFocusArea.Category
-                            homeDefaultCategoryTarget(currentState)?.let { requestHomeFocus(it) }
-                            true
-                        }
-                        KeyEvent.KEYCODE_DPAD_DOWN -> {
-                            // 有 Hero 时先进入 Hero 主按钮;否则直接下网格首个可见视频。
-                            if (hasHero) {
-                                homeFocusArea = HomeFocusArea.Hero
-                                requestHomeFocus(HomeFocusTarget.HeroPlay)
-                                true
-                            } else {
-                                homeFocusArea = HomeFocusArea.Video
-                                val target = currentState.displayItems().firstOrNull()?.id
-                                    ?.let(HomeFocusTarget::Video)
-                                if (target != null) {
-                                    requestHomeFocus(target)
-                                    true
-                                } else {
-                                    false
-                                }
-                            }
-                        }
-                        else -> false
-                    }
-                }
-            }
-            registerFocusTarget(HomeFocusTarget.Filter(filter.id), chip)
-            row.addView(chip, LinearLayout.LayoutParams(wrap(), dp(48)).withEndMargin(dp(10)))
-        }
-        return row
     }
 
 internal fun MainActivity.searchModeBar(
@@ -841,3 +781,19 @@ internal fun MainActivity.prefetchVisibleHomeDetails(videos: List<VideoSummary>)
         prefetchedVisibleVideoIds = ids
     }
 
+
+/** 分类标题：让用户一眼知道当前看的是哪一类，而不是只靠顶部选中的小胶囊。 */
+internal fun MainActivity.homeSectionHeader(state: MediaUiState): View {
+    val title = state.categories
+        .firstOrNull { it.id == state.selectedCategoryId }
+        ?.title
+        ?: "视频"
+    return LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(0, dp(18), 0, dp(6))
+        addView(
+            label(title, 26f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1),
+            linearMatch(),
+        )
+    }
+}

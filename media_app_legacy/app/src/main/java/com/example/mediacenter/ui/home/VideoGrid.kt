@@ -55,7 +55,7 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
     ): View {
         val columns = gridColumns()
         val cardWidth = posterCardWidth(columns)
-        val cardHeight = (cardWidth * 1.50f).toInt()
+        val cardHeight = (cardWidth * 10f / 16f).toInt()
         val adapter = VideoGridAdapter(
             activity = this,
             columns = columns,
@@ -318,10 +318,10 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
                 gravity = Gravity.CENTER
                 alpha = 1f
             }
-            private val title = activity.label("", 14f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
+            private val title = activity.label("", 20f, Colors.TEXT_PRIMARY, bold = true, maxLines = 2).apply {
                 gravity = Gravity.BOTTOM or Gravity.START
             }
-            private val meta = activity.label("", 12f, Color.argb(210, 255, 255, 255), maxLines = 1)
+            private val meta = activity.label("", 15f, Color.argb(225, 255, 255, 255), maxLines = 1)
             private val focusIndicator = View(activity).apply {
                 background = activity.rounded(Colors.APPLE_BLUE, 999)
                 alpha = 0f
@@ -363,7 +363,7 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
                 val textBlock = LinearLayout(activity).apply {
                     orientation = LinearLayout.VERTICAL
                     gravity = Gravity.BOTTOM
-                    setPadding(activity.dp(10), activity.dp(8), activity.dp(10), activity.dp(10))
+                    setPadding(activity.dp(14), activity.dp(10), activity.dp(14), activity.dp(14))
                     addView(title, activity.linearMatch())
                     addView(meta, activity.linearMatch())
                 }
@@ -417,19 +417,13 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
                     when (keyCode) {
                         KeyEvent.KEYCODE_DPAD_UP -> {
                             if (pos >= columns) return@setOnKeyListener false
-                            // 首行上移:有 Hero 回 Hero 主按钮,否则回分类栏。
+                            // 首行上移直接回当前分类标签。
                             activity.savedGridState = activity.homeVideoRecycler?.layoutManager?.onSaveInstanceState()
-                            if (activity.homeHeroVideo(activity.currentState) != null) {
-                                activity.homeFocusArea = HomeFocusArea.Hero
-                                activity.requestHomeFocus(HomeFocusTarget.HeroPlay)
+                            activity.homeDefaultCategoryTarget(activity.currentState)?.let { target ->
+                                activity.homeFocusArea = HomeFocusArea.Category
+                                activity.requestHomeFocus(target)
                                 true
-                            } else {
-                                activity.homeDefaultCategoryTarget(activity.currentState)?.let { target ->
-                                    activity.homeFocusArea = HomeFocusArea.Category
-                                    activity.requestHomeFocus(target)
-                                    true
-                                } ?: false
-                            }
+                            } ?: false
                         }
                         KeyEvent.KEYCODE_DPAD_LEFT -> pos % columns == 0
                         KeyEvent.KEYCODE_DPAD_RIGHT -> {

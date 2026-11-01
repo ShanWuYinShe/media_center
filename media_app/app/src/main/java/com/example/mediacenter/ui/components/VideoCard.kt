@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -49,12 +50,12 @@ fun VideoCard(
     Card(
         onClick = onClick,
         modifier = modifier.aspectRatio(16f / 10f),
-        scale = CardDefaults.scale(focusedScale = 1.05f),
+        scale = CardDefaults.scale(focusedScale = 1.04f),
         colors = CardDefaults.colors(containerColor = CardGray),
-        // 项目 TV 焦点态:近白 2dp 外框 + 放大;封面铺满时仅靠放大在暗色
+        // 项目 TV 焦点态:近白 3dp 外框 + 放大;封面铺满时仅靠放大在暗色
         // 画面上不够清晰,边框让"当前焦点在哪"一眼可见。
         border = CardDefaults.border(
-            focusedBorder = Border(BorderStroke(2.dp, FocusBorder), shape = CardShape),
+            focusedBorder = Border(BorderStroke(3.dp, FocusBorder), shape = CardShape),
         ),
     ) {
         Box {
@@ -90,6 +91,9 @@ fun VideoCard(
                 text = video.title,
                 color = TextPrimary,
                 style = LocalTextStyle.current.copy(
+                    fontSize = 20.sp,
+                    lineHeight = 24.sp,
+                    fontWeight = FontWeight.Medium,
                     // 10ft 距离下微弱投影:标题叠在亮色封面上仍保持可读
                     shadow = Shadow(
                         color = Color.Black.copy(alpha = 0.6f),
@@ -99,19 +103,20 @@ fun VideoCard(
                 ),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.align(Alignment.BottomStart).padding(8.dp),
+                modifier = Modifier.align(Alignment.BottomStart).padding(12.dp),
             )
             val duration = video.durationSeconds
             if (duration != null && duration > 0) {
                 Text(
                     text = formatSeconds(duration),
                     color = Color.White,
-                    fontSize = 14.sp,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                        .padding(10.dp)
+                        .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
                 )
             }
             // 观看进度条(继续观看行):贴卡片底边,焦点放大时随卡片同步缩放

@@ -1,17 +1,23 @@
 package com.example.mediacenter.ui.home
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -20,8 +26,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.ui.components.EmptyStateView
 import com.example.mediacenter.ui.components.ErrorView
+import com.example.mediacenter.ui.components.LoadingIndicator
+import com.example.mediacenter.ui.components.PagedVideoGrid
 import com.example.mediacenter.ui.components.ProviderSelectDialog
 import com.example.mediacenter.ui.components.TopBar
+import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
+import com.example.mediacenter.ui.theme.TextPrimary
+import com.example.mediacenter.ui.theme.TextSecondary
 import com.example.mediacenter.ui.update.UpdateDialog
 import com.example.mediacenter.ui.update.UpdateDialogState
 import com.example.mediacenter.update.AppUpdateHolder
@@ -30,19 +41,15 @@ import com.example.mediacenter.util.NetworkRestoreEffect
 @Composable
 fun HomeScreen(
     onVideoClick: (VideoSummary) -> Unit,
-    // 「继续观看」行与 Hero 的播放:直达播放页并携带分页(TV"继续看"标准动线)
+    // 继续观看直达播放页并携带分页(TV"继续看"标准动线)
     onPlayVideo: (VideoSummary, Int) -> Unit,
     onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit,
-    onSeeAll: (categoryId: String, title: String) -> Unit,
 ) {
-    // 更新状态在进程级协调器(AppUpdateHolder)上:离开首页下载不中断,
-    // 进设置页看到的是同一份下载进度与弹窗状态。
     val viewModel: HomeViewModel = viewModel(factory = HomeViewModelFactory())
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
 
-    // 每次回到 RESUMED 让 ViewModel 重读观看历史(IO 线程),UI 只渲染状态。
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
@@ -54,18 +61,20 @@ fun HomeScreen(
         UpdateDialog(
             state = dialogState,
             onDismiss = { AppUpdateHolder.dismissUpdate(allowDuringDownload = true) },
-            // 下载由进程级协调器持有,弹窗关闭/离开首页返回后继续,可“后台下载”
             allowDismissDuringDownload = true,
             onStartDownload = {
-                (dialogState as? UpdateDialogState.Available)?.let { AppUpdateHolder.startUpdateDownload(it.info) }
+                (dialogState as? UpdateDialogState.Available)?.let {
+                    AppUpdateHolder.startUpdateDownload(it.info)
+                }
             },
             onRetryDownload = {
-                (dialogState as? UpdateDialogState.Failed)?.let { AppUpdateHolder.startUpdateDownload(it.info) }
+                (dialogState as? UpdateDialogState.Failed)?.let {
+                    AppUpdateHolder.startUpdateDownload(it.info)
+                }
             },
         )
     }
 
-    // 视频源切换:仅当存在多个 provider 时显示入口
     var showProviderDialog by remember { mutableStateOf(false) }
     if (showProviderDialog) {
         ProviderSelectDialog(
@@ -79,123 +88,171 @@ fun HomeScreen(
         )
     }
 
-    // 断网恢复:网络可用且当前处于错误态时自动重载首页
     NetworkRestoreEffect(onRestored = {
-        if (state.error != null) viewModel.loadHome()
+        if (state.error != null) viewModel.retry()
     })
 
-    // 首次进入首页把焦点落在搜索入口:默认焦点落在设置图标上不符合"先找内容"
-    // 的直觉,而聚焦 Hero 按钮会让 LazyColumn 把顶栏滚出屏幕。
-    // 必须等内容就绪再请求:骨架屏切真实内容会重建 LazyColumn item,过早请求
-    // 的焦点会丢失并落到设置图标上(首次按 OK 直接误进设置)。
-    val searchFocus = remember { FocusRequester() }
-    val heroPlayFocus = remember { FocusRequester() }
-    val contentReady = !state.isLoading && state.error == null
-    LaunchedEffect(contentReady) {
-        if (contentReady && viewModel.consumeInitialFocus()) {
-            runCatching { searchFocus.requestFocus() }
+    // 首屏焦点落在当前分类标签：老人打开电视先看到"我在哪一类"，
+    // 左右键即可换类，不需要精确瞄准某个卡片或图标。
+    val selectedTabFocus = remember { FocusRequester() }
+    val gridFirstFocus = remember { FocusRequester() }
+    val categoriesReady = state.categories.isNotEmpty()
+    LaunchedEffect(categoriesReady) {
+        if (categoriesReady && viewModel.consumeInitialFocus()) {
+            runCatching { selectedTabFocus.requestFocus() }
         }
     }
 
-    // 展示数据由纯函数装配(合规过滤/进度/Hero 选择),UI 不再做数据推导。
-    val content = buildHomeContent(state)
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
-        item {
-            TopBar(
-                onSearchClick = onSearchClick,
-                onSettingsClick = onSettingsClick,
-                providerLabel = state.providers
-                    .firstOrNull { it.id == state.currentProvider }
-                    ?.let { it.name ?: it.id }
-                    ?: state.currentProvider.takeIf { it.isNotEmpty() },
-                onProviderClick = if (state.providers.size > 1) {
-                    { showProviderDialog = true }
-                } else {
-                    null
-                },
-                searchFocusRequester = searchFocus,
-                // 没有 Hero 时保持系统默认 DOWN 行为
-                searchDownFocusRequester = if (content.hero != null) heroPlayFocus else null,
-            )
+    val tabs = remember(state.categories) {
+        buildList {
+            add(HomeTab(HomeContinueTabId, "继续观看"))
+            state.categories.forEach { add(HomeTab(it.id, it.title)) }
         }
-        val continueEntries = content.continueEntries
-        val continuePageById = content.continuePageById
-        content.hero?.let { hero ->
-            item(key = "hero") {
-                val isContinue = continueEntries.firstOrNull()?.videoId == hero.video.id
-                FeaturedHero(
-                    item = hero,
-                    onPlay = {
-                        // 精选 Hero 直接播放时登记观看历史(ViewModel 在 IO 线程写)。
-                        if (!isContinue) {
-                            viewModel.registerPlayed(hero.video, hero.page)
-                        }
-                        onPlayVideo(hero.video, hero.page)
-                    },
-                    onDetails = { onVideoClick(hero.video) },
-                    playFocusRequester = heroPlayFocus,
-                )
+    }
+    val continueEntries = remember(state.watchEntries, state.currentProvider) {
+        state.watchEntries.filter {
+            it.provider == state.currentProvider && it.positionSeconds >= 30
+        }
+    }
+    val continuePageById = remember(continueEntries) {
+        continueEntries.associate { it.videoId to it.page }
+    }
+    val continueProgressById = remember(continueEntries) {
+        continueEntries
+            .filter { it.durationSeconds > 0 }
+            .associate {
+                it.videoId to
+                    (it.positionSeconds.toFloat() / it.durationSeconds).coerceIn(0f, 1f)
             }
-        }
+    }
+    val showingContinue = state.selectedTab == HomeContinueTabId
+    val selectedCategory = state.categories.firstOrNull { it.id == state.selectedTab }
+    val pageTitle = if (showingContinue) "继续观看" else selectedCategory?.title.orEmpty()
+    val countLabel = when {
+        showingContinue -> if (continueEntries.isEmpty()) "" else "${continueEntries.size} 个进行中"
+        state.total > 0 -> "共 ${state.total} 部"
+        state.items.isNotEmpty() -> "共 ${state.items.size} 部"
+        else -> ""
+    }
+    val hasGridContent = if (showingContinue) {
+        continueEntries.isNotEmpty()
+    } else {
+        state.items.isNotEmpty()
+    }
 
-        if (continueEntries.isNotEmpty()) {
-            item {
-                CategoryRow(
-                    categoryName = "继续观看",
-                    videos = continueEntries.map { entry ->
-                        // 多P条目标题前缀页码,一眼分清看的是哪一集/哪一分P
-                        val summary = entry.toVideoSummary()
-                        if (entry.page > 0) {
-                            summary.copy(title = "第 ${entry.page + 1} 页 · ${summary.title}")
-                        } else {
-                            summary
-                        }
-                    },
-                    onVideoClick = { video ->
-                        onPlayVideo(video, continuePageById[video.id] ?: 0)
-                    },
-                    progressById = continueEntries
-                        .filter { it.durationSeconds > 0 }
-                        .associate { entry ->
-                            entry.videoId to (entry.positionSeconds.toFloat() / entry.durationSeconds).coerceIn(0f, 1f)
-                        },
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopBar(
+            onSearchClick = onSearchClick,
+            onSettingsClick = onSettingsClick,
+            providerLabel = state.providers
+                .firstOrNull { it.id == state.currentProvider }
+                ?.let { it.name ?: it.id }
+                ?: state.currentProvider.takeIf { it.isNotEmpty() },
+            onProviderClick = if (state.providers.size > 1) {
+                { showProviderDialog = true }
+            } else {
+                null
+            },
+            searchDownFocusRequester = if (categoriesReady) selectedTabFocus else null,
+        )
+        HomeCategoryTabs(
+            tabs = tabs,
+            selectedId = state.selectedTab,
+            onSelect = viewModel::selectTab,
+            selectedFocusRequester = selectedTabFocus,
+            firstCardDownFocusRequester = if (hasGridContent) gridFirstFocus else null,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (categoriesReady && pageTitle.isNotBlank()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        start = ScreenHorizontalPadding,
+                        end = ScreenHorizontalPadding,
+                        top = 10.dp,
+                        bottom = 6.dp,
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = pageTitle,
+                    color = TextPrimary,
+                    style = MaterialTheme.typography.titleLarge,
                 )
+                if (countLabel.isNotBlank()) {
+                    Text(
+                        text = countLabel,
+                        color = TextSecondary,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.padding(start = 12.dp),
+                    )
+                }
             }
         }
-        when {
-            // 首次加载(还没有任何分类)才铺骨架屏;已有缓存内容时静默刷新,
-            // 不打断正在浏览的用户。
-            state.isLoading && state.categories.isEmpty() -> item(key = "skeleton") { HomeSkeleton() }
-            state.error != null -> item(key = "error") {
-                // 全屏错误层必须给遥控器一个明确的焦点落点,否则方向键全部落空。
-                // LazyColumn item 的 fillMaxSize 没有有界高度,用父容器比例撑开,
-                // 让错误/空态看起来是"页面中央"而不是贴着顶部一条。
-                ErrorView(
+        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            when {
+                state.categories.isEmpty() && state.isLoading ->
+                    LoadingIndicator(modifier = Modifier.fillMaxSize())
+                state.error != null -> ErrorView(
                     message = state.error!!,
-                    onRetry = { viewModel.loadHome() },
+                    onRetry = viewModel::retry,
                     autoFocusRetry = true,
-                    modifier = Modifier.fillMaxWidth().fillParentMaxHeight(0.72f),
+                    modifier = Modifier.fillMaxSize(),
                 )
-            }
-            state.categories.isEmpty() -> item(key = "empty") {
-                EmptyStateView(
-                    message = "暂无分类数据",
-                    detail = if (state.currentProvider == "youtube") {
-                        "YouTube 内容可直接搜索播放，按顶栏搜索键开始"
+                showingContinue -> {
+                    if (continueEntries.isEmpty()) {
+                        EmptyStateView(
+                            message = "还没有观看记录",
+                            detail = "看过的视频会自动出现在这里，方便接着看",
+                            modifier = Modifier.fillMaxSize(),
+                        )
                     } else {
-                        "服务端还没有已上线的分类内容"
+                        val videos = continueEntries.map { entry ->
+                            val summary = entry.toVideoSummary()
+                            if (entry.page > 0) {
+                                summary.copy(title = "第 ${entry.page + 1} 页 · ${summary.title}")
+                            } else {
+                                summary
+                            }
+                        }
+                        PagedVideoGrid(
+                            items = videos,
+                            onItemClick = { video ->
+                                onPlayVideo(video, continuePageById[video.id] ?: 0)
+                            },
+                            onLoadMore = {},
+                            isLoadingMore = false,
+                            loadMoreFailed = false,
+                            onRetryLoadMore = {},
+                            modifier = Modifier.fillMaxSize(),
+                            firstItemFocusRequester = gridFirstFocus,
+                            firstItemUpFocusRequester = selectedTabFocus,
+                            progressById = continueProgressById,
+                        )
+                    }
+                }
+                state.isLoading && state.items.isEmpty() ->
+                    LoadingIndicator(modifier = Modifier.fillMaxSize())
+                state.items.isEmpty() -> EmptyStateView(
+                    message = "当前分类暂无内容",
+                    detail = if (state.currentProvider == "youtube") {
+                        "可以按搜索键直接搜索 YouTube 内容"
+                    } else {
+                        "服务端还没有已上线的视频"
                     },
-                    modifier = Modifier.fillMaxWidth().fillParentMaxHeight(0.72f),
+                    modifier = Modifier.fillMaxSize(),
                 )
-            }
-            else -> items(state.categories, key = { it.id }) { category ->
-                CategoryRow(
-                    categoryName = category.title,
-                    videos = state.categoryVideos[category.id].orEmpty(),
-                    onVideoClick = onVideoClick,
-                    onSeeAll = { onSeeAll(category.id, category.title) },
-                    loadFailed = state.categoryErrors.contains(category.id),
-                    onRetry = { viewModel.loadHome() },
+                else -> PagedVideoGrid(
+                    items = state.items,
+                    onItemClick = onVideoClick,
+                    onLoadMore = viewModel::loadMore,
+                    isLoadingMore = state.isLoadingMore,
+                    loadMoreFailed = state.loadMoreError != null,
+                    onRetryLoadMore = viewModel::retryLoadMore,
+                    modifier = Modifier.fillMaxSize(),
+                    firstItemFocusRequester = gridFirstFocus,
+                    firstItemUpFocusRequester = selectedTabFocus,
                 )
             }
         }

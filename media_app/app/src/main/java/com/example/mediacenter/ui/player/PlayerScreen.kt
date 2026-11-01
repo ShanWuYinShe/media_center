@@ -60,11 +60,11 @@ fun PlayerScreen(
         if (result != null) {
             val url = result.options.firstOrNull()?.url
             if (url != null) {
-                val nextEpisode = (state.next as? PlaybackNext.Episode)?.video
                 PlayerContent(
                     videoId = videoId,
                     videoTitle = videoTitle,
                     playbackResult = result,
+                    collection = state.collection,
                     overlayError = state.error,
                     onSelectQuality = viewModel::selectQuality,
                     onSelectPage = viewModel::selectPage,
@@ -72,12 +72,8 @@ fun PlayerScreen(
                     onBack = onBack,
                     hasAutoNext = state.next != null,
                     onAutoNext = { viewModel.onPlaybackEnded() },
-                    nextEpisodeTitle = nextEpisode?.title,
-                    onNextEpisode = if (nextEpisode != null) {
-                        { viewModel.onPlaybackEnded() }
-                    } else {
-                        null
-                    },
+                    onPrevious = { viewModel.playPreviousManual() },
+                    onNext = { viewModel.playNextManual() },
                 )
             } else {
                 ErrorView(

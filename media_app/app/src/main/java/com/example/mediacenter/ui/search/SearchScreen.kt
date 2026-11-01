@@ -48,6 +48,7 @@ import com.example.mediacenter.ui.components.EmptyStateView
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.components.PagedVideoGrid
+import com.example.mediacenter.ui.components.TvBackButton
 import com.example.mediacenter.ui.components.TvChip
 import com.example.mediacenter.ui.components.TvIconButton
 import com.example.mediacenter.ui.theme.AppleBlue
@@ -88,6 +89,25 @@ fun SearchScreen(
     })
 
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = ScreenHorizontalPadding, vertical = 24.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TvBackButton(onClick = onBack)
+            Text(
+                text = "搜索",
+                color = TextPrimary,
+                style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.padding(start = 16.dp),
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = providerDisplayName(provider),
+                color = TextSecondary,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        }
+        Spacer(Modifier.height(12.dp))
         // 进入搜索页即聚焦输入框：遥控器第一下 OK 直接弹出 IME，不用先找输入框
         val searchFocus = remember { FocusRequester() }
         // 单行 TextField 会把方向键当作光标移动消费:显式把 DOWN 交给
@@ -138,7 +158,7 @@ fun SearchScreen(
             },
             modifier = Modifier
                 .fillMaxWidth()
-                .requiredHeightIn(min = 56.dp)
+                .requiredHeightIn(min = 64.dp)
                 .focusRequester(searchFocus)
                 .onPreviewKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown || event.key != Key.DirectionDown) {
@@ -158,8 +178,14 @@ fun SearchScreen(
                         false
                     }
                 },
-            placeholder = { Text("搜索视频 / 片名 / 关键词", color = TextTertiary) },
-            textStyle = MaterialTheme.typography.bodyLarge,
+            placeholder = {
+                Text(
+                    "搜索视频 / 片名 / 关键词",
+                    color = TextTertiary,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            },
+            textStyle = MaterialTheme.typography.titleLarge,
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { viewModel.search(state.query) }),

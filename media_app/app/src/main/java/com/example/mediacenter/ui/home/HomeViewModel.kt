@@ -17,42 +17,51 @@ import com.example.mediacenter.update.AppUpdateHolder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+
+/** 首页顶部的「继续观看」伪分类 id；不会与真实目录分类冲突。 */
+const val HomeContinueTabId = "__continue__"
 
 data class HomeUiState(
     val categories: List<ContentCategory> = emptyList(),
-    val categoryVideos: Map<String, List<VideoSummary>> = emptyMap(),
-    // 加载失败(非空内容)的分类 id 集合:与"真的没有内容"区分,UI 展示失败文案。
-    val categoryErrors: Set<String> = emptySet(),
+    // 当前只展示一个分类：真实分类 id 或 HomeContinueTabId。
+    val selectedTab: String = HomeContinueTabId,
+    val items: List<VideoSummary> = emptyList(),
+    val page: Int = 1,
+    val total: Int = 0,
+    val canLoadMore: Boolean = false,
+    val isLoading: Boolean = true,
+    val isLoadingMore: Boolean = false,
+    val loadMoreError: String? = null,
+    val error: String? = null,
     val providers: List<ProviderInfo> = emptyList(),
     val currentProvider: String = "",
     // 本地观看历史(ViewModel 在 IO 线程读取,UI 只负责渲染)
     val watchEntries: List<WatchEntry> = emptyList(),
-    val isLoading: Boolean = true,
-    val error: String? = null,
 )
 
+/**
+ * 首页数据：一次只加载一个分类，分类标签切换时按需拉取并缓存。
+ *
+ * 不预取全部分类的理由：YouTube 分类是服务端实时 ytsearch，一次拉 6 个分类
+ * 会让首页等待成倍增加，也会无谓占用解析服务并发。缓存 10 分钟，来回切分类
+ * 仍然秒开。
+ */
 class HomeViewModel(
     private val repository: MediaRepositoryApi = MediaRepositoryHolder.repository,
+    // 单测关闭进程级更新检查，避免依赖 Application/网络。
+    private val autoCheckUpdate: Boolean = true,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
-    // App 内更新:检查/下载/弹窗状态统一在进程级协调器(AppUpdateHolder)上,
-    // 与设置页共享同一份;这里只暴露其状态流,进入首页时顺手发起一次检查。
     val updateState: StateFlow<UpdateDialogState?> = AppUpdateHolder.updateState
 
-    // 首页首屏焦点只处理一次:ViewModel 随返回栈存活,从详情/播放返回时
-    // 不会重复抢焦点;进程重建后新 VM 会重新处理。
     private var initialFocusHandled = false
 
     fun consumeInitialFocus(): Boolean {
@@ -61,39 +70,43 @@ class HomeViewModel(
         return true
     }
 
-    // 跟踪当前加载任务:切换 provider / 刷新时取消旧任务,
-    // 避免慢的旧请求后完成覆盖新状态(旧 provider 内容配新 currentProvider)。
-    private var loadJob: Job? = null
+    private var loadHomeJob: Job? = null
+    private var contentJob: Job? = null
+    private var loadMoreJob: Job? = null
 
-    // 分类第一页内存缓存:首页重进/重试不重复拉取(见 loadHome 注释)。
-    // 带 provider 标记:切换 provider 后自然失效;只缓存成功结果。
-    private data class FirstPageCacheEntry(
+    private data class CategoryCacheEntry(
         val provider: String,
         val items: List<VideoSummary>,
+        val page: Int,
+        val total: Int,
+        val canLoadMore: Boolean,
         val timestamp: Long,
     )
 
-    // 缓存写入发生在并行加载的多个协程里,用并发容器避免 HashMap 并发写损坏;
-    // 当前实现虽然都在主线程恢复,但调度器变更不应让缓存变成定时炸弹。
-    private val firstPageCache = java.util.concurrent.ConcurrentHashMap<String, FirstPageCacheEntry>()
+    private val categoryCache = java.util.concurrent.ConcurrentHashMap<String, CategoryCacheEntry>()
 
     init {
         loadHome()
         refreshWatchHistory()
-        // 自动检查更新:协调器内进程级只查一次,失败/下载中不重复发起
-        AppUpdateHolder.requestCheck()
+        if (autoCheckUpdate) AppUpdateHolder.requestCheck()
     }
 
-    /** 回到首页/从播放页返回时刷新"继续观看"数据(磁盘 IO 走 IO 调度器)。 */
     fun refreshWatchHistory() {
         val context = MediaRepositoryHolder.applicationContext ?: return
         viewModelScope.launch {
             val entries = withContext(Dispatchers.IO) { WatchHistory.entries(context) }
-            _uiState.value = _uiState.value.copy(watchEntries = entries)
+            _uiState.update { it.copy(watchEntries = entries) }
+            // 继续观看被清空时不要让用户停在空白伪分类上，回到第一个真实分类。
+            val state = _uiState.value
+            if (entries.isEmpty() && state.selectedTab == HomeContinueTabId &&
+                state.categories.isNotEmpty() && !state.isLoading
+            ) {
+                selectTab(state.categories.first().id)
+            }
         }
     }
 
-    /** Hero 直接播放时登记观看历史;失败静默(不影响播放)。 */
+    /** 继续观看直接播放前登记历史（IO 线程）。 */
     fun registerPlayed(video: VideoSummary, page: Int) {
         val context = MediaRepositoryHolder.applicationContext ?: return
         val provider = repository.currentProvider
@@ -111,121 +124,273 @@ class HomeViewModel(
                     ),
                 )
             }
+            refreshWatchHistory()
         }
     }
 
     fun loadHome() {
-        // 凭证只影响清晰度,不能阻塞首页目录加载;后台刷新,失败静默降级
         viewModelScope.launch { repository.refreshCredentials() }
-        loadJob?.cancel()
-        loadJob = viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+        loadHomeJob?.cancel()
+        contentJob?.cancel()
+        loadMoreJob?.cancel()
+        loadHomeJob = viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
             try {
                 val providers = repository.providers()
-                _uiState.value = _uiState.value.copy(
-                    providers = providers,
-                    currentProvider = repository.currentProvider,
-                )
-                val cats = repository.categories()
-                // YouTube 分类由实时 ytsearch 提供:每次都是 yt-dlp 上游调用,
-                // 并发必须比目录源更保守,避免打满解析服务并发/触发限流。
-                val categoryConcurrency = if (repository.currentProvider == "youtube") {
-                    HOME_YOUTUBE_CATEGORY_CONCURRENCY
+                _uiState.update {
+                    it.copy(providers = providers, currentProvider = repository.currentProvider)
+                }
+                val categories = repository.categories()
+                val currentTab = _uiState.value.selectedTab
+                val target = when {
+                    categories.any { it.id == currentTab } -> currentTab
+                    categories.isNotEmpty() -> categories.first().id
+                    else -> HomeContinueTabId
+                }
+                _uiState.update {
+                    it.copy(
+                        categories = categories,
+                        selectedTab = target,
+                        isLoading = false,
+                    )
+                }
+                if (target != HomeContinueTabId) {
+                    loadCategory(target, force = true)
                 } else {
-                    HOME_CATEGORY_CONCURRENCY
+                    _uiState.update {
+                        it.copy(
+                            items = emptyList(),
+                            page = 1,
+                            total = 0,
+                            canLoadMore = false,
+                            isLoading = false,
+                            error = null,
+                        )
+                    }
                 }
-                // 并行拉取各分类第一页,避免分类多时首页加载时间线性增长。
-                // 用信号量限制并发(弱网/老设备上打满连接池会互相拖慢);
-                // 单个分类失败(超时/5xx)不拖垮整个首页:该分类显示失败文案,
-                // 其余正常展示,下拉/重进会整体刷新。
-                //
-                // 分类第一页内存缓存(TTL 10 分钟):首页每次加载(重进/断网恢复/
-                // 手动重试)都全量重拉所有分类,弱网盒子上重复开销大且慢;缓存命中
-                // 直接秒开,超时/切 provider 才真正请求。缓存只存成功结果。
-                val results = coroutineScope {
-                    val semaphore = Semaphore(categoryConcurrency)
-                    cats.map { cat ->
-                        async {
-                            semaphore.withPermit {
-                                val provider = repository.currentProvider
-                                val cached = firstPageCache[cat.id]
-                                if (cached != null && cached.provider == provider &&
-                                    System.currentTimeMillis() - cached.timestamp < FirstPageCacheTtlMs
-                                ) {
-                                    cat.id to Result.success(cached.items)
-                                } else {
-                                    // 不能吞掉 CancellationException:切换 provider/退出首页会
-                                    // 取消本协程,吞掉后旧请求会被当成"失败分类"继续写状态,
-                                    // 出现旧 provider 的内容配新 currentProvider 的错配。
-                                    val result = try {
-                                        Result.success(repository.catalogPage(cat.id).items.orEmpty())
-                                    } catch (e: kotlinx.coroutines.CancellationException) {
-                                        throw e
-                                    } catch (e: Exception) {
-                                        Result.failure(e)
-                                    }
-                                    result.onSuccess {
-                                        firstPageCache[cat.id] = FirstPageCacheEntry(provider, it, System.currentTimeMillis())
-                                        // 缓存有上限:超限淘汰最早条目(分类数量有限,防御性兜底)
-                                        while (firstPageCache.size > MaxFirstPageCacheEntries) {
-                                            firstPageCache.keys.firstOrNull()?.let(firstPageCache::remove)
-                                        }
-                                    }
-                                    cat.id to result
-                                }
-                            }
-                        }
-                    }.awaitAll()
-                }
-                val videos = mutableMapOf<String, List<VideoSummary>>()
-                val failed = mutableSetOf<String>()
-                for ((catId, result) in results) {
-                    result.onSuccess { videos[catId] = it }.onFailure { failed.add(catId) }
-                }
-                _uiState.value = _uiState.value.copy(
-                    categories = cats,
-                    categoryVideos = videos,
-                    categoryErrors = failed,
-                    isLoading = false,
-                )
             } catch (e: Exception) {
-                // 被取消的任务(CancellationException)不当作错误展示
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                // 原始异常常是英文技术信息,直接上屏对 TV 用户不友好;记日志、给固定文案
+                if (e is CancellationException) throw e
                 AppLog.e("Home", "loadHome failed: ${e.message}", e)
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    error = e.friendlyLoadMessage("首页加载失败，请重试"),
-                )
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = e.friendlyLoadMessage("首页加载失败，请重试"),
+                    )
+                }
             }
         }
     }
 
-    /** 切换视频源后重新加载首页内容。 */
+    fun selectTab(tab: String) {
+        val state = _uiState.value
+        if (tab == state.selectedTab &&
+            (tab == HomeContinueTabId || state.items.isNotEmpty() || state.isLoading)
+        ) {
+            return
+        }
+        if (tab == HomeContinueTabId) {
+            contentJob?.cancel()
+            loadMoreJob?.cancel()
+            _uiState.update {
+                it.copy(
+                    selectedTab = tab,
+                    items = emptyList(),
+                    page = 1,
+                    total = 0,
+                    canLoadMore = false,
+                    isLoading = false,
+                    isLoadingMore = false,
+                    loadMoreError = null,
+                    error = null,
+                )
+            }
+            return
+        }
+        loadCategory(tab, force = false)
+    }
+
+    private fun loadCategory(categoryId: String, force: Boolean) {
+        val provider = repository.currentProvider
+        if (!force) {
+            val cached = categoryCache[categoryId]
+            if (cached != null && cached.provider == provider &&
+                System.currentTimeMillis() - cached.timestamp < CategoryCacheTtlMs
+            ) {
+                contentJob?.cancel()
+                loadMoreJob?.cancel()
+                _uiState.update {
+                    it.copy(
+                        selectedTab = categoryId,
+                        items = cached.items,
+                        page = cached.page,
+                        total = cached.total,
+                        canLoadMore = cached.canLoadMore,
+                        isLoading = false,
+                        isLoadingMore = false,
+                        loadMoreError = null,
+                        error = null,
+                    )
+                }
+                return
+            }
+        }
+        contentJob?.cancel()
+        loadMoreJob?.cancel()
+        _uiState.update {
+            it.copy(
+                selectedTab = categoryId,
+                items = emptyList(),
+                page = 1,
+                total = 0,
+                canLoadMore = false,
+                isLoading = true,
+                isLoadingMore = false,
+                loadMoreError = null,
+                error = null,
+            )
+        }
+        contentJob = viewModelScope.launch {
+            try {
+                val response = repository.catalogPage(categoryId, page = 1, pageSize = HomePageSize)
+                if (_uiState.value.selectedTab != categoryId ||
+                    repository.currentProvider != provider
+                ) return@launch
+                val items = response.items.orEmpty()
+                val canLoadMore = canLoadMore(response.total, items.size)
+                categoryCache[categoryId] = CategoryCacheEntry(
+                    provider = provider,
+                    items = items,
+                    page = response.page.coerceAtLeast(1),
+                    total = response.total,
+                    canLoadMore = canLoadMore,
+                    timestamp = System.currentTimeMillis(),
+                )
+                trimCache()
+                _uiState.update {
+                    it.copy(
+                        items = items,
+                        page = response.page.coerceAtLeast(1),
+                        total = response.total,
+                        canLoadMore = canLoadMore,
+                        isLoading = false,
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.e("Home", "load category $categoryId failed: ${e.message}", e)
+                if (_uiState.value.selectedTab == categoryId) {
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            error = e.friendlyLoadMessage("分类内容加载失败，请重试"),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun loadMore() {
+        val state = _uiState.value
+        val categoryId = state.selectedTab
+        if (categoryId == HomeContinueTabId) return
+        if (repository.currentProvider == "youtube") return
+        if (state.isLoading || state.isLoadingMore || state.loadMoreError != null || !state.canLoadMore) return
+        val provider = repository.currentProvider
+        val nextPage = state.page + 1
+        loadMoreJob = viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingMore = true, loadMoreError = null) }
+            try {
+                val response = repository.catalogPage(categoryId, page = nextPage, pageSize = HomePageSize)
+                if (_uiState.value.selectedTab != categoryId ||
+                    repository.currentProvider != provider
+                ) return@launch
+                val merged = (_uiState.value.items + response.items.orEmpty()).distinctBy { it.id }
+                val canLoadMore = canLoadMore(response.total, merged.size)
+                _uiState.update {
+                    it.copy(
+                        items = merged,
+                        page = response.page.coerceAtLeast(nextPage),
+                        total = response.total,
+                        canLoadMore = canLoadMore,
+                        isLoadingMore = false,
+                    )
+                }
+                categoryCache[categoryId] = CategoryCacheEntry(
+                    provider = provider,
+                    items = merged,
+                    page = response.page.coerceAtLeast(nextPage),
+                    total = response.total,
+                    canLoadMore = canLoadMore,
+                    timestamp = System.currentTimeMillis(),
+                )
+                trimCache()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.w("Home", "load more $categoryId failed: ${e.message}", e)
+                if (_uiState.value.selectedTab == categoryId) {
+                    _uiState.update {
+                        it.copy(isLoadingMore = false, loadMoreError = "加载更多失败，请重试")
+                    }
+                }
+            }
+        }
+    }
+
+    fun retryLoadMore() {
+        _uiState.update { it.copy(loadMoreError = null) }
+        loadMore()
+    }
+
+    fun retry() {
+        val state = _uiState.value
+        when {
+            state.categories.isEmpty() -> loadHome()
+            state.selectedTab == HomeContinueTabId -> refreshWatchHistory()
+            else -> loadCategory(state.selectedTab, force = true)
+        }
+    }
+
+    private fun canLoadMore(total: Int, loaded: Int): Boolean {
+        if (repository.currentProvider == "youtube") return false
+        if (loaded <= 0) return false
+        return if (total > 0) loaded < total else loaded >= HomePageSize
+    }
+
+    private fun trimCache() {
+        while (categoryCache.size > MaxCategoryCacheEntries) {
+            categoryCache.keys.firstOrNull()?.let(categoryCache::remove)
+        }
+    }
+
     fun selectProvider(provider: String) {
         repository.setProvider(provider)
-        // 先清空旧源内容:否则新源加载期间,旧分类/旧 Hero 会顶着新 provider
-        // 标签短暂显示(甚至在新源加载失败时一直残留)。
-        _uiState.value = _uiState.value.copy(
-            categories = emptyList(),
-            categoryVideos = emptyMap(),
-            categoryErrors = emptySet(),
-            isLoading = true,
-            error = null,
-        )
+        categoryCache.clear()
+        contentJob?.cancel()
+        loadMoreJob?.cancel()
+        _uiState.update {
+            it.copy(
+                categories = emptyList(),
+                selectedTab = HomeContinueTabId,
+                items = emptyList(),
+                page = 1,
+                total = 0,
+                canLoadMore = false,
+                isLoading = true,
+                isLoadingMore = false,
+                loadMoreError = null,
+                error = null,
+            )
+        }
         loadHome()
     }
 
     private companion object {
-        // 首页并行拉取分类第一页的并发上限:弱网/老设备上超过该值的并发
-        // 只会互相抢占连接与带宽,整体更慢。
-        const val HOME_CATEGORY_CONCURRENCY = 4
-        // YouTube 分类是实时 yt-dlp 搜索(服务端解析并发仅 2),首页限 2 路。
-        const val HOME_YOUTUBE_CATEGORY_CONCURRENCY = 2
-        // 分类第一页缓存有效期:10 分钟内重进首页直接用缓存,不重复请求。
-        const val FirstPageCacheTtlMs = 10 * 60 * 1000L
-        // 缓存条目上限(防御性兜底,正常分类数量远小于此)。
-        const val MaxFirstPageCacheEntries = 64
+        const val HomePageSize = 18
+        const val CategoryCacheTtlMs = 10 * 60 * 1000L
+        const val MaxCategoryCacheEntries = 24
     }
 }
 

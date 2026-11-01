@@ -53,7 +53,7 @@ import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.ui.components.TvActionButton
 import com.example.mediacenter.ui.components.TvChip
 import com.example.mediacenter.ui.components.TvDialogButton
-import com.example.mediacenter.ui.components.TvIconButton
+import com.example.mediacenter.ui.components.TvBackButton
 import com.example.mediacenter.ui.components.TvScrollableText
 import com.example.mediacenter.ui.theme.AppleBlueDark
 import com.example.mediacenter.ui.theme.BackgroundDark
@@ -111,13 +111,7 @@ fun DetailScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                TvIconButton(onClick = onBack, contentDescription = "返回") {
-                    androidx.compose.material3.Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = null,
-                        tint = TextPrimary,
-                    )
-                }
+                TvBackButton(onClick = onBack)
                 Text(
                     text = providerDisplayName(provider),
                     color = TextSecondary,
@@ -153,7 +147,7 @@ fun DetailScreen(
                     Text(
                         video.title,
                         color = TextPrimary,
-                        style = MaterialTheme.typography.headlineMedium,
+                        style = MaterialTheme.typography.headlineLarge,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -209,7 +203,7 @@ fun DetailScreen(
                         Text(
                             text = hintText,
                             color = TextPrimary,
-                            style = MaterialTheme.typography.bodySmall,
+                            style = MaterialTheme.typography.bodyLarge,
                             modifier = Modifier
                                 .background(AppleBlueDark.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
                                 .padding(horizontal = 12.dp, vertical = 6.dp),
