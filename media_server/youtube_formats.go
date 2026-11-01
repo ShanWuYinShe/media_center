@@ -247,9 +247,32 @@ func buildYouTubePlayback(info ytdlpInfo) PlaybackResultResponse {
 	return PlaybackResultResponse{Options: options, AvailableQualities: qualities, DurationSeconds: duration}
 }
 
+// canonicalHeight 把 YouTube 的非标准编码高度(如 1078/1438)映射到商用
+// 清晰度档位,避免 UI 出现 "1078P" 这类标签。
+func canonicalHeight(height int) int {
+	switch {
+	case height >= 2000:
+		return 2160
+	case height >= 1300:
+		return 1440
+	case height >= 1000:
+		return 1080
+	case height >= 600:
+		return 720
+	case height >= 400:
+		return 480
+	case height >= 300:
+		return 360
+	case height >= 200:
+		return 240
+	default:
+		return 144
+	}
+}
+
 // heightLabel 生成清晰度展示标签:>=50fps 标注帧率,与 B 站 "1080P60" 风格一致。
 func heightLabel(height int, fps float64) string {
-	label := strconv.Itoa(height) + "P"
+	label := strconv.Itoa(canonicalHeight(height)) + "P"
 	if fps >= 50 {
 		label += strconv.Itoa(int(fps + 0.5))
 	}
