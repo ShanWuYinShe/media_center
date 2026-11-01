@@ -6,6 +6,13 @@ Internal HTTP wrapper around `yt-dlp` for resolving public VOD playback metadata
 
 **Deployment requirement**: YouTube serves bot-check failures ("Sign in to confirm you're not a bot") to datacenter IPs on every player client, so server deployments MUST provide a YouTube cookies file for **playback extraction** (see `VOD_EXTRACTOR_COOKIES_FILE` below). Without cookies, every `/extract` call fails regardless of `VOD_EXTRACTOR_EXTRACTOR_ARGS`. Search (`/search`) is **not** affected: yt-dlp's flat `ytsearch` listing page does not trigger the bot check, so search keeps working without cookies (verified in production 2026-10-12).
 
+Current YouTube playback extraction additionally requires (verified 2026-11-01):
+- **Deno + `yt-dlp-ejs`** to solve signature/n challenges (baked into the image);
+- **`bgutil-ytdlp-pot-provider` plugin + a reachable provider** (compose runs `bgutil_pot`);
+- **≥768M memory** (256M gets OOM-killed while Deno solves challenges).
+
+Missing any of them yields "no formats" / "The page needs to be reloaded", not a bot-check. Cookies are mounted read-only; the service copies them to a writable temp file per extraction because yt-dlp writes cookies back on exit.
+
 ## API
 
 - `GET /health`
@@ -23,7 +30,7 @@ Internal HTTP wrapper around `yt-dlp` for resolving public VOD playback metadata
 - `VOD_EXTRACTOR_TIMEOUT_MS` caps each yt-dlp run.
 - `VOD_EXTRACTOR_MAX_OUTPUT_BYTES` caps stdout retained from yt-dlp.
 - `VOD_EXTRACTOR_MAX_CONCURRENT` caps concurrent yt-dlp processes.
-- `VOD_EXTRACTOR_EXTRACTOR_ARGS` optionally passes one `--extractor-args` value to yt-dlp without using a shell, for example `youtube:player_client=android` or a YouTube PO token argument when available.
+- `VOD_EXTRACTOR_EXTRACTOR_ARGS` optionally passes one `--extractor-args` value to yt-dlp without using a shell. The compose default is `youtube:player_client=web;youtubepot-bgutilhttp:base_url=http://bgutil_pot:4416`; keep the `youtubepot-bgutilhttp` entry when overriding or the plugin will look for a provider on 127.0.0.1.
 - `VOD_EXTRACTOR_COOKIES_FILE` optionally points to a Netscape cookies file for yt-dlp. In the `deploy/` compose deployment, place YouTube cookies at `deploy/data/vod/youtube-cookies.txt`; the container mounts that directory read-only at `/config`, and `/config/youtube-cookies.txt` is used automatically when the file exists. If `VOD_EXTRACTOR_COOKIES_FILE` is set explicitly, the file must exist and be readable (otherwise requests fail with 503). `GET /health` exposes a `cookies` object (`configured`/`present`/`readable`/`age_seconds`) for expiry alerting.
 - `GET /health` also exposes a `failures` object (`total`/`counts`/`last_reason`/`last_at`): yt-dlp failures are classified by stderr signatures (`bot_check` = cookies expired / bot check, `rate_limited`, `unavailable`, `geo_blocked`, `timeout`, ...). A rising `bot_check` count with a fresh cookies file means the session itself has expired — replace the cookies file; the 502 error body of `/extract` and `/search` carries the same `reason` field for callers to log.
 - `VOD_EXTRACTOR_ALLOWED_EXTRACT_HOSTS` optionally overrides the `/extract` target-host allowlist (comma-separated). Default: YouTube domains only (`youtube.com`, `www.youtube.com`, `youtu.be`, `m.youtube.com`, `music.youtube.com`) — this service currently only serves the YouTube provider, and the allowlist keeps a hijacked/misused `/extract` from being pointed at arbitrary hosts.

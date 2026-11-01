@@ -9,12 +9,19 @@ WORKDIR /app
 # 保持同值——否则裸 docker build 会静默装入旧版 yt-dlp,而 yt-dlp 正是
 # YouTube 风控对抗最关键的一环。
 ARG YT_DLP_VERSION=2026.10.26
+# YouTube 签名/n challenge 求解需要 JS runtime(Deno)与 yt-dlp-ejs；
+# PO Token 由 bgutil-ytdlp-pot-provider 插件向独立 bgutil 容器请求。
+ARG DENO_VERSION=2.7.4-r2
+ARG BGUTIL_POT_VERSION=2.0.2
 # GIT_VERSION 由编排层传入(仓库 git describe),写入 /app/version 供 /health
 # 暴露;未传时为 "dev"。
 ARG GIT_VERSION=dev
 RUN echo "${GIT_VERSION}" > /app/version
 
-RUN pip install --no-cache-dir --disable-pip-version-check "yt-dlp==${YT_DLP_VERSION}" \
+RUN apk add --no-cache "deno=${DENO_VERSION}" \
+    && pip install --no-cache-dir --disable-pip-version-check \
+        "yt-dlp[default]==${YT_DLP_VERSION}" \
+        "bgutil-ytdlp-pot-provider==${BGUTIL_POT_VERSION}" \
     && addgroup -S app \
     && adduser -S -G app app
 
@@ -22,6 +29,7 @@ COPY server.py .
 
 LABEL org.opencontainers.image.revision="${GIT_VERSION}"
 LABEL org.opencontainers.image.version.yt-dlp="${YT_DLP_VERSION}"
+LABEL org.opencontainers.image.version.bgutil-pot="${BGUTIL_POT_VERSION}"
 
 ENV HOST=0.0.0.0 \
     PORT=8790 \

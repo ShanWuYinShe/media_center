@@ -9,7 +9,7 @@ COMPOSE := docker compose
 GIT_VERSION ?= $(shell git -C .. describe --always --tags --dirty 2>/dev/null || echo dev)
 export IMAGE_TAG ?= $(GIT_VERSION)
 
-SERVICES := nginx media_server vod_extractor
+SERVICES := nginx media_server vod_extractor bgutil_pot
 
 .DEFAULT_GOAL := help
 .PHONY: help $(SERVICES) build up restart logs ps backup

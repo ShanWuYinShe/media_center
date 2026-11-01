@@ -130,6 +130,28 @@ services:
       retries: 3
       start_period: 20s
 
+  # YouTube PO Token provider（bgutil）：仅供 vod_extractor 走 backend 内网调用，
+  # 不发布端口。yt-dlp 侧由 bgutil-ytdlp-pot-provider 插件访问
+  # http://bgutil_pot:4416（见 VOD_EXTRACTOR_EXTRACTOR_ARGS）。
+  bgutil_pot:
+    image: brainicism/bgutil-ytdlp-pot-provider:${BGUTIL_POT_VERSION:?BGUTIL_POT_VERSION 未设置——版本唯一来源是 versions.env}
+    restart: unless-stopped
+    init: true
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+    security_opt:
+      - "no-new-privileges:true"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+    networks:
+      - backend
+
   # YouTube 点播解析（yt-dlp HTTP 封装）：仅 backend 内网，不对外暴露。
   # 硬前提：./data/vod/youtube-cookies.txt（Netscape 格式），缺失则播放解析被 bot 检测拦截；
   # 搜索走 ytsearch flat 列表页，无 cookies 仍可用。
@@ -141,16 +163,19 @@ services:
       args:
         PYTHON_VERSION: ${PYTHON_VERSION:?PYTHON_VERSION 未设置——版本唯一来源是 versions.env,请用 make build(自动注入)或 docker compose --env-file versions.env}
         YT_DLP_VERSION: ${YT_DLP_VERSION:?YT_DLP_VERSION 未设置——版本唯一来源是 versions.env,请用 make build(自动注入)或 docker compose --env-file versions.env}
+        DENO_VERSION: ${DENO_VERSION:?DENO_VERSION 未设置——版本唯一来源是 versions.env}
+        BGUTIL_POT_VERSION: ${BGUTIL_POT_VERSION:?BGUTIL_POT_VERSION 未设置——版本唯一来源是 versions.env}
         GIT_VERSION: ${GIT_VERSION:-dev}
     restart: unless-stopped
     init: true
     deploy:
       resources:
         limits:
-          memory: 256M
+          # Deno 求解 YouTube 签名/n challenge 需要额外内存；256M 会被 OOM kill。
+          memory: 768M
           cpus: "0.5"
-          # yt-dlp 会派生 ffmpeg 等子进程,进程数上限放宽留余量
-          pids: 128
+          # yt-dlp 会派生 ffmpeg/deno 等子进程,进程数上限放宽留余量
+          pids: 192
     security_opt:
       - "no-new-privileges:true"
     logging:
@@ -158,6 +183,8 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    depends_on:
+      - bgutil_pot
     networks:
       - backend
     cap_drop:
@@ -169,7 +196,9 @@ services:
       - VOD_EXTRACTOR_TIMEOUT_MS=${VOD_EXTRACTOR_TIMEOUT_MS:-30000}
       - VOD_EXTRACTOR_MAX_OUTPUT_BYTES=${VOD_EXTRACTOR_MAX_OUTPUT_BYTES:-20971520}
       - VOD_EXTRACTOR_MAX_CONCURRENT=${VOD_EXTRACTOR_MAX_CONCURRENT:-2}
-      - VOD_EXTRACTOR_EXTRACTOR_ARGS=${VOD_EXTRACTOR_EXTRACTOR_ARGS:-}
+      # 默认用 web 客户端 + bgutil PO Token provider；覆盖时必须保留
+      # youtubepot-bgutilhttp:base_url(插件默认找 127.0.0.1)。
+      - VOD_EXTRACTOR_EXTRACTOR_ARGS=${VOD_EXTRACTOR_EXTRACTOR_ARGS:-youtube:player_client=web;youtubepot-bgutilhttp:base_url=http://bgutil_pot:4416}
       - VOD_EXTRACTOR_COOKIES_FILE=${VOD_EXTRACTOR_COOKIES_FILE:-}
       # /extract 目标 host 白名单(留空用 server.py 内置 youtube 域默认)
       - VOD_EXTRACTOR_ALLOWED_EXTRACT_HOSTS=${VOD_EXTRACTOR_ALLOWED_EXTRACT_HOSTS:-}
