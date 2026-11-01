@@ -7,15 +7,17 @@ import (
 )
 
 type ytdlpFormat struct {
-	FormatID   string `json:"format_id"`
-	URL        string `json:"url"`
-	Ext        string `json:"ext"`
-	Height     int    `json:"height"`
-	FPS        int    `json:"fps"`
-	VCodec     string `json:"vcodec"`
-	ACodec     string `json:"acodec"`
-	Protocol   string `json:"protocol"`
-	FormatNote string `json:"format_note"`
+	FormatID string `json:"format_id"`
+	URL      string `json:"url"`
+	Ext      string `json:"ext"`
+	Height   int    `json:"height"`
+	// FPS 用 float64:yt-dlp 对部分格式(如 storyboard)会给出小数帧率,
+	// 用 int 会导致整个 JSON 解码失败(Go json: cannot unmarshal number).
+	FPS        float64 `json:"fps"`
+	VCodec     string  `json:"vcodec"`
+	ACodec     string  `json:"acodec"`
+	Protocol   string  `json:"protocol"`
+	FormatNote string  `json:"format_note"`
 	// Abr/Tbr 用于在纯音频格式中挑最高码率的一条;YouTube 的 m4a 音轨
 	// 通常带 abr,tbr 作为兜底。
 	Abr float64 `json:"abr"`
@@ -246,10 +248,10 @@ func buildYouTubePlayback(info ytdlpInfo) PlaybackResultResponse {
 }
 
 // heightLabel 生成清晰度展示标签:>=50fps 标注帧率,与 B 站 "1080P60" 风格一致。
-func heightLabel(height, fps int) string {
+func heightLabel(height int, fps float64) string {
 	label := strconv.Itoa(height) + "P"
 	if fps >= 50 {
-		label += strconv.Itoa(fps)
+		label += strconv.Itoa(int(fps + 0.5))
 	}
 	return label
 }

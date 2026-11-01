@@ -32,24 +32,39 @@ func TestIsValidYouTubeVideoID(t *testing.T) {
 
 func TestHeightLabel(t *testing.T) {
 	cases := []struct {
-		height, fps int
-		want        string
+		height int
+		fps    float64
+		want   string
 	}{
 		{1080, 30, "1080P"},
 		{1080, 60, "1080P60"},
+		{1080, 59.94, "1080P60"},
 		{720, 50, "720P50"},
 		{480, 25, "480P"},
 	}
 	for _, tc := range cases {
 		if got := heightLabel(tc.height, tc.fps); got != tc.want {
-			t.Errorf("heightLabel(%d,%d) = %q, want %q", tc.height, tc.fps, got, tc.want)
+			t.Errorf("heightLabel(%d,%g) = %q, want %q", tc.height, tc.fps, got, tc.want)
 		}
+	}
+}
+
+// yt-dlp 会对 storyboard 等格式输出小数 fps;解码必须兼容,否则整个 resolve
+// 会在 JSON 阶段失败(dQw4w9WgXcQ 实测 fps=0.469...)。
+func TestYtdlpInfoDecodesFractionalFPS(t *testing.T) {
+	var info ytdlpInfo
+	raw := `{"id":"x","formats":[{"format_id":"sb0","fps":0.4694835680751174,"height":180}]}`
+	if err := json.Unmarshal([]byte(raw), &info); err != nil {
+		t.Fatalf("decode fractional fps: %v", err)
+	}
+	if len(info.Formats) != 1 || info.Formats[0].FPS != 0.4694835680751174 {
+		t.Fatalf("unexpected formats: %#v", info.Formats)
 	}
 }
 
 // ---- buildYouTubePlayback ----
 
-func mkFormat(id, url, ext string, height, fps int, vcodec, acodec, protocol string) ytdlpFormat {
+func mkFormat(id, url, ext string, height int, fps float64, vcodec, acodec, protocol string) ytdlpFormat {
 	return ytdlpFormat{
 		FormatID: id, URL: url, Ext: ext, Height: height, FPS: fps,
 		VCodec: vcodec, ACodec: acodec, Protocol: protocol,
