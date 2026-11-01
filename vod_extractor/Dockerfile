@@ -8,7 +8,7 @@ WORKDIR /app
 # 此默认仅用于脱离编排直接 docker build 的场景,因此必须与 versions.env
 # 保持同值——否则裸 docker build 会静默装入旧版 yt-dlp,而 yt-dlp 正是
 # YouTube 风控对抗最关键的一环。
-ARG YT_DLP_VERSION=2026.8.19
+ARG YT_DLP_VERSION=2026.10.26
 # GIT_VERSION 由编排层传入(仓库 git describe),写入 /app/version 供 /health
 # 暴露;未传时为 "dev"。
 ARG GIT_VERSION=dev
