@@ -5,15 +5,19 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.mediacenter.data.ApiException
 import com.example.mediacenter.data.BilibiliApiException
-import com.example.mediacenter.data.MediaRepository
+import com.example.mediacenter.data.MediaRepositoryApi
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.PlaybackResult
+import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.parsePageId
 import com.example.mediacenter.log.AppLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
@@ -21,18 +25,25 @@ data class PlayerUiState(
     val playbackResult: PlaybackResult? = null,
     // 服务端下发的合集队列(仅 approved 剧集);无合集/加载失败为 null。
     val collection: PlaybackCollection? = null,
+    // 片尾自动连播的下一步(多P下一页优先,其次合集下一集);null=不连播。
+    val next: PlaybackNext? = null,
     val isLoading: Boolean = true,
     val error: String? = null,
 )
 
 class PlayerViewModel(
     private val videoId: String,
-    private val repository: MediaRepository = MediaRepositoryHolder.repository,
+    private val repository: MediaRepositoryApi = MediaRepositoryHolder.repository,
     // 初始分页(0 起始):继续观看按页直达时由路由传入;>0 时优先于 id 解析
     private val initialPage: Int = 0,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(PlayerUiState())
     val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
+
+    // 合集下一集需要由 UI 导航(替换当前播放页);用一次性事件而不是状态,
+    // 避免重组重复导航。多P下一页在 ViewModel 内直接 resolve。
+    private val _episodeEvents = MutableSharedFlow<VideoSummary>(extraBufferCapacity = 1)
+    val episodeEvents: SharedFlow<VideoSummary> = _episodeEvents.asSharedFlow()
 
     // 当前清晰度与分页(多P),切换分页时保持已选清晰度。
     private var currentQn: Int? = null
@@ -58,6 +69,7 @@ class PlayerViewModel(
                 val collection = playbackCollectionFrom(repository.collectionFor(lookupID))
                 if (collection != null) {
                     _uiState.value = _uiState.value.copy(collection = collection)
+                    updateNext()
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -122,6 +134,7 @@ class PlayerViewModel(
             // 后续"重复点当前档位"判断都以它为准。
             currentQn = result.options.firstOrNull()?.qn ?: qn
             _uiState.value = _uiState.value.copy(playbackResult = result, isLoading = false)
+            updateNext()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -136,6 +149,24 @@ class PlayerViewModel(
             }
             _uiState.value = _uiState.value.copy(isLoading = false, error = friendly)
         }
+    }
+
+    /**
+     * 片尾到达:有下一步则推进(多P下一页直接换页,合集下一集发导航事件)。
+     * 返回是否真的还有下一步;UI 只负责把 ENDED 边沿传过来。
+     */
+    fun onPlaybackEnded(): Boolean {
+        val next = _uiState.value.next ?: return false
+        when (next) {
+            is PlaybackNext.Page -> selectPage(next.index)
+            is PlaybackNext.Episode -> _episodeEvents.tryEmit(next.video)
+        }
+        return true
+    }
+
+    private fun updateNext() {
+        val state = _uiState.value
+        _uiState.value = state.copy(next = nextPlayback(state.playbackResult, state.collection))
     }
 }
 

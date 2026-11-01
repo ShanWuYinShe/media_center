@@ -9,39 +9,44 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
+import com.example.mediacenter.ui.theme.AppleBlue
+import com.example.mediacenter.ui.theme.AppleBlueDark
+import com.example.mediacenter.ui.theme.CardGray
+import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.tvButtonFocusScale
 import com.example.mediacenter.ui.theme.tvPillButtonBorder
 import com.example.mediacenter.ui.theme.tvPillButtonShape
-import com.example.mediacenter.ui.theme.AppleBlue
-import com.example.mediacenter.ui.theme.CardGray
-import com.example.mediacenter.ui.theme.TextPrimary
 
 /**
- * 带文字的 TV 胶囊按钮(视频源入口、轻量动作)。
+ * 统一的 TV 胶囊控件:
+ * - [selected] 非空 → 可选中 chip(分类时长、清晰度、分P、热词),选中用暗蓝;
+ * - [selected] 为空 → 纯动作 chip(视频源、查看全部、查看完整简介)。
  *
- * 与 [TvIconButton] 分开:[TvIconButton] 固定 48×48,只适合纯图标;把文字
- * 塞进去会被压成方块、长名称直接被裁掉。本组件按内容撑宽(有上限),并沿用
- * 项目统一焦点态(Apple Blue 底 + 白字)。
+ * 焦点态始终是 Apple Blue + 近白外框 + 轻微放大;selected 不能强过焦点态。
  */
 @Composable
-fun TvChipButton(
+fun TvChip(
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    selected: Boolean? = null,
     leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
+    maxWidth: Dp = 240.dp,
 ) {
     Button(
+        onClick = onClick,
         shape = tvPillButtonShape(),
         border = tvPillButtonBorder(),
         scale = tvButtonFocusScale(),
-        onClick = onClick,
-        modifier = modifier.requiredHeight(48.dp).widthIn(max = 220.dp),
+        // 宽度上限让 maxLines/Ellipsis 真正生效:LazyRow 里无约束时超长分P名会宽出整屏。
+        modifier = modifier.requiredHeight(48.dp).widthIn(max = maxWidth),
         colors = ButtonDefaults.colors(
-            containerColor = CardGray,
+            containerColor = if (selected == true) AppleBlueDark else CardGray,
             focusedContainerColor = AppleBlue,
             contentColor = TextPrimary,
             focusedContentColor = TextPrimary,

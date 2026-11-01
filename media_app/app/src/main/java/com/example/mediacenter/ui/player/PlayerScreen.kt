@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -36,13 +37,30 @@ fun PlayerScreen(
 
     BackHandler(onBack = onBack)
 
+    // 合集下一集由 ViewModel 发出事件,UI 只做"登记历史 + 导航"。
+    LaunchedEffect(viewModel, context) {
+        viewModel.episodeEvents.collect { nextEpisode ->
+            WatchHistory.upsert(
+                context,
+                WatchEntry(
+                    videoId = nextEpisode.id,
+                    provider = MediaRepositoryHolder.repository.currentProvider,
+                    title = nextEpisode.title,
+                    thumbnailUrl = nextEpisode.thumbnailUrl.orEmpty(),
+                    durationSeconds = nextEpisode.durationSeconds ?: 0L,
+                    page = 0,
+                ),
+            )
+            onNextVideo(nextEpisode)
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(BackgroundDark)) {
         val result = state.playbackResult
         if (result != null) {
             val url = result.options.firstOrNull()?.url
             if (url != null) {
-                val nextPage = nextPageIndex(result.pages)
-                val nextEpisode = state.collection?.next()
+                val nextEpisode = (state.next as? PlaybackNext.Episode)?.video
                 PlayerContent(
                     videoId = videoId,
                     videoTitle = videoTitle,
@@ -52,27 +70,13 @@ fun PlayerScreen(
                     onSelectPage = viewModel::selectPage,
                     onRetryResolve = viewModel::resolvePlayback,
                     onBack = onBack,
-                    hasAutoNext = nextPage != null || nextEpisode != null,
-                    onAutoNext = {
-                        // 多P优先:同一视频内翻页;最后一P结束后才进入合集下一集。
-                        if (nextPage != null) {
-                            viewModel.selectPage(nextPage)
-                        } else if (nextEpisode != null) {
-                            // 直达播放页不会经过详情页的登记逻辑,这里先写入
-                            // 观看历史,保证下一集播放中途退出也能出现在"继续观看"。
-                            WatchHistory.upsert(
-                                context,
-                                WatchEntry(
-                                    videoId = nextEpisode.id,
-                                    provider = MediaRepositoryHolder.repository.currentProvider,
-                                    title = nextEpisode.title,
-                                    thumbnailUrl = nextEpisode.thumbnailUrl.orEmpty(),
-                                    durationSeconds = nextEpisode.durationSeconds ?: 0L,
-                                    page = 0,
-                                ),
-                            )
-                            onNextVideo(nextEpisode)
-                        }
+                    hasAutoNext = state.next != null,
+                    onAutoNext = { viewModel.onPlaybackEnded() },
+                    nextEpisodeTitle = nextEpisode?.title,
+                    onNextEpisode = if (nextEpisode != null) {
+                        { viewModel.onPlaybackEnded() }
+                    } else {
+                        null
                     },
                 )
             } else {

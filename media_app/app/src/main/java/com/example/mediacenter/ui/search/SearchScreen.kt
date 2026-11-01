@@ -1,32 +1,22 @@
 package com.example.mediacenter.ui.search
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.requiredHeightIn
-import androidx.compose.foundation.layout.requiredSize
-import androidx.compose.foundation.layout.requiredWidth
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -34,14 +24,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.focusProperties
-import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -49,11 +39,6 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
-import com.example.mediacenter.ui.theme.tvButtonFocusScale
-import com.example.mediacenter.ui.theme.tvPillButtonBorder
-import com.example.mediacenter.ui.theme.tvPillButtonShape
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mediacenter.data.MediaRepositoryHolder
@@ -62,18 +47,17 @@ import com.example.mediacenter.data.providerDisplayName
 import com.example.mediacenter.ui.components.EmptyStateView
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
-import com.example.mediacenter.ui.home.VideoCard
-import com.example.mediacenter.ui.player.SelectChip
+import com.example.mediacenter.ui.components.PagedVideoGrid
+import com.example.mediacenter.ui.components.TvChip
+import com.example.mediacenter.ui.components.TvIconButton
 import com.example.mediacenter.ui.theme.AppleBlue
-import com.example.mediacenter.ui.theme.CardGray
-import com.example.mediacenter.ui.theme.CardSpacing
 import com.example.mediacenter.ui.theme.DividerGray
 import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.TextSecondary
 import com.example.mediacenter.ui.theme.TextTertiary
 import com.example.mediacenter.util.NetworkRestoreEffect
-import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.delay
 
 // 搜索热词:TV 上用方向键输入很痛苦,空态展示常用词一键点选。
 // 与 legacy 版保持一致,后续可随 provider 演进。
@@ -110,10 +94,48 @@ fun SearchScreen(
         // 热词/首个结果,否则输入后遥控器永远出不了输入框。
         val firstHotFocus = remember { FocusRequester() }
         val firstResultFocus = remember { FocusRequester() }
+        // 热词点击后结果区(加载中)承接焦点:否则热词 chip 被移出组合,焦点
+        // 会落回输入框重新弹出键盘,把结果/加载态整个遮住。
+        val resultsFocus = remember { FocusRequester() }
+        val keyboardController = LocalSoftwareKeyboardController.current
+        var focusResultsAfterHotWord by remember { mutableStateOf(false) }
+        // 已点击热词、但该关键词尚未完成(防抖中或请求中)且没有结果:显示
+        // 加载态并让结果区承接焦点,防止键盘抢回焦点。
+        val hotWordPending = focusResultsAfterHotWord &&
+            state.results.isEmpty() &&
+            state.error == null &&
+            state.completedQuery != state.query
+        LaunchedEffect(hotWordPending, state.query, state.isSearching) {
+            if (!hotWordPending) return@LaunchedEffect
+            // 先让结果区拿到焦点,再等一帧隐藏 IME:输入框若在热词 chip
+            // 移除的瞬间短暂拿回焦点,会立刻重新弹出键盘。
+            runCatching { resultsFocus.requestFocus() }
+            delay(120)
+            keyboardController?.hide()
+        }
+        LaunchedEffect(state.isSearching, state.results, state.error, state.query, state.completedQuery) {
+            if (!focusResultsAfterHotWord) return@LaunchedEffect
+            when {
+                state.results.isNotEmpty() -> {
+                    focusResultsAfterHotWord = false
+                    keyboardController?.hide()
+                    runCatching { firstResultFocus.requestFocus() }
+                }
+                // 搜索已结束(成功但零结果/失败)或关键词被清空:释放 pending
+                state.error != null || state.query.length < 2 ||
+                    state.completedQuery == state.query -> {
+                    focusResultsAfterHotWord = false
+                }
+            }
+        }
         LaunchedEffect(Unit) { searchFocus.requestFocus() }
         OutlinedTextField(
             value = state.query,
-            onValueChange = { viewModel.search(it) },
+            onValueChange = {
+                // 用户手动输入时不再等热词结果抢焦点
+                focusResultsAfterHotWord = false
+                viewModel.search(it)
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .requiredHeightIn(min = 56.dp)
@@ -128,6 +150,8 @@ fun SearchScreen(
                         else -> null
                     }
                     if (target != null) {
+                        // 离开输入框即收起软键盘,把屏幕让给热词/结果。
+                        keyboardController?.hide()
                         target.requestFocus()
                         true
                     } else {
@@ -141,8 +165,8 @@ fun SearchScreen(
             keyboardActions = KeyboardActions(onSearch = { viewModel.search(state.query) }),
             trailingIcon = {
                 if (state.query.isNotEmpty()) {
-                    IconButton(onClick = { viewModel.search("") }) {
-                        Icon(Icons.Default.Close, contentDescription = "清除搜索", tint = TextSecondary)
+                    TvIconButton(onClick = { viewModel.search("") }, contentDescription = "清除搜索") {
+                        Icon(Icons.Default.Close, contentDescription = null, tint = TextSecondary)
                     }
                 }
             },
@@ -157,9 +181,15 @@ fun SearchScreen(
         Spacer(Modifier.height(12.dp))
         // 剩余高度交给结果区:网格/空态/加载态都在同一块可视区里排布,
         // 避免 fillMaxSize 抢整屏约束导致内容被顶出屏幕。
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .focusRequester(resultsFocus)
+                .then(if (hotWordPending) Modifier.focusable() else Modifier),
+        ) {
         when {
-            state.isSearching -> LoadingIndicator()
+            state.isSearching || hotWordPending -> LoadingIndicator()
             state.error != null -> ErrorView(
                 message = state.error!!,
                 modifier = Modifier.fillMaxSize(),
@@ -187,10 +217,14 @@ fun SearchScreen(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         rowWords.forEachIndexed { index, word ->
-                            SelectChip(
+                            TvChip(
                                 label = word,
                                 selected = false,
-                                onClick = { viewModel.search(word) },
+                                onClick = {
+                                    keyboardController?.hide()
+                                    focusResultsAfterHotWord = true
+                                    viewModel.search(word)
+                                },
                                 modifier = if (rowIndex == 0 && index == 0) {
                                     Modifier.focusRequester(firstHotFocus)
                                 } else {
@@ -231,77 +265,17 @@ fun SearchScreen(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                // 海报网格与首页视觉一致(纯文字行在 10ft 下识别度差、观感突兀);
-                // GridCells.Adaptive 让卡片宽度自适应 720p/1080p/4K。
-                val gridState = rememberLazyGridState()
-                // 接近底部时拉下一页(历史实现只取第一页,结果被硬截断在 20 条)
-                LaunchedEffect(gridState) {
-                    snapshotFlow {
-                        val layout = gridState.layoutInfo
-                        (layout.visibleItemsInfo.lastOrNull()?.index ?: -1) to layout.totalItemsCount
-                    }
-                        .distinctUntilChanged()
-                        .collect { (lastVisible, count) ->
-                            if (lastVisible >= 0 && count > 0 && lastVisible >= count - 4) {
-                                viewModel.loadMore()
-                            }
-                        }
-                }
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(240.dp),
-                    state = gridState,
-                    horizontalArrangement = Arrangement.spacedBy(CardSpacing),
-                    verticalArrangement = Arrangement.spacedBy(CardSpacing),
-                    contentPadding = PaddingValues(bottom = 32.dp),
-                    // 返回搜索结果时焦点回到原结果卡
-                    modifier = Modifier.weight(1f).fillMaxWidth().focusRestorer(),
-                ) {
-                    itemsIndexed(state.results, key = { _, video -> video.id }) { index, video ->
-                        VideoCard(
-                            video = video,
-                            onClick = { onVideoClick(video) },
-                            modifier = if (index == 0) {
-                                Modifier
-                                    .focusRequester(firstResultFocus)
-                                    .focusProperties { up = searchFocus }
-                            } else {
-                                Modifier
-                            },
-                        )
-                    }
-                    if (state.isLoadingMore || state.loadMoreFailed) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                if (state.loadMoreFailed) {
-                                    Button(
-                                        shape = tvPillButtonShape(),
-                                        border = tvPillButtonBorder(),
-                                        scale = tvButtonFocusScale(),
-                                        onClick = viewModel::retryLoadMore,
-                                        modifier = Modifier.requiredWidth(200.dp).requiredHeight(48.dp),
-                                        colors = ButtonDefaults.colors(
-                                            containerColor = CardGray,
-                                            focusedContainerColor = AppleBlue,
-                                            contentColor = TextPrimary,
-                                            focusedContentColor = TextPrimary,
-                                        ),
-                                    ) {
-                                        Text("重试加载", color = TextPrimary)
-                                    }
-                                } else {
-                                    CircularProgressIndicator(
-                                        color = AppleBlue,
-                                        modifier = Modifier.requiredSize(32.dp),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
+                PagedVideoGrid(
+                    items = state.results,
+                    onItemClick = onVideoClick,
+                    onLoadMore = viewModel::loadMore,
+                    isLoadingMore = state.isLoadingMore,
+                    loadMoreFailed = state.loadMoreFailed,
+                    onRetryLoadMore = viewModel::retryLoadMore,
+                    modifier = Modifier.weight(1f),
+                    firstItemFocusRequester = firstResultFocus,
+                    firstItemUpFocusRequester = searchFocus,
+                )
             }
         }
         }

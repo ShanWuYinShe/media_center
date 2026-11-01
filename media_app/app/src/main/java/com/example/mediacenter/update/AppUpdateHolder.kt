@@ -3,7 +3,6 @@ package com.example.mediacenter.update
 import android.content.Context
 import com.example.mediacenter.data.AppUpdateInfo
 import com.example.mediacenter.data.MediaRepositoryHolder
-import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.ui.update.UpdateDialogState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

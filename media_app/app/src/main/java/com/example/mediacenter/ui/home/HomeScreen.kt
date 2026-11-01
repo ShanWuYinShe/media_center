@@ -9,19 +9,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mediacenter.data.VideoSummary
-import com.example.mediacenter.data.WatchEntry
-import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.ui.components.EmptyStateView
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.ProviderSelectDialog
@@ -30,9 +26,6 @@ import com.example.mediacenter.ui.update.UpdateDialog
 import com.example.mediacenter.ui.update.UpdateDialogState
 import com.example.mediacenter.update.AppUpdateHolder
 import com.example.mediacenter.util.NetworkRestoreEffect
-import com.example.mediacenter.util.formatSeconds
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 @Composable
 fun HomeScreen(
@@ -49,15 +42,11 @@ fun HomeScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val updateState by viewModel.updateState.collectAsStateWithLifecycle()
 
-    // ── 继续观看 ──
-    // 每次回到 RESUMED 重读观看历史:从播放页返回后行内容立即反映最新进度。
-    val context = LocalContext.current
+    // 每次回到 RESUMED 让 ViewModel 重读观看历史(IO 线程),UI 只渲染状态。
     val lifecycleOwner = LocalLifecycleOwner.current
-    var watchEntries by remember { mutableStateOf<List<WatchEntry>>(emptyList()) }
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            // SP 读含 JSON 解码:移 IO 线程,避免每次回首页都在主线程做磁盘 IO
-            watchEntries = withContext(Dispatchers.IO) { WatchHistory.entries(context) }
+            viewModel.refreshWatchHistory()
         }
     }
 
@@ -97,16 +86,19 @@ fun HomeScreen(
 
     // 首次进入首页把焦点落在搜索入口:默认焦点落在设置图标上不符合"先找内容"
     // 的直觉,而聚焦 Hero 按钮会让 LazyColumn 把顶栏滚出屏幕。
-    // rememberSaveable 保证从详情/播放返回时不抢回焦点(由 focusRestorer 负责)。
+    // 必须等内容就绪再请求:骨架屏切真实内容会重建 LazyColumn item,过早请求
+    // 的焦点会丢失并落到设置图标上(首次按 OK 直接误进设置)。
     val searchFocus = remember { FocusRequester() }
-    var initialFocusApplied by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        if (!initialFocusApplied) {
-            searchFocus.requestFocus()
-            initialFocusApplied = true
+    val heroPlayFocus = remember { FocusRequester() }
+    val contentReady = !state.isLoading && state.error == null
+    LaunchedEffect(contentReady) {
+        if (contentReady && viewModel.consumeInitialFocus()) {
+            runCatching { searchFocus.requestFocus() }
         }
     }
 
+    // 展示数据由纯函数装配(合规过滤/进度/Hero 选择),UI 不再做数据推导。
+    val content = buildHomeContent(state)
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item {
             TopBar(
@@ -122,67 +114,26 @@ fun HomeScreen(
                     null
                 },
                 searchFocusRequester = searchFocus,
+                // 没有 Hero 时保持系统默认 DOWN 行为
+                searchDownFocusRequester = if (content.hero != null) heroPlayFocus else null,
             )
         }
-        // ── 继续观看 ──
-        // 只显示当前 provider 的条目(播放解析按当前源路由,跨源条目无法播放);
-        // 位置不足 30s 的条目在登记端已过滤。放在分类行之前,回到首页即见。
-        // 点击直达播放页并带分页(跳过详情页)。
-        val continueEntries = watchEntries.filter {
-            it.provider == state.currentProvider && it.positionSeconds >= 30
-        }
-        val continuePageById = continueEntries.associate { it.videoId to it.page }
-
-        // ── Hero ──
-        // 有继续观看时优先"接着看"(带进度),否则用首个有内容的分类第一条
-        // 作为精选,首屏给出明确的视觉重心与两个动作。
-        val heroItem: FeaturedVideo? = continueEntries.firstOrNull()?.let { entry ->
-            FeaturedVideo(
-                video = entry.toVideoSummary(),
-                page = entry.page,
-                progress = if (entry.durationSeconds > 0) {
-                    (entry.positionSeconds.toFloat() / entry.durationSeconds).coerceIn(0f, 1f)
-                } else {
-                    null
-                },
-                badge = "继续观看",
-                meta = continueMeta(entry.positionSeconds, entry.durationSeconds),
-                description = entry.toVideoSummary().description,
-            )
-        } ?: state.categories.firstOrNull { !state.categoryVideos[it.id].isNullOrEmpty() }?.let { category ->
-            val video = state.categoryVideos[category.id]!!.first()
-            val duration = video.durationSeconds?.takeIf { it > 0 }?.let { formatSeconds(it) }
-            FeaturedVideo(
-                video = video,
-                badge = "精选",
-                meta = listOfNotNull(category.title, duration).joinToString(" · "),
-                description = video.description,
-            )
-        }
-        heroItem?.let { hero ->
+        val continueEntries = content.continueEntries
+        val continuePageById = content.continuePageById
+        content.hero?.let { hero ->
             item(key = "hero") {
                 val isContinue = continueEntries.firstOrNull()?.videoId == hero.video.id
                 FeaturedHero(
                     item = hero,
                     onPlay = {
-                        // 精选 Hero 直接播放时也登记观看历史,否则播放器退出时
-                        // updatePosition 找不到条目,这条内容永远进不了"继续观看"。
+                        // 精选 Hero 直接播放时登记观看历史(ViewModel 在 IO 线程写)。
                         if (!isContinue) {
-                            WatchHistory.upsert(
-                                context,
-                                WatchEntry(
-                                    videoId = hero.video.id,
-                                    provider = state.currentProvider,
-                                    title = hero.video.title,
-                                    thumbnailUrl = hero.video.thumbnailUrl.orEmpty(),
-                                    durationSeconds = hero.video.durationSeconds ?: 0L,
-                                    page = hero.page,
-                                ),
-                            )
+                            viewModel.registerPlayed(hero.video, hero.page)
                         }
                         onPlayVideo(hero.video, hero.page)
                     },
                     onDetails = { onVideoClick(hero.video) },
+                    playFocusRequester = heroPlayFocus,
                 )
             }
         }
@@ -244,6 +195,7 @@ fun HomeScreen(
                     onVideoClick = onVideoClick,
                     onSeeAll = { onSeeAll(category.id, category.title) },
                     loadFailed = state.categoryErrors.contains(category.id),
+                    onRetry = { viewModel.loadHome() },
                 )
             }
         }

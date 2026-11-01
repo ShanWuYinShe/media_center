@@ -3,21 +3,15 @@ package com.example.mediacenter.data
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.net.AppHttpClient
 import java.io.IOException
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.Response
 import java.time.Duration
 
 class BilibiliApiException(override val message: String) : Exception(message)
@@ -275,43 +269,19 @@ class BilibiliApi(
             }
             .get()
             .build()
-        // 用 suspendCancellableCoroutine 包裹:协程取消(切换清晰度/分P/退出播放页)
-        // 时立即 call.cancel(),避免阻塞式 execute() 继续占用 IO 线程与连接。
-        return withContext(Dispatchers.IO) {
-            val body = suspendCancellableCoroutine<String> { continuation ->
-                val call = client.newCall(request)
-                continuation.invokeOnCancellation { call.cancel() }
-                call.enqueue(object : okhttp3.Callback {
-                    override fun onFailure(call: Call, e: IOException) {
-                        if (continuation.isActive) {
-                            continuation.resumeWithException(e)
-                        }
-                    }
-
-                    override fun onResponse(call: Call, response: Response) {
-                        try {
-                            response.use {
-                                val text = it.body.string()
-                                if (!it.isSuccessful) {
-                                    throw BilibiliApiException("B 站 API ${it.code}: ${text.take(200)}")
-                                }
-                                if (continuation.isActive) {
-                                    // 只把原始 body 交给协程,解码放到下面 Default 执行,
-                                    // 避免 JSON 解析阻塞 OkHttp 回调线程池。
-                                    continuation.resume(text)
-                                }
-                            }
-                        } catch (error: Throwable) {
-                            if (continuation.isActive) {
-                                continuation.resumeWithException(error)
-                            }
-                        }
-                    }
-                })
+        // 请求与 body 读取放 IO;协程取消会 cancel Call(见 Call.await)。
+        val body = withContext(Dispatchers.IO) {
+            val response = client.newCall(request).await()
+            response.use {
+                val text = it.body.string()
+                if (!it.isSuccessful) {
+                    throw BilibiliApiException("B 站 API ${it.code}: ${text.take(200)}")
+                }
+                text
             }
-            // JSON 解码是 CPU 活,放 Default(与 MediaApi 一致),不占 OkHttp 线程。
-            withContext(Dispatchers.Default) { json.decodeFromString<T>(body) }
         }
+        // JSON 解码是 CPU 活,放 Default(与 MediaApi 一致),不占 IO 线程。
+        return withContext(Dispatchers.Default) { json.decodeFromString<T>(body) }
     }
 
     companion object {

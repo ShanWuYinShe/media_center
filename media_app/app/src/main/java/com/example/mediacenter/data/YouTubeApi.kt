@@ -1,19 +1,15 @@
 package com.example.mediacenter.data
 
+import java.io.IOException
 import com.example.mediacenter.BuildConfig
 import com.example.mediacenter.net.AppHttpClient
-import java.io.IOException
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.Response
 
 /**
  * YouTube provider 的 App 端 API 客户端:搜索与播放解析都走 media_server 的
@@ -43,7 +39,7 @@ class YouTubeApi(
             query = mapOf("q" to query),
             headers = appTokenHeaders(),
         )
-        return execute(request, "youtube search")
+        return execute(request)
     }
 
     /** 解析播放地址(直链多档 + 清晰度列表)。服务端解析失败时抛 IOException/ApiException。 */
@@ -53,7 +49,7 @@ class YouTubeApi(
             query = mapOf("id" to videoId),
             headers = appTokenHeaders(),
         )
-        val response = execute(request, "youtube resolve") { body ->
+        val response = execute(request) { body ->
             json.decodeFromString<YouTubeResolveResponse>(body)
         }
         return response.toPlaybackResult()
@@ -66,38 +62,24 @@ class YouTubeApi(
             emptyMap()
         }
 
-    private suspend inline fun <reified T> execute(request: Request, label: String): T =
-        execute(request, label) { body -> json.decodeFromString<T>(body) }
+    private suspend inline fun <reified T> execute(request: Request): T =
+        execute(request) { body -> json.decodeFromString<T>(body) }
 
-    private suspend fun <T> execute(request: Request, label: String, decode: (String) -> T): T {
-        val body = executeBody(request, label)
+    private suspend fun <T> execute(request: Request, decode: (String) -> T): T {
+        val body = executeBody(request)
         return withContext(Dispatchers.Default) { decode(body) }
     }
 
-    private suspend fun executeBody(request: Request, label: String): String =
-        suspendCancellableCoroutine { continuation ->
-            val call = client.newCall(request)
-            continuation.invokeOnCancellation { call.cancel() }
-            call.enqueue(object : okhttp3.Callback {
-                override fun onFailure(call: okhttp3.Call, e: IOException) {
-                    if (continuation.isActive) continuation.resumeWithException(e)
-                }
-
-                override fun onResponse(call: okhttp3.Call, response: Response) {
-                    try {
-                        response.use {
-                            val body = it.body.string()
-                            if (!it.isSuccessful) {
-                                throw apiException(it.code, body)
-                            }
-                            if (continuation.isActive) continuation.resume(body)
-                        }
-                    } catch (error: Throwable) {
-                        if (continuation.isActive) continuation.resumeWithException(error)
-                    }
-                }
-            })
+    private suspend fun executeBody(request: Request): String = withContext(Dispatchers.IO) {
+        val response = client.newCall(request).await()
+        response.use {
+            val body = it.body.string()
+            if (!it.isSuccessful) {
+                throw apiException(it.code, body)
+            }
+            body
         }
+    }
 
     private fun apiException(statusCode: Int, body: String): ApiException {
         val parser = Json { ignoreUnknownKeys = true }

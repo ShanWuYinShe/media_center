@@ -22,7 +22,8 @@ import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.mediacenter.data.VideoSummary
-import com.example.mediacenter.ui.components.TvChipButton
+import com.example.mediacenter.ui.components.TvChip
+import com.example.mediacenter.ui.components.VideoCard
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.CardSpacing
 import com.example.mediacenter.ui.theme.RowVerticalSpacing
@@ -41,6 +42,8 @@ fun CategoryRow(
     // 按 videoId 的观看进度(0f..1f),继续观看行用
     progressById: Map<String, Float> = emptyMap(),
     loadFailed: Boolean = false,
+    // 分类首屏加载失败时的重试动作;null 时仅展示失败文案
+    onRetry: (() -> Unit)? = null,
 ) {
     // "查看全部"在行标题右侧,空间焦点搜索从卡片上移时会落到上一行卡片,
     // 几乎无法选中它。给首张卡片显式指定 up 目标,保证遥控器可达。
@@ -62,7 +65,7 @@ fun CategoryRow(
             onSeeAll?.let { onClick ->
                 // 用胶囊按钮而非 TextButton:TV 上 Material TextButton 的焦点
                 // 指示很弱,而"查看全部"是要用遥控器精确选中的动作。
-                TvChipButton(
+                TvChip(
                     label = "查看全部",
                     onClick = onClick,
                     modifier = Modifier.focusRequester(seeAllFocus),
@@ -72,12 +75,23 @@ fun CategoryRow(
         if (videos.isEmpty()) {
             // 加载中/无内容时给一行说明,而不是裸标题+空 LazyRow(用户会以为坏了)。
             // 加载失败与"真没有内容"区分展示,避免误导用户以为该分类确实为空。
-            Text(
-                text = if (loadFailed) "\u672C\u5206\u7C7B\u52A0\u8F7D\u5931\u8D25\uFF0C\u8BF7\u5237\u65B0\u91CD\u8BD5" else "\u672C\u5206\u7C7B\u6682\u65E0\u5185\u5BB9",
-                color = if (loadFailed) AppleBlue else TextTertiary,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = ScreenHorizontalPadding, vertical = 8.dp),
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = ScreenHorizontalPadding, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = if (loadFailed) "本分类加载失败" else "本分类暂无内容",
+                    color = if (loadFailed) AppleBlue else TextTertiary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                // TV 没有下拉刷新:失败行必须给一个遥控器可达的重试入口。
+                if (loadFailed && onRetry != null) {
+                    TvChip(label = "重试", onClick = onRetry)
+                }
+            }
         } else {
             LazyRow(
                 contentPadding = PaddingValues(horizontal = ScreenHorizontalPadding),

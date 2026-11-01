@@ -13,11 +13,15 @@ import com.example.mediacenter.BuildConfig
 object MediaRepositoryHolder {
     @Volatile private var appContext: Context? = null
 
+    /** 进程级 Application context;仅供不依赖 Activity 的本地存储使用。 */
+    val applicationContext: Context?
+        get() = appContext
+
     fun init(context: Context) {
         appContext = context.applicationContext
     }
 
-    val repository: MediaRepository by lazy {
+    val repository: MediaRepositoryApi by lazy {
         val prefs = appContext?.getSharedPreferences("media_prefs", Context.MODE_PRIVATE)
         // 独立缓存目录:OkHttp Cache 要求独占目录,不能与其他组件共享。
         val apiCacheDir = appContext?.cacheDir?.resolve("api-cache")

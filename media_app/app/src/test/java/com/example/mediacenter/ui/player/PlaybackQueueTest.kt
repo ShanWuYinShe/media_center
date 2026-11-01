@@ -1,6 +1,7 @@
 package com.example.mediacenter.ui.player
 
 import com.example.mediacenter.data.PlaybackPages
+import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.VideoCollectionInfo
 import com.example.mediacenter.data.VideoCollectionResponse
 import com.example.mediacenter.data.VideoSummary
@@ -32,6 +33,23 @@ class PlaybackQueueTest {
         assertEquals("C", collection.copy(currentIndex = 1).next()?.id)
         assertNull(collection.copy(currentIndex = 2).next())
         assertNull(collection.copy(currentIndex = -1).next())
+    }
+
+    @Test
+    fun `自动连播优先多P下一页，其次合集下一集`() {
+        val multiPage = PlaybackResult(
+            options = emptyList(),
+            pages = PlaybackPages(currentPage = 0, totalPages = 2),
+        )
+        val collection = PlaybackCollection(
+            id = "s", title = "合集", items = listOf(video("A"), video("B")), currentIndex = 0,
+        )
+        assertEquals(PlaybackNext.Page(1), nextPlayback(multiPage, collection))
+
+        val lastPage = multiPage.copy(pages = PlaybackPages(currentPage = 1, totalPages = 2))
+        assertEquals(PlaybackNext.Episode(video("B")), nextPlayback(lastPage, collection))
+
+        assertNull(nextPlayback(null, null))
     }
 
     @Test

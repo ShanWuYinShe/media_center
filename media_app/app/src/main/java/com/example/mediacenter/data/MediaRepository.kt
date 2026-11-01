@@ -1,9 +1,7 @@
 package com.example.mediacenter.data
 
-import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
-import com.example.mediacenter.BuildConfig
 import com.example.mediacenter.log.AppLog
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -13,18 +11,18 @@ class MediaRepository(
     private val bilibiliApi: BilibiliApi = BilibiliApi(),
     private val youtubeApi: YouTubeApi = YouTubeApi(api),
     prefs: SharedPreferences? = null,
-) {
+) : MediaRepositoryApi {
     // 当前选中的 provider(默认 bilibili)。首次加载 providers 后自动选第一个,
     // 之后用户手动切换优先;provider 状态在全局共享实例上,首页/搜索/播放页联动。
     // 选择持久化到 SharedPreferences,App 重启后恢复,不回到默认源。
-    @Volatile var currentProvider: String = prefs?.getString(KEY_CURRENT_PROVIDER, null) ?: "bilibili"
+    @Volatile override var currentProvider: String = prefs?.getString(KEY_CURRENT_PROVIDER, null) ?: "bilibili"
         private set
     private val providerInitialized = java.util.concurrent.atomic.AtomicBoolean(false)
     private val providerPrefs = prefs
     // 凭证刷新 TTL:凭证变化低频,首页每次加载都拉一次纯属浪费一个请求。
     private var lastCredentialsRefreshMs = 0L
 
-    suspend fun providers(): List<ProviderInfo> {
+    override suspend fun providers(): List<ProviderInfo> {
         val items = api.providers().items.orEmpty()
         if (items.isNotEmpty() && !providerInitialized.getAndSet(true)) {
             // 仅当没有持久化选择、或持久化的 provider 已从列表下线时才自动选
@@ -40,7 +38,7 @@ class MediaRepository(
     }
 
     /** 用户手动切换视频源。 */
-    fun setProvider(provider: String) {
+    override fun setProvider(provider: String) {
         if (provider == currentProvider) return
         currentProvider = provider
         persistProvider()
@@ -63,7 +61,7 @@ class MediaRepository(
     // 没有互斥时两条请求都会穿透。
     private val credentialsMutex = Mutex()
 
-    suspend fun refreshCredentials() = credentialsMutex.withLock {
+    override suspend fun refreshCredentials() = credentialsMutex.withLock {
         val now = System.currentTimeMillis()
         if (now - lastCredentialsRefreshMs < CREDENTIALS_REFRESH_TTL_MS) return@withLock
         try {
@@ -75,23 +73,23 @@ class MediaRepository(
             }
             // 只有成功才刷新 TTL:失败时下次调用会重试,不会卡在过期缓存上。
             lastCredentialsRefreshMs = now
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             AppLog.w("Repo", "failed to fetch provider credentials, using no-credential mode", e)
         }
     }
 
-    suspend fun categories(): List<ContentCategory> = api.categories(currentProvider).items.orEmpty()
-
-    suspend fun categories(provider: String): List<ContentCategory> = api.categories(provider).items.orEmpty()
+    override suspend fun categories(): List<ContentCategory> = api.categories(currentProvider).items.orEmpty()
 
     // 拉取某个分类某一页的 approved 视频列表(server 只提供目录数据,无搜索接口)。
     // 时长筛选传 null 表示该侧不限制;翻页时必须原样透传同一组条件。
-    suspend fun catalogPage(
+    override suspend fun catalogPage(
         categoryId: String,
-        page: Int = 1,
-        pageSize: Int = 18,
-        minDurationSeconds: Long? = null,
-        maxDurationSeconds: Long? = null,
+        page: Int,
+        pageSize: Int,
+        minDurationSeconds: Long?,
+        maxDurationSeconds: Long?,
     ): VideosResponse = api.categoryVideos(
         currentProvider,
         categoryId,
@@ -102,19 +100,18 @@ class MediaRepository(
     )
 
     /** 某视频所在合集的已审核剧集队列(用于自动连播);失败由调用方静默降级。 */
-    suspend fun collectionFor(videoId: String): VideoCollectionResponse =
+    override suspend fun collectionFor(videoId: String): VideoCollectionResponse =
         api.videoCollection(currentProvider, videoId)
 
-    /** 服务端搜索(当前 provider 内,approved 目录)。失败时由调用方回退本地过滤。 */
-    suspend fun search(query: String, page: Int = 1, pageSize: Int = 30): SearchResponse =
+    /** 服务端搜索(当前 provider 内,approved 目录)。 */
+    override suspend fun search(query: String, page: Int, pageSize: Int): SearchResponse =
         api.search(query, currentProvider, page, pageSize)
 
     /**
      * YouTube 实时搜索:不走 catalog,直接调 server 的 YouTube 通道(ytsearch 实时搜索)。
-     * 与 [search] 分开是为了让搜索层按 provider 显式选择通道,失败时仍可回退
-     * 本地 catalog 过滤(能搜到已入库的少量内容)。
+     * 与 [search] 分开是为了让搜索层按 provider 显式选择通道。
      */
-    suspend fun youtubeSearch(query: String): SearchResponse = youtubeApi.search(query)
+    override suspend fun youtubeSearch(query: String): SearchResponse = youtubeApi.search(query)
 
     /**
      * 解析播放地址:按当前 provider 分发。bilibili 走 WBI 签名 + view + playurl
@@ -122,7 +119,7 @@ class MediaRepository(
      * (一次返回全部清晰度档,切档由播放器本地换源,qn 参数被忽略)。
      * 其他 provider 无本地解析器时给出明确错误。
      */
-    suspend fun resolvePlayback(videoId: String, qn: Int? = null): PlaybackResult = when (currentProvider) {
+    override suspend fun resolvePlayback(videoId: String, qn: Int?): PlaybackResult = when (currentProvider) {
         "bilibili" ->
             if (qn == null) bilibiliApi.resolvePlayback(videoId) else bilibiliApi.resolvePlayback(videoId, qn)
         "youtube" -> youtubeApi.resolvePlayback(videoId)

@@ -29,3 +29,10 @@ TV 交互与视觉约定见 skill media-app-tv-ui。
 - 播放补充：YouTube 1080P+ 的分离音轨用 `MergingMediaSource` 合流；B 站多段 durl 用 `ConcatenatingMediaSource` 顺序拼接（MediaController 只能传 MediaItem，额外地址经 MediaMetadata extras 传给 PlaybackService 的 `PlaybackMediaSourceFactory`）。
 - 服务端地址：默认 `https://media.chaoset.com/api/v1`；如需覆盖，设置 `MEDIA_SERVER_URL`。
 
+## 代码结构约定
+
+- ViewModel 依赖 `MediaRepositoryApi` 接口（`data/MediaRepositoryApi.kt`），单测用 fake 注入，不依赖 OkHttp/SharedPreferences。
+- HTTP 调用统一 `data/HttpCall.kt` 的 `Call.await()`；响应体读取必须在 IO 调度器。
+- 通用 TV 控件集中在 `ui/components/`（`TvActionButton`、`TvChip`、`TvDialogButton`、`PagedVideoGrid`、`VideoCard` 等），页面不要重复按钮样式或分页网格。
+- 播放器：`PlayerViewModel` 负责解析/清晰度/分P/合集 next 决策；`PlayerControllerConnection` 负责 MediaController 重连与幂等释放；`PlayerAudioFocus` 负责音频焦点；`PlayerContent` 只编排播放与覆盖层。
+- 首页展示数据由 `HomeViewModel` + `buildHomeContent` 纯函数装配；UI 不做观看历史磁盘 IO。

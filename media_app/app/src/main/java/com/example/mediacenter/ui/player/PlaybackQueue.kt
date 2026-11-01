@@ -1,6 +1,7 @@
 package com.example.mediacenter.ui.player
 
 import com.example.mediacenter.data.PlaybackPages
+import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.VideoCollectionResponse
 import com.example.mediacenter.data.VideoSummary
 
@@ -19,6 +20,21 @@ data class PlaybackCollection(
         if (currentIndex < 0 || currentIndex >= items.size) return null
         return items.getOrNull(currentIndex + 1)
     }
+}
+
+/** 片尾自动连播的目标:多P优先,其次合集下一集。 */
+sealed interface PlaybackNext {
+    data class Page(val index: Int) : PlaybackNext
+
+    data class Episode(val video: VideoSummary) : PlaybackNext
+}
+
+/** 计算片尾的下一步;没有下一页/下一集返回 null。 */
+fun nextPlayback(result: PlaybackResult?, collection: PlaybackCollection?): PlaybackNext? {
+    val page = result?.pages?.let(::nextPageIndex)
+    if (page != null) return PlaybackNext.Page(page)
+    val episode = collection?.next() ?: return null
+    return PlaybackNext.Episode(episode)
 }
 
 /** 多P视频的下一页下标;非多P/已是最后一页返回 null。 */

@@ -4,7 +4,7 @@
 
 - `media_app`：Android TV + Kotlin + Jetpack Compose + Media3 客户端，针对遥控器焦点、电视安全边距和 2 米观看距离优化。
 - `media_server`：Go 实现的目录服务，提供 provider 列表、分类列表、视频元数据；youtube provider 的实时搜索与播放解析经 `vod_extractor` 代理（受控例外，结果不落 catalog）。
-- `vod_extractor`：Python + yt-dlp 内部点播解析服务，供 media_server 的 YouTube 实时搜索与播放解析调用（`/api/providers/youtube/search|resolve`，需宿主机放置 cookies）。
+- `vod_extractor`：Python + yt-dlp 内部点播解析服务，供 media_server 的 YouTube 实时搜索与播放解析调用（`/api/providers/youtube/search|resolve`；播放解析需宿主机放置 cookies，搜索走 ytsearch flat 列表页无需 cookies）。
 
 App 只需要一个服务端地址 `MEDIA_SERVER_URL`（Gradle property 或同名环境变量覆盖；未设置时回落到内置默认 `https://media.chaoset.com/api/v1`，必须是绝对 HTTPS URL）。部署为本仓库内自洽编排：`deploy/`（nginx + media_server + vod_extractor 三服务 compose，独立 bridge 与数据目录，与 workwork 聚合栈零互通），目标域名 `media.chaoset.com`。**本仓库不再是 workwork 的 submodule**；旧地址 `https://yinghuoren.com/api/media` 仅由 **Cloudflare 边缘 308** 重定向到 `media.chaoset.com/api/*`（workwork nginx 已不再反代该前缀）。
 

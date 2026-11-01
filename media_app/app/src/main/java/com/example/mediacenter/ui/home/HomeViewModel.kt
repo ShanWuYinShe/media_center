@@ -4,15 +4,18 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.mediacenter.data.ContentCategory
-import com.example.mediacenter.data.MediaRepository
+import com.example.mediacenter.data.MediaRepositoryApi
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.ProviderInfo
 import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.data.WatchEntry
+import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.data.friendlyLoadMessage
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.ui.update.UpdateDialogState
 import com.example.mediacenter.update.AppUpdateHolder
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -21,6 +24,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
@@ -31,12 +35,14 @@ data class HomeUiState(
     val categoryErrors: Set<String> = emptySet(),
     val providers: List<ProviderInfo> = emptyList(),
     val currentProvider: String = "",
+    // 本地观看历史(ViewModel 在 IO 线程读取,UI 只负责渲染)
+    val watchEntries: List<WatchEntry> = emptyList(),
     val isLoading: Boolean = true,
     val error: String? = null,
 )
 
 class HomeViewModel(
-    private val repository: MediaRepository = MediaRepositoryHolder.repository,
+    private val repository: MediaRepositoryApi = MediaRepositoryHolder.repository,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
@@ -44,6 +50,16 @@ class HomeViewModel(
     // App 内更新:检查/下载/弹窗状态统一在进程级协调器(AppUpdateHolder)上,
     // 与设置页共享同一份;这里只暴露其状态流,进入首页时顺手发起一次检查。
     val updateState: StateFlow<UpdateDialogState?> = AppUpdateHolder.updateState
+
+    // 首页首屏焦点只处理一次:ViewModel 随返回栈存活,从详情/播放返回时
+    // 不会重复抢焦点;进程重建后新 VM 会重新处理。
+    private var initialFocusHandled = false
+
+    fun consumeInitialFocus(): Boolean {
+        if (initialFocusHandled) return false
+        initialFocusHandled = true
+        return true
+    }
 
     // 跟踪当前加载任务:切换 provider / 刷新时取消旧任务,
     // 避免慢的旧请求后完成覆盖新状态(旧 provider 内容配新 currentProvider)。
@@ -63,8 +79,39 @@ class HomeViewModel(
 
     init {
         loadHome()
+        refreshWatchHistory()
         // 自动检查更新:协调器内进程级只查一次,失败/下载中不重复发起
         AppUpdateHolder.requestCheck()
+    }
+
+    /** 回到首页/从播放页返回时刷新"继续观看"数据(磁盘 IO 走 IO 调度器)。 */
+    fun refreshWatchHistory() {
+        val context = MediaRepositoryHolder.applicationContext ?: return
+        viewModelScope.launch {
+            val entries = withContext(Dispatchers.IO) { WatchHistory.entries(context) }
+            _uiState.value = _uiState.value.copy(watchEntries = entries)
+        }
+    }
+
+    /** Hero 直接播放时登记观看历史;失败静默(不影响播放)。 */
+    fun registerPlayed(video: VideoSummary, page: Int) {
+        val context = MediaRepositoryHolder.applicationContext ?: return
+        val provider = repository.currentProvider
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                WatchHistory.upsert(
+                    context,
+                    WatchEntry(
+                        videoId = video.id,
+                        provider = provider,
+                        title = video.title,
+                        thumbnailUrl = video.thumbnailUrl.orEmpty(),
+                        durationSeconds = video.durationSeconds ?: 0L,
+                        page = page,
+                    ),
+                )
+            }
+        }
     }
 
     fun loadHome() {

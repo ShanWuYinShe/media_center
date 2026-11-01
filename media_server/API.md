@@ -147,7 +147,7 @@ type VideoSummary = {
 
 ### `GET /api/providers/youtube/search?q=关键词`
 
-YouTube **实时搜索**：经 vod_extractor 的 yt-dlp `ytsearch`（flat 模式抓搜索结果页）。与观众浏览器走同一条 YouTube 公开前端，**无 Data API 每日配额**；代价是单次搜索耗时秒级，且与播放解析同样依赖 cookies。结果不写 catalog，仅供 App 即时展示与播放——审核关卡只约束进入分类列表的 catalog 数据，此端点不绕过它（不产生任何入库）。
+YouTube **实时搜索**：经 vod_extractor 的 yt-dlp `ytsearch`（flat 模式抓搜索结果页）。与观众浏览器走同一条 YouTube 公开前端，**无 Data API 每日配额**；代价是单次搜索耗时秒级。flat 列表页不触发播放风控，**无 cookies 仍可用**（2026-10-12 线上实测）；播放解析才必须带 cookies。结果不写 catalog，仅供 App 即时展示与播放——审核关卡只约束进入分类列表的 catalog 数据，此端点不绕过它（不产生任何入库）。
 
 **鉴权/限流**：同凭证接口的 `X-App-Token` 要求；同一 IP 每分钟 8 次。单页固定 20 条，无翻页令牌（TV 搜索每键即时出结果，够用）。
 
@@ -189,7 +189,7 @@ YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返�
 - `options` 按清晰度从高到低排列，App 取首项播放；`mimeType` 为 `application/x-mpegurl` 时按 HLS 加载。
 - `audioUrl` 存在时代表音视频分离：`url` 是视频轨、`audioUrl` 是音轨，`audioMimeType` 为音轨容器（`audio/mp4`/`audio/webm`），App 必须合流播放。
 - 未配置 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 返回 503 `NOT_CONFIGURED`；解析失败（视频受限、cookies 失效、无可用格式）返回 502 `RESOLVE_FAILED`。
-- **部署硬前提**：`.wework/vod_extractor/youtube-cookies.txt` 必须存在，否则 YouTube 对数据中心 IP 的解析一律返回 bot 检测失败。
+- **部署硬前提**：`deploy/data/vod/youtube-cookies.txt`（容器内只读挂载为 `/config/youtube-cookies.txt`）必须存在，否则 YouTube 对数据中心 IP 的播放解析一律返回 bot 检测失败；搜索（flat 列表页）不受影响。路径与过期重导出运维以 `vod_extractor/AGENTS.md` 为准。
 
 ### `GET /api/app/update?versionCode=1&variant=normal`
 

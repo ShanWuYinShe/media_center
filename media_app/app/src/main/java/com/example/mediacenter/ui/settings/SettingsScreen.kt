@@ -7,19 +7,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeight
-import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,6 +53,7 @@ import com.example.mediacenter.ui.components.TvScrollableText
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.CardGray
 import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
+import com.example.mediacenter.ui.theme.ScreenVerticalPadding
 import com.example.mediacenter.ui.update.UpdateDialog
 import com.example.mediacenter.ui.update.UpdateDialogState
 import com.example.mediacenter.ui.theme.TextPrimary
@@ -180,7 +178,7 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenHorizontalPadding, vertical = 16.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenHorizontalPadding, vertical = ScreenVerticalPadding),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TvIconButton(onClick = onBack, contentDescription = "返回") {
@@ -255,8 +253,10 @@ fun SettingsScreen(onBack: () -> Unit) {
                             title = "清除日志",
                             message = "将删除本地日志文件，用于故障排查的日志将不可用。",
                             onConfirm = {
-                                AppLog.clear()
-                                feedback = "已清除"
+                                scope.launch {
+                                    withContext(Dispatchers.IO) { AppLog.clear() }
+                                    feedback = "已清除"
+                                }
                             },
                         )
                     },
@@ -355,7 +355,7 @@ private fun ActionRow(label: String, enabled: Boolean = true, onClick: () -> Uni
             modifier = Modifier.weight(1f),
         )
         Icon(
-            imageVector = Icons.Default.KeyboardArrowRight,
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
             contentDescription = null,
             tint = if (enabled) TextSecondary else TextTertiary,
             modifier = Modifier.size(20.dp),

@@ -18,6 +18,13 @@ description: media_app 版本号与 APK 发版部署流程。触发：发版、�
 
 注意：tag 必须打在 media_center 本仓库（`ShanWuYinShe/media_center`），不要打到 workwork 聚合仓或其它仓库；版本号只由本仓库的 `v*` tag 派生。
 
+## 构建期令牌（YouTube 源可用性硬前提）
+
+- `media_app/app/build.gradle.kts` 从 **Gradle property / 环境变量 `APP_API_TOKEN`** 注入 `BuildConfig.APP_API_TOKEN`；它与服务端 `MEDIA_SERVER_APP_API_TOKEN` 必须一致。
+- 该令牌是 YouTube 实时搜索/解析与凭证接口的 `X-App-Token`。**未注入时 APK 仍能构建，但这两个通道一律 401**：App 里 YouTube 源搜不到、播不了，B 站也只能走无凭证清晰度。
+- 发版构建前从部署端读取同名值注入当前 shell（只读使用，禁止写入代码、脚本、文档或日志）；构建产物的版本号由 tag 派生，令牌不体现在版本号里。
+- 排障：若用户反馈“切到 YouTube 后搜索失败/凭证 401”，先核对 APK 构建环境是否注入了该变量，再看服务端 `MEDIA_SERVER_APP_API_TOKEN`。
+
 ## 部署 APK
 
 APK 有 **normal + legacy 两个变体**：normal 源码即本目录；legacy 为 Android 4.4.2

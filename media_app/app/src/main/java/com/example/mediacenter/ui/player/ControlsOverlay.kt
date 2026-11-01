@@ -48,11 +48,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.mediacenter.data.PlaybackResult
+import com.example.mediacenter.ui.components.TvChip
 import com.example.mediacenter.ui.components.TvIconButton
 import androidx.compose.ui.graphics.Brush
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.DividerGray
 import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
+import com.example.mediacenter.ui.theme.ScreenVerticalPadding
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.TextSecondary
 import com.example.mediacenter.util.formatDuration
@@ -70,6 +72,9 @@ internal fun ControlsOverlay(
     onSeekBy: (Long) -> Unit,
     onSelectQuality: (Int) -> Unit,
     onSelectPage: (Int) -> Unit,
+    // 合集下一集(仅单P/最后一P且存在已审核下一集时非空)
+    nextEpisodeTitle: String?,
+    onNextEpisode: (() -> Unit)?,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -87,7 +92,8 @@ internal fun ControlsOverlay(
                         1f to Color.Transparent,
                     ),
                 )
-                .padding(horizontal = ScreenHorizontalPadding, vertical = 10.dp),
+                .padding(horizontal = ScreenHorizontalPadding)
+                .padding(top = ScreenVerticalPadding, bottom = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -115,7 +121,8 @@ internal fun ControlsOverlay(
                         1f to Color.Black.copy(alpha = 0.8f),
                     ),
                 )
-                .padding(horizontal = ScreenHorizontalPadding, vertical = 12.dp),
+                .padding(horizontal = ScreenHorizontalPadding)
+                .padding(top = 12.dp, bottom = 32.dp),
         ) {
             // 进度条与时间同行(Row 内横向 weight)。此前 Slider 在 Column 里用
             // vertical weight,会把整个底栏撑满全屏高度、遮住整幅画面——已修复。
@@ -221,6 +228,12 @@ internal fun ControlsOverlay(
                     Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = TextPrimary)
                 }
                 Spacer(Modifier.weight(1f))
+                if (nextEpisodeTitle != null && onNextEpisode != null) {
+                    TvChip(
+                        label = "下一集 · $nextEpisodeTitle",
+                        onClick = onNextEpisode,
+                    )
+                }
             }
             // 分P 行:独立 LazyRow,B 站几十甚至上百 P 的视频也能横向滚动选择,
             // 不会把播放按钮挤出屏宽。focusGroup 让 DPad 从上方 Slider/按钮落入更顺滑。
@@ -247,7 +260,7 @@ internal fun ControlsOverlay(
                         items = playbackResult.pages.pageTitles,
                         key = { index, _ -> index },
                     ) { index, pageTitle ->
-                        SelectChip(
+                        TvChip(
                             label = if (pageTitle.isBlank()) "${index + 1}P" else "${index + 1}P ${pageTitle}",
                             selected = index == playbackResult.pages.currentPage,
                             onClick = { onSelectPage(index) },
@@ -265,7 +278,7 @@ internal fun ControlsOverlay(
                 ) {
                     Text("清晰度", color = TextSecondary, fontSize = 14.sp)
                     playbackResult.availableQualities.forEach { quality ->
-                        SelectChip(
+                        TvChip(
                             label = quality.label,
                             selected = quality.qn == currentQn,
                             onClick = { onSelectQuality(quality.qn) },

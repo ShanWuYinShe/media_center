@@ -67,13 +67,13 @@ object AppLog {
         // 不能把 Throwable 直接交给 Logcat:异常 message 里常带签名直链
         // (如 InvalidResponseCodeException 的 URL),Logcat 会原样输出,
         // 与"签名地址不落盘"的合规口径冲突。栈文本先 redact 再输出。
-        Log.w(fullTag(tag), if (error == null) safe else "$safe\n${redact(Log.getStackTraceString(error))}")
+        Log.w(fullTag(tag), if (error == null) safe else "$safe\n${redact(Log.getStackTraceString(error) ?: error.toString())}")
         appendToFile("W", tag, safe, error)
     }
 
     fun e(tag: String, message: String, error: Throwable? = null) {
         val safe = redact(message)
-        Log.e(fullTag(tag), if (error == null) safe else "$safe\n${redact(Log.getStackTraceString(error))}")
+        Log.e(fullTag(tag), if (error == null) safe else "$safe\n${redact(Log.getStackTraceString(error) ?: error.toString())}")
         appendToFile("E", tag, safe, error)
     }
 
@@ -82,7 +82,7 @@ object AppLog {
      */
     fun logFatalBlocking(tag: String, message: String, error: Throwable) {
         val safe = redact(message)
-        Log.e(fullTag(tag), "$safe\n${redact(Log.getStackTraceString(error))}")
+        Log.e(fullTag(tag), "$safe\n${redact(Log.getStackTraceString(error) ?: error.toString())}")
         writeLine(format("E", tag, safe, error))
     }
 
@@ -108,7 +108,7 @@ object AppLog {
     private fun format(level: String, tag: String, message: String, error: Throwable?): String {
         val time = synchronized(timeFormat) { timeFormat.format(Date()) }
         val base = "$time $level/$tag: $message"
-        return if (error == null) base else "$base\n${redact(Log.getStackTraceString(error))}"
+        return if (error == null) base else "$base\n${redact(Log.getStackTraceString(error) ?: error.toString())}"
     }
 
     private fun writeLine(line: String) {

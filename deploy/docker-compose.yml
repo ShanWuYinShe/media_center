@@ -131,7 +131,8 @@ services:
       start_period: 20s
 
   # YouTube 点播解析（yt-dlp HTTP 封装）：仅 backend 内网，不对外暴露。
-  # 硬前提：./data/vod/youtube-cookies.txt（Netscape 格式），缺失则解析/搜索全被 bot 检测拦截。
+  # 硬前提：./data/vod/youtube-cookies.txt（Netscape 格式），缺失则播放解析被 bot 检测拦截；
+  # 搜索走 ytsearch flat 列表页，无 cookies 仍可用。
   vod_extractor:
     image: media-vod-extractor:${IMAGE_TAG:?IMAGE_TAG 未设置——tag 由 Makefile 注入 git describe;回滚用 IMAGE_TAG=<旧tag> make up <svc>}
     build:

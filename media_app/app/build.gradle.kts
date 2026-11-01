@@ -79,6 +79,12 @@ android {
 
     buildToolsVersion = "37.0.0"
 
+    // 纯 JVM 单测会触达 AppLog -> android.util.Log;返回默认值让日志成为 no-op,
+    // 而不是抛 "not mocked"。业务逻辑测试不依赖 Android 框架实现。
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     buildTypes {
         // release 开启 R8 minify + 资源压缩,减小发布包体积(debug 29M → release ~11M)。
         // 自用包用 debug keystore 签名(signingConfig = debug),无需维护正式 keystore,
@@ -205,4 +211,5 @@ dependencies {
 
     // JVM 单测(JUnit4):覆盖无 Android 依赖的纯 Kotlin 逻辑(时长格式化、WBI 签名、id 解析)。
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
 }

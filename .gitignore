@@ -11,6 +11,8 @@
 **/*.apk
 **/*.aab
 **/*.iml
+# Kotlin 2.x 编译会话目录(AGP 自动生成)
+**/.kotlin/
 # Android Studio updateDaemonJvm 自动生成,不入库
 **/gradle/gradle-daemon-jvm.properties
 

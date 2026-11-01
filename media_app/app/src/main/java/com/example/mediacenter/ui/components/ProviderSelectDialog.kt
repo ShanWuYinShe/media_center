@@ -15,7 +15,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
@@ -29,7 +33,6 @@ import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.AppleBlueDark
 import com.example.mediacenter.ui.theme.CardGray
 import com.example.mediacenter.ui.theme.TextPrimary
-import com.example.mediacenter.ui.theme.TextSecondary
 
 // 视频源切换弹层:仅当 server 返回多个 provider 时由首页展示。
 @Composable
@@ -39,6 +42,11 @@ fun ProviderSelectDialog(
     onSelect: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    // 进入弹窗即聚焦当前源(TV:对齐"当前选中项",按 OK 不会误切到别的源)
+    val currentFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { currentFocus.requestFocus() } }
+    val currentEntryIndex = providers.indexOfFirst { it.id == currentProvider }
+        .let { if (it >= 0) it else 0 }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("选择视频源", color = TextPrimary) },
@@ -48,16 +56,22 @@ fun ProviderSelectDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                providers.forEach { provider ->
+                providers.forEachIndexed { index, provider ->
+                    val isCurrent = provider.id == currentProvider
                     Button(
                         shape = tvPillButtonShape(),
                         border = tvPillButtonBorder(),
                         scale = tvButtonFocusScale(),
                         onClick = { onSelect(provider.id) },
-                        modifier = Modifier.fillMaxWidth().requiredHeight(48.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .requiredHeight(48.dp)
+                            .then(
+                                if (index == currentEntryIndex) Modifier.focusRequester(currentFocus) else Modifier,
+                            ),
                         colors = ButtonDefaults.colors(
                             // 当前源非聚焦时用暗蓝 + 对勾图标；亮蓝只留给焦点态
-                            containerColor = if (provider.id == currentProvider) AppleBlueDark else CardGray,
+                            containerColor = if (isCurrent) AppleBlueDark else CardGray,
                             focusedContainerColor = AppleBlue,
                             contentColor = TextPrimary,
                             focusedContentColor = TextPrimary,
@@ -65,7 +79,7 @@ fun ProviderSelectDialog(
                     ) {
                         // 选中态加对勾图标:仅靠底色区分在 TV 亮度/色偏下不易分辨。
                         // 用自绘矢量图标,不用 Unicode "✓" 拼进文本(字体 fallback 风格不一)。
-                        if (provider.id == currentProvider) {
+                        if (isCurrent) {
                             Icon(
                                 imageVector = Icons.Default.Check,
                                 contentDescription = null,

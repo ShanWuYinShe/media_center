@@ -5,25 +5,21 @@ import androidx.core.net.toUri
 import com.example.mediacenter.BuildConfig
 import com.example.mediacenter.data.AppUpdateInfo
 import com.example.mediacenter.data.MediaApi
+import com.example.mediacenter.data.await
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.net.AppHttpClient
 import java.io.File
 import java.io.FileOutputStream
-import java.io.IOException
 import java.security.MessageDigest
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import okhttp3.Call
-import okhttp3.Callback
+import kotlinx.coroutines.currentCoroutineContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.Response
 
 /**
  * App 内更新:检查(查版本)→ 用户确认 → 下载(带进度)→ 校验 SHA256 → 启动系统安装器。
@@ -159,74 +155,58 @@ class AppUpdateManager(
             .url(update.apkUrl)
             .get()
             .build()
-        // 可取消下载:协程取消时 call.cancel() 中断请求与流拷贝。
-        // 进度回调按节流间隔上报,避免 8KB chunk 粒度下高频重组 UI。
-        return suspendCancellableCoroutine { continuation ->
-            val call = downloadClient.newCall(request)
-            continuation.invokeOnCancellation { call.cancel() }
-            call.enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    if (continuation.isActive) continuation.resumeWithException(e)
+        // 写 .part 临时文件,校验通过后原子改名——进程被杀不会留下名字可信的
+        // 半成品 APK 占空间或被误认(sha256 仍是最终防线)。
+        val part = File(target.parentFile, "${target.name}.part")
+        try {
+            val response = downloadClient.newCall(request).await()
+            response.use {
+                if (!it.isSuccessful) {
+                    throw IllegalStateException("download returned ${it.code}")
                 }
-
-                override fun onResponse(call: Call, response: Response) {
-                    // 写 .part 临时文件,校验通过后原子改名——进程被杀不会留下
-                    // 名字可信的半成品 APK 占空间或被误认(sha256 仍是最终防线)。
-                    val part = File(target.parentFile, "${target.name}.part")
-                    try {
-                        response.use {
-                            if (!it.isSuccessful) {
-                                throw IllegalStateException("download returned ${it.code}")
+                val body = it.body
+                val totalBytes = body.contentLength()
+                var copied = 0L
+                var lastReportMs = 0L
+                if (part.isFile) part.delete()
+                FileOutputStream(part).use { out ->
+                    body.byteStream().use { input ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        while (true) {
+                            // 响应到达后的取消不会再经过 Call.await,这里主动
+                            // 检查取消,避免退出页面后继续把整包下载完。
+                            currentCoroutineContext().ensureActive()
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            out.write(buffer, 0, read)
+                            copied += read
+                            val nowMs = System.currentTimeMillis()
+                            if (totalBytes > 0 && nowMs - lastReportMs >= PROGRESS_THROTTLE_MS) {
+                                lastReportMs = nowMs
+                                onProgress((copied.toFloat() / totalBytes).coerceIn(0f, 1f))
                             }
-                            val body = it.body
-                            val totalBytes = body.contentLength()
-                            var copied = 0L
-                            var lastReportMs = 0L
-                            if (part.isFile) part.delete()
-                            FileOutputStream(part).use { out ->
-                                body.byteStream().use { input ->
-                                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                                    while (true) {
-                                        val read = input.read(buffer)
-                                        if (read <= 0) break
-                                        out.write(buffer, 0, read)
-                                        copied += read
-                                        val nowMs = System.currentTimeMillis()
-                                        if (totalBytes > 0 && nowMs - lastReportMs >= PROGRESS_THROTTLE_MS) {
-                                            lastReportMs = nowMs
-                                            onProgress((copied.toFloat() / totalBytes).coerceIn(0f, 1f))
-                                        }
-                                    }
-                                }
-                            }
-                            if (totalBytes > 0) onProgress(1f)
-                        }
-                        // 尺寸 + SHA256 双校验;失败删除半成品。sizeBytes<=0 时跳过
-                        // 尺寸比对,完整性只由 sha256 判定。
-                        if (update.sizeBytes > 0 && part.length() != update.sizeBytes) {
-                            part.delete()
-                            throw IllegalStateException("apk size mismatch")
-                        }
-                        if (!part.sha256().equals(update.sha256, ignoreCase = true)) {
-                            part.delete()
-                            throw IllegalStateException("apk checksum mismatch")
-                        }
-                        if (!part.renameTo(target)) {
-                            part.delete()
-                            throw IllegalStateException("apk rename failed")
-                        }
-                        if (continuation.isActive) continuation.resume(target)
-                    } catch (error: Throwable) {
-                        runCatching { if (part.isFile) part.delete() }
-                        if (continuation.isActive) {
-                            // 网络中断等 IO 失败会留下半成品 APK；主动清理，
-                            // 避免缓存目录堆积半成品文件。
-                            runCatching { if (target.isFile) target.delete() }
-                            continuation.resumeWithException(error)
                         }
                     }
                 }
-            })
+                if (totalBytes > 0) onProgress(1f)
+            }
+            // 尺寸 + SHA256 双校验;失败删除半成品。sizeBytes<=0 时跳过
+            // 尺寸比对,完整性只由 sha256 判定。
+            if (update.sizeBytes > 0 && part.length() != update.sizeBytes) {
+                throw IllegalStateException("apk size mismatch")
+            }
+            if (!part.sha256().equals(update.sha256, ignoreCase = true)) {
+                throw IllegalStateException("apk checksum mismatch")
+            }
+            if (!part.renameTo(target)) {
+                throw IllegalStateException("apk rename failed")
+            }
+            return target
+        } catch (error: Throwable) {
+            runCatching { if (part.isFile) part.delete() }
+            // 网络中断/校验失败留下的 target(历史缓存或半成品)一并清理。
+            runCatching { if (target.isFile) target.delete() }
+            throw error
         }
     }
 

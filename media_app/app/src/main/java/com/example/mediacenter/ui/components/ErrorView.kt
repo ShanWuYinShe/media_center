@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -18,15 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
-import com.example.mediacenter.ui.theme.tvButtonFocusScale
-import com.example.mediacenter.ui.theme.tvPillButtonBorder
-import com.example.mediacenter.ui.theme.tvPillButtonShape
-import com.example.mediacenter.ui.theme.AppleBlue
-import com.example.mediacenter.ui.theme.CardGray
 import com.example.mediacenter.ui.theme.ErrorRed
-import com.example.mediacenter.ui.theme.TextPrimary
 
 @Composable
 fun ErrorView(
@@ -53,21 +44,11 @@ fun ErrorView(
                 LaunchedEffect(Unit) { if (autoFocusRetry) retryFocus.requestFocus() }
                 // tv Button + 项目统一焦点态(聚焦 Apple Blue 底/白字),替代 M3
                 // OutlinedButton 的弱焦点指示,与 SelectChip/ActionRow 视觉一致。
-                Button(
-                    shape = tvPillButtonShape(),
-                    border = tvPillButtonBorder(),
-                    scale = tvButtonFocusScale(),
+                TvActionButton(
+                    label = "重试",
                     onClick = onRetry,
-                    modifier = Modifier.requiredHeight(48.dp).focusRequester(retryFocus),
-                    colors = ButtonDefaults.colors(
-                        containerColor = CardGray,
-                        focusedContainerColor = AppleBlue,
-                        contentColor = TextPrimary,
-                        focusedContentColor = TextPrimary,
-                    ),
-                ) {
-                    Text("\u91CD\u8BD5", color = TextPrimary)
-                }
+                    modifier = Modifier.focusRequester(retryFocus),
+                )
             }
         }
     }

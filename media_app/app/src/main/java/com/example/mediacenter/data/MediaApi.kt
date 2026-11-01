@@ -3,21 +3,15 @@ package com.example.mediacenter.data
 import com.example.mediacenter.BuildConfig
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.net.AppHttpClient
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.Json
 import okhttp3.Cache
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
 import java.io.File
 import java.io.IOException
 import java.time.Duration
@@ -133,19 +127,12 @@ class MediaApi(
             .newBuilder()
             .post(jsonBody.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
-        return suspendCancellableCoroutine { continuation ->
-            val call = client.newCall(request)
-            continuation.invokeOnCancellation { call.cancel() }
-            call.enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    continuation.resume(false)
-                }
-
-                override fun onResponse(call: Call, response: Response) {
-                    response.close()
-                    continuation.resume(response.isSuccessful)
-                }
-            })
+        return withContext(Dispatchers.IO) {
+            try {
+                client.newCall(request).await().use { it.isSuccessful }
+            } catch (e: IOException) {
+                false
+            }
         }
     }
 
@@ -219,34 +206,16 @@ class MediaApi(
             emptyMap()
         }
 
-    private suspend fun execute(request: Request): String = suspendCancellableCoroutine { continuation ->
-        val call = client.newCall(request)
-        continuation.invokeOnCancellation { call.cancel() }
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                if (continuation.isActive) {
-                    continuation.resumeWithException(e)
-                }
+    private suspend fun execute(request: Request): String = withContext(Dispatchers.IO) {
+        // await 只负责拿到响应;body 的阻塞读取必须在 IO,不能在 VM 的 Main 上。
+        val response = client.newCall(request).await()
+        response.use {
+            val body = it.body.string()
+            if (!it.isSuccessful) {
+                throw apiException(it.code, body)
             }
-
-            override fun onResponse(call: Call, response: Response) {
-                try {
-                    response.use {
-                        val body = it.body.string()
-                        if (!it.isSuccessful) {
-                            throw apiException(it.code, body)
-                        }
-                        if (continuation.isActive) {
-                            continuation.resume(body)
-                        }
-                    }
-                } catch (error: Throwable) {
-                    if (continuation.isActive) {
-                        continuation.resumeWithException(error)
-                    }
-                }
-            }
-        })
+            body
+        }
     }
 
     private suspend fun getOptionalBody(
@@ -254,32 +223,18 @@ class MediaApi(
         query: Map<String, String> = emptyMap(),
     ): String? {
         val request = buildRequest(pathSegments, query)
-        return suspendCancellableCoroutine { continuation ->
-            val call = client.newCall(request)
-            continuation.invokeOnCancellation { call.cancel() }
-            call.enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    if (continuation.isActive) continuation.resumeWithException(e)
+        return withContext(Dispatchers.IO) {
+            val response = client.newCall(request).await()
+            response.use {
+                if (it.code == 204) {
+                    return@use null
                 }
-
-                override fun onResponse(call: Call, response: Response) {
-                    try {
-                        response.use {
-                            if (it.code == 204) {
-                                if (continuation.isActive) continuation.resume(null)
-                                return
-                            }
-                            val body = it.body.string()
-                            if (!it.isSuccessful) {
-                                throw apiException(it.code, body)
-                            }
-                            if (continuation.isActive) continuation.resume(body)
-                        }
-                    } catch (error: Throwable) {
-                        if (continuation.isActive) continuation.resumeWithException(error)
-                    }
+                val body = it.body.string()
+                if (!it.isSuccessful) {
+                    throw apiException(it.code, body)
                 }
-            })
+                body
+            }
         }
     }
 

@@ -23,12 +23,14 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 
 ## 架构
 
-- `main.go`：路由、handler、分页
-- `youtube.go`：youtube provider 实时通道——搜索与播放解析均代理 vod_extractor/yt-dlp（`MEDIA_SERVER_VOD_EXTRACTOR_URL`；搜索走 ytsearch flat 模式，无 Data API 配额），均需 `X-App-Token` + 独立限流
-- `catalog.go`：SQLite 分类维护数据库（system of record），纯 modernc.org/sqlite 无 cgo
+- `main.go`：启动、服务装配、路由与 JSON 响应包络
+- `youtube.go`：youtube provider 实时通道（客户端/搜索/解析 handler）；`youtube_formats.go`：格式选择；`youtube_cache.go`：resolve 缓存与单飞
+- `handlers.go`：目录/凭证/搜索/合集等公开 handler，以及分页/时长参数解析
+- `catalog.go`：SQLite 核心（schema/连接/视频元数据/导入），纯 modernc.org/sqlite 无 cgo
+- `catalog_browse.go`：目录浏览与搜索查询；`catalog_review.go`：审校/计数/删除；`catalog_collections.go`：合集；`catalog_consolidate.go`：分P合并
 - `catalog_serve.go`：CatalogVideo → VideoSummary 转换
 - `config.go`：环境变量配置加载
-- `internal_api.go`：`/internal/*` 管理接口（catalog import/export/review/delete），仅限内网
+- `internal_api.go`：`/internal/*` 管理接口（import/overview/items/review/delete/export）；`internal_collections.go`：合集批量写入
 - `review.go`：交互式审校命令（`-catalog-review`）
 - `app_update.go`：Android TV App 更新发布检查与 APK 下载
 - `types.go`：类型定义（VideoSummary、ProviderInfo、PublicCategory 等）

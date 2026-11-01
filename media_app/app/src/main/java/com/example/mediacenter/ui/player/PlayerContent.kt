@@ -1,18 +1,9 @@
 package com.example.mediacenter.ui.player
 
-import android.Manifest
-import android.app.Activity
 import androidx.activity.compose.BackHandler
-import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.media.AudioManager
-import android.os.Build
 import android.os.Bundle
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
@@ -32,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -42,26 +34,19 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.session.MediaController
-import androidx.media3.session.SessionToken
 import androidx.media3.ui.PlayerView
 import com.example.mediacenter.data.PlaybackPositionStore
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.data.playbackStorageKey
-import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.player.PlaybackMediaSourceFactory
 import com.example.mediacenter.player.PlaybackService
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.util.NetworkRestoreEffect
-import java.util.concurrent.Executor
-import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
 @Composable
@@ -77,12 +62,17 @@ internal fun PlayerContent(
     // 片尾自动连播:多P下一页优先,其次是合集队列的下一集(由 PlayerScreen 计算)
     hasAutoNext: Boolean,
     onAutoNext: () -> Unit,
+    nextEpisodeTitle: String?,
+    onNextEpisode: (() -> Unit)?,
 ) {
     val context = LocalContext.current
     // 当前流:YouTube 的选项带 mimeType(HLS m3u8 无扩展名,必须显式声明
     // 才能命中 HLS 媒体源;progressive mp4 靠 URL 推断也可,统一带上最稳)。
     val stream = playbackResult.options.first()
     var showControls by remember { mutableStateOf(true) }
+    // 唤出控制条的那次按键:KeyDown 时记录,KeyUp 继续消费。仅判断 showControls
+    // 不够——KeyUp 到达时它已经是 true,会放行给刚获得焦点的播放按钮造成暂停。
+    var revealKey by remember { mutableStateOf<Key?>(null) }
     var playerError by remember { mutableStateOf<String?>(null) }
     // BACK 先收起控制条,再退播放页(标准视频播放器行为);收起状态由
     // PlayerScreen 的 BackHandler 兜底退出。Compose 中后注册的可用
@@ -128,60 +118,11 @@ internal fun PlayerContent(
     // 系统媒体栏/通知/媒体键由服务端 MediaSession 承载,页面只负责驱动。
     // 连接失败自动重试(最多 MAX_CONTROLLER_ATTEMPTS 次,间隔 2s),
     // 覆盖服务启动竞态/瞬时故障,避免用户只能返回重进。
-    var controller by remember { mutableStateOf<MediaController?>(null) }
-    var controllerFailed by remember { mutableStateOf(false) }
-    var connectAttempts by remember { mutableIntStateOf(0) }
-    // MediaController 释放守卫:同一实例可能被"协程取消时 future 已完成"、
-    // "连接完成但页面已退出(onReady 未消费)"与"DisposableEffect onDispose"
-    // 三条路径各释放一次(MediaController.release 非幂等,重复释放有风险)。
-    // releaseOnce 保证每代 controller 恰好释放一次;新 controller 接管时重新武装。
-    val releaseGuard = remember { AtomicBoolean(false) }
-    fun releaseOnce(c: MediaController?) {
-        if (c != null && releaseGuard.compareAndSet(false, true)) {
-            c.release()
-        }
-    }
-    LaunchedEffect(connectAttempts) {
-        if (connectAttempts > 0) {
-            delay(CONTROLLER_RETRY_DELAY_MS)
-        }
-        val sessionToken = SessionToken(context, ComponentName(context, PlaybackService::class.java))
-        val future = MediaController.Builder(context, sessionToken).buildAsync()
-        val connected = try {
-            suspendCancellableCoroutine<MediaController?> { continuation ->
-                val onReady = {
-                    val mediaController = runCatching { future.get() }.getOrNull()
-                    if (continuation.isActive) {
-                        continuation.resume(mediaController)
-                    } else {
-                        // 页面已退出(协程取消),连接结果无人消费,立即释放避免泄漏
-                        releaseOnce(mediaController)
-                    }
-                    Unit
-                }
-                continuation.invokeOnCancellation {
-                    // 协程取消时若连接已完成,直接释放
-                    if (future.isDone) {
-                        runCatching { releaseOnce(future.get()) }
-                    }
-                }
-                future.addListener(onReady, Executor { command -> command.run() })
-            }
-        } catch (e: Exception) {
-            null
-        }
-        if (connected != null) {
-            // 新 controller 接管:重新武装释放守卫,旧 controller 已在 onDispose 释放
-            releaseGuard.set(false)
-            controller = connected
-        } else if (connectAttempts < MAX_CONTROLLER_ATTEMPTS) {
-            // 未达上限:递增触发 LaunchedEffect 重启,进入下一轮重试
-            connectAttempts++
-        } else {
-            controllerFailed = true
-        }
-    }
-
+    val controllerState = rememberPlaybackController(context)
+    val controller = controllerState.controller
+    // listener 与页面级 onDispose 在 remember/DisposableEffect 中跨组合存活,
+    // 直接捕获 controller 会永远拿到首次组合的 null。用 State 读取最新实例。
+    val currentController by rememberUpdatedState(controller)
     // 播放器 listener 必须先于加载流程注册:本地/强缓存流极快 READY 时也不会错过
     // 断点续播 seek。恢复位置在 READY 回调里读取,此时才拿得到真实时长做"已看完"过滤。
     val playerListener = remember {
@@ -203,10 +144,10 @@ internal fun PlayerContent(
                         // 换源保进度:精确接续优先于断点续播(多P视频换清晰度也走这里)
                         val target = pendingSeekMs
                         pendingSeekMs = 0L
-                        controller?.seekTo(target)
+                        currentController?.seekTo(target)
                     } else if (shouldResume) {
                         shouldResume = false
-                        val durationMs = controller?.duration?.coerceAtLeast(0L) ?: 0L
+                        val durationMs = currentController?.duration?.coerceAtLeast(0L) ?: 0L
                         // 断点读取含 SharedPreferences + JSON 解码,READY 回调在主线程;
                         // 移 IO 读后回主线程 seek(DetailScreen 同款模式)。页面已退出时
                         // controller 已释放,seekTo 的异常吞掉即可。
@@ -214,7 +155,7 @@ internal fun PlayerContent(
                             val seekTo = withContext(Dispatchers.IO) {
                                 PlaybackPositionStore.resumePosition(context, videoId, durationMs)
                             }
-                            if (seekTo > 0) runCatching { controller?.seekTo(seekTo) }
+                            if (seekTo > 0) runCatching { currentController?.seekTo(seekTo) }
                         }
                     }
                 }
@@ -238,8 +179,8 @@ internal fun PlayerContent(
     }
     // 合集队列是并行网络请求,极短视频可能在队列到达前就播完:队列晚到时
     // 如果播放器已处于 ENDED,补触发一次(否则用户停在最后一帧没有下一步)。
-    LaunchedEffect(hasAutoNext) {
-        if (hasAutoNext && !autoNextTriggered && controller?.playbackState == Player.STATE_ENDED) {
+    LaunchedEffect(hasAutoNext, controller) {
+        if (hasAutoNext && !autoNextTriggered && currentController?.playbackState == Player.STATE_ENDED) {
             autoNextTriggered = true
             onAutoNext()
         }
@@ -272,7 +213,7 @@ internal fun PlayerContent(
         onDispose {
             // 退出播放页前保存位置,保证"播放中途返回"也能续播。
             // 多P视频按页隔离存储(key 带 #pN),各页位置互不覆盖。
-            val c = controller
+            val c = currentController
             val posMs = c?.currentPosition?.coerceAtLeast(0L) ?: 0L
             val durMs = c?.duration?.coerceAtLeast(0L) ?: 0L
             val pagesInfo = latestPlaybackResult.pages
@@ -288,7 +229,7 @@ internal fun PlayerContent(
                 if (totalPageSec > 0) totalPageSec else durMs / 1000,
                 page = pagesInfo.currentPage,
             )
-            releaseOnce(c)
+            controllerState.release()
             // 本 App 无后台播放需求:页面退出即停止播放服务
             context.stopService(Intent(context, PlaybackService::class.java))
         }
@@ -371,11 +312,11 @@ internal fun PlayerContent(
     // 解析失败(切清晰度/分P)时暂停旧流,避免覆盖层下声音继续;
     // 重试成功(overlayError 清空)后若 url 未变(加载 effect 不重启,极端情况
     // 下签名地址相同),显式恢复播放,避免视频停在暂停态无任何提示。
-    LaunchedEffect(overlayError) {
+    LaunchedEffect(overlayError, controller) {
         if (overlayError != null) {
-            controller?.pause()
-        } else if (controller?.playbackState == Player.STATE_READY) {
-            controller?.play()
+            currentController?.pause()
+        } else if (currentController?.playbackState == Player.STATE_READY) {
+            currentController?.play()
         }
     }
 
@@ -386,17 +327,17 @@ internal fun PlayerContent(
     // 隐藏时无读者,写了也是无效开销(持久化照常,崩溃恢复不依赖 UI 可见)。
     // 换分P必须重启轮询:playbackResult 捕获进协程,不重启则换页后仍按旧页
     // 持久化(key 带旧 #pN),恢复位置错乱。
-    LaunchedEffect(isPlaying, showControls, playbackResult.pages.currentPage) {
+    LaunchedEffect(isPlaying, showControls, playbackResult.pages.currentPage, controller) {
         if (!isPlaying && !showControls) {
             // 暂停瞬间刷一次位置 + 时长用于下次显示，之后不再轮询。
-            positionMs = controller?.currentPosition?.coerceAtLeast(0L) ?: 0L
-            durationMs = controller?.duration?.coerceAtLeast(0L) ?: 0L
+            positionMs = currentController?.currentPosition?.coerceAtLeast(0L) ?: 0L
+            durationMs = currentController?.duration?.coerceAtLeast(0L) ?: 0L
             return@LaunchedEffect
         }
         var tick = 0
         while (true) {
-            val pos = controller?.currentPosition?.coerceAtLeast(0L) ?: 0L
-            val dur = controller?.duration?.coerceAtLeast(0L) ?: 0L
+            val pos = currentController?.currentPosition?.coerceAtLeast(0L) ?: 0L
+            val dur = currentController?.duration?.coerceAtLeast(0L) ?: 0L
             if (showControls) {
                 positionMs = pos
                 durationMs = dur
@@ -429,60 +370,8 @@ internal fun PlayerContent(
         }
     }
 
-    // 音频焦点:抢占时暂停、归还后恢复,兼顾来电/其他 App 播放
-    val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
-    var resumeAfterTransient by remember { mutableStateOf(false) }
-
-    // Android 13+ 通知权限:首次进入播放页时请求(媒体通知/系统媒体栏才需要),
-    // 不在 App 启动时弹窗打扰用户;拒绝后不影响播放,仅系统媒体栏不可见。
-    LaunchedEffect(Unit) {
-        val activity = context as? Activity
-        if (activity != null &&
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            ActivityCompat.requestPermissions(activity, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
-        }
-    }
-
-    val audioFocusListener = remember {
-        AudioManager.OnAudioFocusChangeListener { change ->
-            when (change) {
-                AudioManager.AUDIOFOCUS_LOSS -> controller?.pause()
-                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                    resumeAfterTransient = controller?.isPlaying == true
-                    controller?.pause()
-                }
-                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> controller?.setVolume(0.3f)
-                AudioManager.AUDIOFOCUS_GAIN -> {
-                    controller?.setVolume(1f)
-                    if (resumeAfterTransient) {
-                        resumeAfterTransient = false
-                        controller?.play()
-                    }
-                }
-            }
-        }
-    }
-    // 音频焦点:controller 就绪后才抢占——此前进入页面即抢占,连接/解析失败时
-    // 白白压低其他 App 的音量;被系统拒绝时记日志继续(用户可感知冲突自行处理)。
-    // controller 重连(release+新建)时旧焦点随 onDispose 归还、新 controller 再抢占。
-    DisposableEffect(controller) {
-        if (controller != null) {
-            // minSdk 23 兼容:只能用旧版 AudioFocus API(API 26+ 的 AudioFocusRequest 不可用)
-            @Suppress("DEPRECATION")
-            val granted = audioManager.requestAudioFocus(
-                audioFocusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN,
-            )
-            if (granted != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-                AppLog.w("Player", "audio focus not granted (result=$granted); may compete with other apps")
-            }
-        }
-        onDispose {
-            @Suppress("DEPRECATION")
-            audioManager.abandonAudioFocus(audioFocusListener)
-        }
-    }
+    PlayerAudioFocus(controller)
+    PlayerNotificationPermission()
 
     // 播放中自动隐藏控制条；显示期间任何按键(浏览分P/清晰度等)都会通过
     // lastInteractionMs 重启本 effect，重新计满 4s——不会在操作中途突然消失。
@@ -511,16 +400,11 @@ internal fun PlayerContent(
     })
 
     // 服务连接失败 / 未就绪时给出明确反馈
-    if (controllerFailed) {
+    if (controllerState.failed) {
         ErrorView(
             message = "播放组件启动失败",
             autoFocusRetry = true,
-            // connectAttempts 归零触发 LaunchedEffect 重新连接;只清 Failed
-            // 标志不会重启连接流程,用户会卡在错误页。
-            onRetry = {
-                controllerFailed = false
-                connectAttempts = 0
-            },
+            onRetry = controllerState.retry,
             modifier = Modifier.fillMaxSize(),
         )
         return
@@ -557,10 +441,15 @@ internal fun PlayerContent(
                 if (!showControls) {
                     if (event.type == KeyEventType.KeyDown) {
                         showControls = true
+                        revealKey = event.key
                         lastInteractionMs = System.currentTimeMillis()
                     }
                     // 必须连 KeyUp 一起吞掉:显示控制条后焦点会落到播放按钮,
                     // 漏掉的 KeyUp 会触发一次点击,把"唤出控制条"变成"暂停"。
+                    return@onPreviewKeyEvent true
+                }
+                if (event.type == KeyEventType.KeyUp && event.key == revealKey) {
+                    revealKey = null
                     return@onPreviewKeyEvent true
                 }
                 if (event.type == KeyEventType.KeyDown) {
@@ -606,17 +495,17 @@ internal fun PlayerContent(
                 durationMs = durationMs,
                 controlsFocus = controlsFocus,
                 onTogglePlay = {
-                    if (controller?.isPlaying == true) controller?.pause() else controller?.play()
+                    if (controller.isPlaying) controller.pause() else controller.play()
                 },
-                onSeek = { controller?.seekTo(it) },
+                onSeek = { controller.seekTo(it) },
                 // 相对快进/快退:以播放器当前位置为准,无需等 duration 就绪
                 onSeekBy = { delta ->
-                    controller?.let { c ->
-                        c.seekTo((c.currentPosition + delta).coerceAtLeast(0L))
-                    }
+                    controller.seekTo((controller.currentPosition + delta).coerceAtLeast(0L))
                 },
                 onSelectQuality = onSelectQuality,
                 onSelectPage = onSelectPage,
+                nextEpisodeTitle = nextEpisodeTitle,
+                onNextEpisode = onNextEpisode,
                 onBack = onBack,
                 modifier = Modifier.fillMaxSize(),
             )

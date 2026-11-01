@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
@@ -24,14 +23,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
-import com.example.mediacenter.ui.theme.tvButtonFocusScale
-import com.example.mediacenter.ui.theme.tvPillButtonBorder
-import com.example.mediacenter.ui.theme.tvPillButtonShape
-import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.CardGray
-import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.TextSecondary
 import com.example.mediacenter.ui.theme.TextTertiary
 
@@ -87,21 +79,11 @@ fun EmptyStateView(
                 Spacer(Modifier.height(20.dp))
                 val actionFocus = remember { FocusRequester() }
                 LaunchedEffect(Unit) { if (autoFocusAction) actionFocus.requestFocus() }
-                Button(
-                    shape = tvPillButtonShape(),
-                    border = tvPillButtonBorder(),
-                    scale = tvButtonFocusScale(),
+                TvActionButton(
+                    label = actionLabel,
                     onClick = onAction,
-                    modifier = Modifier.requiredHeight(48.dp).focusRequester(actionFocus),
-                    colors = ButtonDefaults.colors(
-                        containerColor = CardGray,
-                        focusedContainerColor = AppleBlue,
-                        contentColor = TextPrimary,
-                        focusedContentColor = TextPrimary,
-                    ),
-                ) {
-                    Text(actionLabel, color = TextPrimary)
-                }
+                    modifier = Modifier.focusRequester(actionFocus),
+                )
             }
         }
     }

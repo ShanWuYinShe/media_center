@@ -2,7 +2,7 @@ package com.example.mediacenter.ui.category
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.mediacenter.data.MediaRepository
+import com.example.mediacenter.data.MediaRepositoryApi
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.friendlyLoadMessage
@@ -37,7 +37,7 @@ data class CategoryVideosUiState(
  * 并从第 1 页重新拉取,保证 total 与内容都只属于当前档位。
  */
 class CategoryVideosViewModel(
-    private val repository: MediaRepository = MediaRepositoryHolder.repository,
+    private val repository: MediaRepositoryApi = MediaRepositoryHolder.repository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CategoryVideosUiState())

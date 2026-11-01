@@ -1,4 +1,4 @@
-package com.example.mediacenter.ui.home
+package com.example.mediacenter.ui.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background

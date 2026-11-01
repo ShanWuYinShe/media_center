@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,6 +19,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -27,14 +28,11 @@ import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
-import com.example.mediacenter.ui.theme.tvButtonFocusScale
-import com.example.mediacenter.ui.theme.tvPillButtonBorder
-import com.example.mediacenter.ui.theme.tvPillButtonShape
 import coil.compose.AsyncImage
 import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.ui.components.TvActionButton
 import com.example.mediacenter.ui.theme.AppleBlue
+import com.example.mediacenter.ui.theme.AppleBlueDark
 import com.example.mediacenter.ui.theme.BackgroundDark
 import com.example.mediacenter.ui.theme.CardGray
 import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
@@ -68,6 +66,8 @@ fun FeaturedHero(
     onPlay: () -> Unit,
     onDetails: () -> Unit,
     modifier: Modifier = Modifier,
+    // 首页搜索键 DOWN 的落点(主操作优先)
+    playFocusRequester: FocusRequester? = null,
 ) {
     Box(
         modifier = modifier
@@ -83,13 +83,25 @@ fun FeaturedHero(
                 .fillMaxSize()
                 .background(CardGray, RoundedCornerShape(18.dp)),
         ) {
+            // 无封面(部分 catalog 条目没有缩略图)时不要留一块纯黑:用品牌蓝到
+            // 底色的渐变兜底,标题与按钮仍有明确的视觉承载面。
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.linearGradient(
+                            listOf(AppleBlueDark.copy(alpha = 0.55f), CardGray, BackgroundDark),
+                        ),
+                    ),
+            )
             AsyncImage(
                 model = item.video.thumbnailUrl,
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
-                placeholder = ColorPainter(CardGray),
-                error = ColorPainter(CardGray),
+                // 透明占位让上面的品牌渐变在图片缺失时透出
+                placeholder = ColorPainter(Color.Transparent),
+                error = ColorPainter(Color.Transparent),
             )
             // 左侧压暗保证文字对比度;底部融进页面背景,避免大图"贴"在
             // 黑色页面上形成生硬边。两层遮罩叠加而非单色半透黑。
@@ -160,46 +172,17 @@ fun FeaturedHero(
                 }
                 Spacer(Modifier.height(20.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
-                        shape = tvPillButtonShape(),
-                        border = tvPillButtonBorder(),
-                        scale = tvButtonFocusScale(),
+                    TvActionButton(
+                        label = if (item.progress != null) "继续播放" else "播放",
                         onClick = onPlay,
-                        modifier = Modifier.requiredHeight(52.dp),
-                        colors = ButtonDefaults.colors(
-                            containerColor = AppleBlue,
-                            focusedContainerColor = AppleBlue,
-                            contentColor = TextPrimary,
-                            focusedContentColor = TextPrimary,
-                        ),
-                    ) {
-                        Text(
-                            text = if (item.progress != null) "继续播放" else "播放",
-                            color = TextPrimary,
-                            style = MaterialTheme.typography.titleSmall,
-                            modifier = Modifier.padding(horizontal = 10.dp),
-                        )
-                    }
-                    Button(
-                        shape = tvPillButtonShape(),
-                        border = tvPillButtonBorder(),
-                        scale = tvButtonFocusScale(),
-                        onClick = onDetails,
-                        modifier = Modifier.requiredHeight(52.dp),
-                        colors = ButtonDefaults.colors(
-                            containerColor = CardGray.copy(alpha = 0.85f),
-                            focusedContainerColor = AppleBlue,
-                            contentColor = TextPrimary,
-                            focusedContentColor = TextPrimary,
-                        ),
-                    ) {
-                        Text(
-                            text = "详情",
-                            color = TextPrimary,
-                            style = MaterialTheme.typography.titleSmall,
-                            modifier = Modifier.padding(horizontal = 10.dp),
-                        )
-                    }
+                        primary = true,
+                        modifier = if (playFocusRequester != null) {
+                            Modifier.focusRequester(playFocusRequester)
+                        } else {
+                            Modifier
+                        },
+                    )
+                    TvActionButton(label = "详情", onClick = onDetails)
                 }
                 // 继续观看进度:贴 Hero 底边,与卡片进度条同一视觉语言
                 item.progress?.let { progress ->

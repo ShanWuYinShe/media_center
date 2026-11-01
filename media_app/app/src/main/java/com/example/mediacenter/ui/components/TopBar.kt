@@ -22,13 +22,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
+import com.example.mediacenter.ui.theme.ScreenVerticalPadding
 import com.example.mediacenter.ui.theme.TextPrimary
 
 @Composable
@@ -40,9 +43,11 @@ fun TopBar(
     onProviderClick: (() -> Unit)? = null,
     // 首页首屏焦点落点;为 null 时不指定,沿用系统默认焦点顺序
     searchFocusRequester: FocusRequester? = null,
+    // 搜索键按下时优先落到 Hero 主按钮(2D 焦点搜索会优先选中横向更近的"详情")
+    searchDownFocusRequester: FocusRequester? = null,
 ) {
     Row(
-        modifier = modifier.fillMaxWidth().padding(horizontal = ScreenHorizontalPadding, vertical = 14.dp),
+        modifier = modifier.fillMaxWidth().focusRestorer().padding(horizontal = ScreenHorizontalPadding, vertical = ScreenVerticalPadding),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -76,9 +81,10 @@ fun TopBar(
             // 视频源入口:仅当存在多个 provider 时显示。用可撑宽的胶囊,
             // 48dp 图标按钮会把 "YouTube" 这类名称裁成方块。
             if (providerLabel != null && onProviderClick != null) {
-                TvChipButton(
+                TvChip(
                     label = providerLabel,
                     onClick = onProviderClick,
+                    maxWidth = 220.dp,
                     trailing = {
                         Spacer(Modifier.width(4.dp))
                         Icon(
@@ -101,11 +107,21 @@ fun TopBar(
             TvIconButton(
                 onClick = onSearchClick,
                 contentDescription = "搜索",
-                modifier = if (searchFocusRequester != null) {
-                    Modifier.focusRequester(searchFocusRequester)
-                } else {
-                    Modifier
-                },
+                modifier = Modifier
+                    .then(
+                        if (searchFocusRequester != null) {
+                            Modifier.focusRequester(searchFocusRequester)
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .then(
+                        if (searchDownFocusRequester != null) {
+                            Modifier.focusProperties { down = searchDownFocusRequester }
+                        } else {
+                            Modifier
+                        },
+                    ),
             ) {
                 Icon(Icons.Default.Search, contentDescription = null, tint = TextPrimary)
             }

@@ -14,9 +14,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -38,30 +37,24 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
-import com.example.mediacenter.ui.theme.tvButtonFocusScale
-import com.example.mediacenter.ui.theme.tvPillButtonBorder
-import com.example.mediacenter.ui.theme.tvPillButtonShape
 import coil.compose.AsyncImage
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.PlaybackPositionStore
 import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.data.playbackStorageKey
 import com.example.mediacenter.data.providerDisplayName
 import com.example.mediacenter.data.WatchEntry
 import com.example.mediacenter.data.WatchHistory
-import com.example.mediacenter.ui.components.TvChipButton
+import com.example.mediacenter.ui.components.TvActionButton
+import com.example.mediacenter.ui.components.TvChip
 import com.example.mediacenter.ui.components.TvDialogButton
 import com.example.mediacenter.ui.components.TvIconButton
 import com.example.mediacenter.ui.components.TvScrollableText
-import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.AppleBlueDark
 import com.example.mediacenter.ui.theme.BackgroundDark
 import com.example.mediacenter.ui.theme.CardGray
@@ -69,7 +62,6 @@ import com.example.mediacenter.ui.theme.CardShape
 import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.TextSecondary
-import com.example.mediacenter.ui.theme.TextTertiary
 import com.example.mediacenter.util.formatDuration
 import com.example.mediacenter.util.formatSeconds
 import kotlinx.coroutines.Dispatchers
@@ -82,6 +74,7 @@ fun DetailScreen(
     onBack: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
+    val provider = MediaRepositoryHolder.repository.currentProvider
 
     // 全屏封面做背景(压暗 + 渐隐到页面底色),前景是"封面 + 信息/操作"分栏。
     // 比纯黑底更有内容氛围,也不会像单列长滚动那样把播放按钮推到首屏外。
@@ -125,7 +118,6 @@ fun DetailScreen(
                         tint = TextPrimary,
                     )
                 }
-                val provider = MediaRepositoryHolder.repository.currentProvider
                 Text(
                     text = providerDisplayName(provider),
                     color = TextSecondary,
@@ -189,17 +181,25 @@ fun DetailScreen(
                     var lastWatchedPage by remember(video.id) { mutableIntStateOf(0) }
                     var lastWatchedSeconds by remember(video.id) { mutableLongStateOf(0L) }
                     LaunchedEffect(video.id) {
-                        resumePosition = withContext(Dispatchers.IO) {
-                            PlaybackPositionStore.resumePosition(context, video.id, (video.durationSeconds ?: 0L) * 1000L)
-                        }
                         lastWatchedPage = withContext(Dispatchers.IO) { WatchHistory.pageOf(context, video.id) }
                         lastWatchedSeconds = withContext(Dispatchers.IO) {
                             WatchHistory.entries(context).firstOrNull { it.videoId == video.id }?.positionSeconds ?: 0L
                         }
+                        val resumePage = resumePageIndex(video.id, provider, lastWatchedPage)
+                        resumePosition = withContext(Dispatchers.IO) {
+                            PlaybackPositionStore.resumePosition(
+                                context,
+                                playbackStorageKey(video.id, resumePage),
+                                (video.durationSeconds ?: 0L) * 1000L,
+                            )
+                        }
                     }
+                    val resumePage = resumePageIndex(video.id, provider, lastWatchedPage)
                     val hintText = when {
                         lastWatchedPage > 0 && lastWatchedSeconds >= 30 ->
                             "上次看到第 ${lastWatchedPage + 1} 页 ${formatDuration(lastWatchedSeconds)}，播放将从此处继续"
+                        resumePosition > 0 && resumePage > 0 ->
+                            "上次看到第 ${resumePage + 1} 页 ${formatDuration(resumePosition)}，播放将从此处继续"
                         resumePosition > 0 ->
                             "上次播放到 ${formatDuration(resumePosition)}，播放将从此处继续"
                         else -> null
@@ -231,7 +231,8 @@ fun DetailScreen(
                     )
                     if (descOverflowed) {
                         var showFullDesc by remember { mutableStateOf(false) }
-                        TvChipButton(label = "查看完整简介", onClick = { showFullDesc = true })
+                        Spacer(Modifier.height(8.dp))
+                        TvChip(label = "查看完整简介", onClick = { showFullDesc = true })
                         if (showFullDesc) {
                             FullDescriptionDialog(
                                 title = video.title,
@@ -245,10 +246,9 @@ fun DetailScreen(
                     // 不指定焦点路径遥控器会先落在那里，多按一次才能到播放。
                     val playFocus = remember { FocusRequester() }
                     LaunchedEffect(video.id) { playFocus.requestFocus() }
-                    Button(
-                        shape = tvPillButtonShape(),
-                        border = tvPillButtonBorder(),
-                        scale = tvButtonFocusScale(),
+                    TvActionButton(
+                        label = if (hintText != null) "继续播放" else "播放",
+                        primary = true,
                         onClick = {
                             // 登记观看历史(继续观看行):元数据齐全,保留上次观看页;位置由
                             // 播放器退出时回写。provider 取点击时刻的当前源,首页继续观看行
@@ -266,20 +266,10 @@ fun DetailScreen(
                             )
                             onPlay(lastWatchedPage)
                         },
-                        modifier = Modifier.requiredHeight(56.dp).fillMaxWidth().focusRequester(playFocus),
-                        colors = ButtonDefaults.colors(
-                            containerColor = AppleBlue,
-                            focusedContainerColor = AppleBlue,
-                            contentColor = TextPrimary,
-                            focusedContentColor = TextPrimary,
-                        ),
-                    ) {
-                        Text(
-                            text = if (hintText != null) "继续播放" else "播放",
-                            color = TextPrimary,
-                            fontSize = 18.sp,
-                        )
-                    }
+                        // TV 详情主操作固定宽度:铺满右栏会变成一条横贯屏幕的蓝带,
+                        // 压过封面与标题的视觉重心。
+                        modifier = Modifier.width(300.dp).focusRequester(playFocus),
+                    )
                 }
             }
         }
