@@ -553,13 +553,17 @@ internal fun PlayerContent(
             .focusRequester(playerFocus)
             .focusable()
             .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                if (event.key in CONTROL_KEYS && !showControls) {
-                    showControls = true
-                    lastInteractionMs = System.currentTimeMillis()
+                if (event.key !in CONTROL_KEYS) return@onPreviewKeyEvent false
+                if (!showControls) {
+                    if (event.type == KeyEventType.KeyDown) {
+                        showControls = true
+                        lastInteractionMs = System.currentTimeMillis()
+                    }
+                    // 必须连 KeyUp 一起吞掉:显示控制条后焦点会落到播放按钮,
+                    // 漏掉的 KeyUp 会触发一次点击,把"唤出控制条"变成"暂停"。
                     return@onPreviewKeyEvent true
                 }
-                if (event.key in CONTROL_KEYS && showControls) {
+                if (event.type == KeyEventType.KeyDown) {
                     // 控制条已显示：本次按键用于操作，重置自动隐藏计时
                     lastInteractionMs = System.currentTimeMillis()
                 }

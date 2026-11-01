@@ -29,4 +29,6 @@ TopBar（品牌标 + provider 胶囊 + 设置/搜索）→ Hero → 继续观看
 - 行标题右侧的「查看全部」默认焦点搜索不可达（上移会落到上一行卡片）：给行首卡片设置 `focusProperties { up = seeAllFocus }`。
 - 图标用 `material-icons-core`（`Icons.Default.*` / `Icons.AutoMirrored.*`）；不要自绘 `ImageVector`（实测自绘 path 在 release 下不渲染）。Pause 不在 core 中，用两根圆角竖条绘制。
 - 播放器控制条自动隐藏时必须把焦点交给根节点（`focusable` + `FocusRequester`），否则唯一可聚焦控件被移除后遥控器再也唤不出控制条。
+- 搜索页单行 TextField 会消费方向键：必须显式处理 DOWN，把焦点交给首个热词/首个结果卡，否则输入后遥控器出不了输入框。
+- 控制条隐藏时按 OK 唤出：预览层要同时吞掉 KeyDown 与 KeyUp；只吞 KeyDown 会让 KeyUp 点击刚获得焦点的播放按钮，把“唤出控制条”变成“暂停”。
 - 自动连播：`STATE_ENDED` 只触发一次；多 P 的下一 P 优先，最后一 P/单 P 再走合集队列。合集下一集用导航替换当前播放页（`popUpTo(destination.id){inclusive=true}`），返回时回到详情/首页；直达下一集前要补 `WatchHistory.upsert`。

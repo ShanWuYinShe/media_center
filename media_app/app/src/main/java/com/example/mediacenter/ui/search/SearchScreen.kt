@@ -19,7 +19,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -40,7 +40,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
@@ -100,11 +106,34 @@ fun SearchScreen(
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = ScreenHorizontalPadding, vertical = 24.dp)) {
         // 进入搜索页即聚焦输入框：遥控器第一下 OK 直接弹出 IME，不用先找输入框
         val searchFocus = remember { FocusRequester() }
+        // 单行 TextField 会把方向键当作光标移动消费:显式把 DOWN 交给
+        // 热词/首个结果,否则输入后遥控器永远出不了输入框。
+        val firstHotFocus = remember { FocusRequester() }
+        val firstResultFocus = remember { FocusRequester() }
         LaunchedEffect(Unit) { searchFocus.requestFocus() }
         OutlinedTextField(
             value = state.query,
             onValueChange = { viewModel.search(it) },
-            modifier = Modifier.fillMaxWidth().requiredHeightIn(min = 56.dp).focusRequester(searchFocus),
+            modifier = Modifier
+                .fillMaxWidth()
+                .requiredHeightIn(min = 56.dp)
+                .focusRequester(searchFocus)
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown || event.key != Key.DirectionDown) {
+                        return@onPreviewKeyEvent false
+                    }
+                    val target = when {
+                        state.query.length < 2 -> firstHotFocus
+                        state.results.isNotEmpty() -> firstResultFocus
+                        else -> null
+                    }
+                    if (target != null) {
+                        target.requestFocus()
+                        true
+                    } else {
+                        false
+                    }
+                },
             placeholder = { Text("搜索视频 / 片名 / 关键词", color = TextTertiary) },
             textStyle = MaterialTheme.typography.bodyLarge,
             singleLine = true,
@@ -152,13 +181,22 @@ fun SearchScreen(
                     modifier = Modifier.padding(bottom = 12.dp),
                 )
                 val hotKeywords = if (provider == "youtube") YOUTUBE_HOT_KEYWORDS else SEARCH_HOT_KEYWORDS
-                hotKeywords.chunked(6).forEach { rowWords ->
+                hotKeywords.chunked(6).forEachIndexed { rowIndex, rowWords ->
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        rowWords.forEach { word ->
-                            SelectChip(label = word, selected = false, onClick = { viewModel.search(word) })
+                        rowWords.forEachIndexed { index, word ->
+                            SelectChip(
+                                label = word,
+                                selected = false,
+                                onClick = { viewModel.search(word) },
+                                modifier = if (rowIndex == 0 && index == 0) {
+                                    Modifier.focusRequester(firstHotFocus)
+                                } else {
+                                    Modifier
+                                },
+                            )
                         }
                     }
                 }
@@ -218,8 +256,18 @@ fun SearchScreen(
                     // 返回搜索结果时焦点回到原结果卡
                     modifier = Modifier.weight(1f).fillMaxWidth().focusRestorer(),
                 ) {
-                    items(state.results, key = { it.id }) { video ->
-                        VideoCard(video = video, onClick = { onVideoClick(video) })
+                    itemsIndexed(state.results, key = { _, video -> video.id }) { index, video ->
+                        VideoCard(
+                            video = video,
+                            onClick = { onVideoClick(video) },
+                            modifier = if (index == 0) {
+                                Modifier
+                                    .focusRequester(firstResultFocus)
+                                    .focusProperties { up = searchFocus }
+                            } else {
+                                Modifier
+                            },
+                        )
                     }
                     if (state.isLoadingMore || state.loadMoreFailed) {
                         item(span = { GridItemSpan(maxLineSpan) }) {

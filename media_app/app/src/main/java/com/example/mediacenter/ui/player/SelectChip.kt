@@ -23,6 +23,7 @@ internal fun SelectChip(
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Button(
         shape = tvPillButtonShape(),
@@ -30,7 +31,7 @@ internal fun SelectChip(
         scale = tvButtonFocusScale(),
         onClick = onClick,
         // 宽度上限让 maxLines/Ellipsis 真正生效:LazyRow 里无约束时超长分P名会宽出整屏
-        modifier = Modifier.requiredHeight(48.dp).widthIn(max = 240.dp),
+        modifier = modifier.requiredHeight(48.dp).widthIn(max = 240.dp),
         colors = ButtonDefaults.colors(
             // selected 非聚焦时用暗蓝：焦点态(Apple Blue)必须是视觉最强状态，
             // selected 与 focused 同色会让用户分不清“当前选中”和“现在操作的是哪个”。
