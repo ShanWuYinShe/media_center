@@ -1,6 +1,6 @@
 # Media Center Media Server
 
- 本目录（`media_server/`）是 `media_center` 仓库的普通子目录，非独立仓库；部署编排在本仓库 `deploy/` 内自洽（`media.chaoset.com`）。与 workwork 的脱钩背景见根 [AGENTS.md](../AGENTS.md)。
+ 本目录（`media_server/`）是 `media_center` 仓库的普通子目录，非独立仓库；部署编排在本仓库 `deploy/` 内自洽（`media.chaoset.com`）。与 workwork 的部署关系见根 [AGENTS.md](../AGENTS.md)。
 
 `media_center` 的合规公开视频聚合后端：Go HTTP 服务，以目录服务为主（catalog SQLite 为 system of record）；`youtube` provider 的搜索/解析走受控实时通道（见 `youtube.go`）。
 

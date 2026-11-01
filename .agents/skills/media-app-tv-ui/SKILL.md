@@ -11,10 +11,10 @@ description: media_app TV 界面专属设计约定：Apple TV 视觉基线、焦
 - **TV 焦点态**：焦点态统一使用 Apple Blue 背景 + 白色文字/图标 + `FocusBorder`（#E5E5EA）2dp 近白外框（`GlassBorder.kt` 的 `glassCardFocused()`）；`selected` 只表达当前分类/选项，**不应强过焦点态**。
 - **详情展开弹层**：详情页简介超出折叠行数时，用紧凑的「查看完整简介」披露按钮；完整简介在**独立 Dialog 阅读卡片**中展示，需保留 BACK 关闭路径与主按钮焦点，**不得在详情页原布局内撑开**。
 
-## 排版与色彩（2026-11-01 起）
+## 排版与色彩
 
 - 使用 `ui/theme/Theme.kt` 的 `TvTypography`（10ft 尺度）：headlineLarge 42sp / headlineMedium 32sp / titleLarge 22sp / titleMedium 19sp / bodyLarge 18sp / bodyMedium 16sp / bodySmall 14sp。不要再用 Material 默认 16sp 标题。
-- 灰阶对比：`TextSecondary #AEAEB2`、`TextTertiary #8E8E93`（原 #636366 在低亮度电视上不可读）；层次仍是 Primary > Secondary > Tertiary。
+- 灰阶对比：`TextSecondary #AEAEB2`、`TextTertiary #8E8E93`（#636366 在低亮度电视上不可读）；层次仍是 Primary > Secondary > Tertiary。
 - 内容网格用 `GridCells.Adaptive(240.dp)`（1080p TV 常见 960×540dp，280dp 会只剩 2 列）；首页横排卡片宽 240dp。
 
 ## 首页结构

@@ -17,11 +17,11 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 
 ## 版本号与发版、部署 APK（详见 skill media-app-release）
 
-tag 驱动版本号、双变体 APK 构建与 manifest 部署流程已移入 skill media-app-release。
+tag 驱动版本号、双变体 APK 构建与 manifest 部署流程见 skill media-app-release。
 
 ## TV UI/UX 设计约定（详见 skill media-app-tv-ui）
 
-TV 交互与视觉约定已移入 skill media-app-tv-ui。
+TV 交互与视觉约定见 skill media-app-tv-ui。
 
 ## 技术栈与服务端地址
 

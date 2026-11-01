@@ -19,7 +19,7 @@ description: media_server catalog 分类数据与审核体系。触发：改分�
 - **数据库文件不提交仓库**：catalog 库写到 `MEDIA_SERVER_CATALOG_DB`（默认 `data/catalog.db`，含 `-wal`/`-shm` 旁文件，已 gitignore）；线上由部署侧 compose 的 `media_data` 卷持久化（`MEDIA_SERVER_CATALOG_DB=/app/data/catalog.db`，见 `deploy/docker-compose.yml`）。
 - `MEDIA_SERVER_CATALOG_DB` 置空则关闭 catalog，分类浏览与搜索返回空。
 
-## 浏览查询口径（2026-11-01）
+## 浏览查询口径
 
 - 分类顺序：`/providers/{p}/categories` 按 `contentCategories.json` 的编排顺序输出（运营可调），catalog 中未定义的分类排在末尾并标"未定义分类 <id>"。
 - 分P过滤：`_p<数字>` 后缀只在 `provider='bilibili'` 时视为分P并隐藏/合并；其他 provider（如 YouTube 合法 ID `abcdefgh_p1`）原样可见。
@@ -32,7 +32,7 @@ description: media_server catalog 分类数据与审核体系。触发：改分�
 - 每档高度只留一条候选：H.264 > VP9 > AV1，其次帧率，再优先合一 progressive/HLS，最后码率；没有音轨的纯视频格式直接丢弃（不能返回无声视频）。
 - resolve 结果进程内缓存（成功 15min / 失败 5min），同 videoID 在途请求用单飞合并；负缓存判定必须用 failure 标志，不能看 reason 是否为空。
 
-## 合集与自动连播（2026-11-01）
+## 合集与自动连播
 
 - 合集表：`collections` + `collection_members`（provider/collection_id/native_id/position），只存分组关系，不新增视频、不改审核状态。
 - 写入：`POST /internal/catalog/collections` 全量替换某 provider 的合集快照（内部令牌）；公开接口 `GET /providers/{p}/videos/{id}/collection` 只返回其中 `approved` 剧集，按合集列表顺序，`currentIndex=-1` 表示当前视频不在队列。
