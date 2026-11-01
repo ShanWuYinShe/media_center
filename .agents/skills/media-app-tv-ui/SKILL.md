@@ -37,6 +37,11 @@ TopBar（品牌标 + provider 胶囊 + 设置/搜索）→ Hero → 继续观看
 - 控制条隐藏时按 OK 唤出：必须记录唤出键（`revealKey`），同时吞掉它的 KeyDown 与 KeyUp；只判断 `showControls` 不够——KeyUp 到达时它已变 true，会点击刚获得焦点的播放按钮把“唤出控制条”变成“暂停”。
 - 自动连播：`STATE_ENDED` 只触发一次；多 P 下一 P 优先，最后一 P/单 P 走合集队列。决策在 `PlayerViewModel.onPlaybackEnded()`（Page 直接换页，Episode 发 `episodeEvents`），UI 只负责导航/登记历史；合集下一集替换当前播放页（`popUpTo(destination.id){inclusive=true}`），返回回到详情/首页。控制条在存在合集下一集时显示“下一集 · 标题”chip，支持手动跳过。
 
+## Legacy（API 19）对齐口径
+
+- `media_app_legacy` 是 **API 19 原生 View/RecyclerView** 变体，不能引入 Compose（minSdk 21）或 Coil 2.x；新版视觉/交互要以同样的 tokens（#111 背景、CardGray、AppleBlue #007AFF、FocusBorder #E5E5EA）、两行 TopBar、Hero、蓝色主按钮在旧技术栈里复刻。
+- Legacy 的 provider 选择、YouTube 分类、Hero 与焦点目标（HeroPlay/HeroDetails/Provider/Settings）应与新版保持同一产品语义；旧设备低内存约束下不要为了“像新版”引入大图预加载/复杂动画。
+
 ## 组件与分层
 
 - 通用控件只在 `ui/components/` 实现：`TvActionButton`（页面动作）、`TvChip`（可选/动作胶囊）、`TvDialogButton`（弹窗）、`TvIconButton`、`PagedVideoGrid`、`VideoCard`、`EmptyStateView`/`ErrorView`。页面不要再重复 Button 的 shape/border/scale/colors。

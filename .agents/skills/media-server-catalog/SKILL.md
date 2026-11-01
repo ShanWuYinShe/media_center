@@ -12,6 +12,7 @@ description: media_server catalog 分类数据与审核体系。触发：改分�
 - **候选不提交仓库**：候选（外部 / AI 收集汇总）是中间状态，不纳入版本管理；最终数据以 catalog.db（system-of-record）为准，可通过 `/internal/catalog/export` 导出（部署侧 `make backup` 一键导出到宿主 `backups/`，见 deploy/README.md「备份与监控」）。各分类的收集格式与审核标准见 `media_server/CATEGORY_CURATION_GUIDE.md`。
 - **审核流程**：外部收集候选 → 导入 pending → 人工 + AI 审核 → 上线 approved。候选经 `/internal/catalog/import` 导入为 `pending`（重复导入只新增，绝不覆盖已有审核决定）；由人工 + AI 模型审核 approve / reject，可选 `pinned` / `rank`（经 `/internal/catalog/*`，也可用 `-catalog-review` 交互命令或任意 SQLite 工具）；客户端的分类浏览与搜索只命中该库 `approved` 清单（顺序 `pinned` > `rank` > `score`）。
 - **审核是唯一的质量关口**：聚合视频未经审核普遍标题与内容不符、大量无法播放，相关性、可播放性等筛选一律交给 admin 的人工 + AI 审核。**youtube 实时搜索是这个原则的受控例外**：`/api/providers/youtube/search` 经 vod_extractor 用 yt-dlp ytsearch 实时搜索（无 Data API 配额），只为 App 即时展示/播放，结果不写 catalog、不进分类列表，审核关卡不被绕过。
+- **youtube 分类**：`/providers/youtube/categories` 返回服务端内置 6 类（音乐/科技/游戏/纪录片/电影/学习）；`/providers/youtube/categories/{id}/videos` 把分类映射为一次实时 ytsearch（需 `X-App-Token`，与搜索共用 12/min/IP，仅第 1 页）。不新增 catalog 数据、不绕过审核。
 - **只存原始数据**：catalog 只存上游原始字段（缩略图为原始地址）。
 
 ## 数据库与环境变量
