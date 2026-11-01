@@ -10,6 +10,7 @@
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -64,6 +65,27 @@ class RunExtractorTest(unittest.TestCase):
         result = self._run(_FakeProcess(0), output=(b'{"title": "ok"}', b""))
         self.assertEqual(result, {"title": "ok"})
         self.assertEqual(server.FAILURE_STATS["total"], 0)
+
+    def test_cookie_copy_used_and_cleaned_up(self):
+        # 源 cookies 在部署中是只读挂载;必须改用可写临时副本,否则 yt-dlp
+        # 退出回写会报 Read-only file system,把成功解析变成 502。
+        fd, path = tempfile.mkstemp(prefix="cookie-test-", suffix=".txt")
+        with os.fdopen(fd, "wb") as f:
+            f.write(b"# Netscape HTTP Cookie File\n")
+        process = _FakeProcess(0)
+        with mock.patch.object(server, "writable_cookies_copy", return_value=path), \
+             mock.patch.object(server.subprocess, "Popen", return_value=process) as popen, \
+             mock.patch.object(
+                 server,
+                 "read_limited_process_output",
+                 return_value=(b'{"title": "ok"}', b""),
+             ):
+            result = server.run_extractor("https://www.youtube.com/watch?v=x")
+        self.assertEqual(result, {"title": "ok"})
+        command = popen.call_args.args[0]
+        index = command.index("--cookies")
+        self.assertEqual(command[index + 1], path)
+        self.assertFalse(os.path.exists(path))
 
     def test_timeout_records_timeout_and_reraises(self):
         with self.assertRaises(TimeoutError):

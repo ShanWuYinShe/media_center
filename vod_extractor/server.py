@@ -2,10 +2,12 @@ import ipaddress
 import json
 import os
 import selectors
+import shutil
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -22,6 +24,9 @@ MAX_REQUEST_BYTES = 16 * 1024
 MAX_ERROR_BYTES = 64 * 1024
 MAX_CONCURRENT = max(1, int(os.environ.get("VOD_EXTRACTOR_MAX_CONCURRENT", "2")))
 DEFAULT_COOKIES_FILE = "/config/youtube-cookies.txt"
+# extractor_command 的哨兵:区分“调用方显式传 None(本次不用 cookies)”与
+# “未指定,读取全局配置”。
+_USE_CONFIG_COOKIES = object()
 COOKIES_FILE_ENV = os.environ.get("VOD_EXTRACTOR_COOKIES_FILE", "").strip()
 COOKIES_FILE = COOKIES_FILE_ENV or DEFAULT_COOKIES_FILE
 COOKIES_FILE_EXPLICIT = bool(COOKIES_FILE_ENV)
@@ -428,10 +433,26 @@ def search_youtube(query, limit):
 
 
 def run_extractor(url, single_video=True):
+    # cookies 源文件在部署时是只读挂载:yt-dlp 退出时会回写 cookies,
+    # 直接 --cookies /config/youtube-cookies.txt 会抛
+    # "Read-only file system",把成功解析变成 502。每次执行复制到容器内
+    # 可写的临时文件(0600),结束后删除。
+    cookies_file = writable_cookies_copy()
+    try:
+        return _run_extractor(url, single_video, cookies_file)
+    finally:
+        if cookies_file:
+            try:
+                os.unlink(cookies_file)
+            except OSError:
+                pass
+
+
+def _run_extractor(url, single_video, cookies_file):
     # start_new_session=True 让 yt-dlp 及其子进程(ffmpeg 等)独占进程组,
     # stop_process 用 os.killpg 杀整组,避免 SIGKILL 只杀主进程留下孤儿。
     process = subprocess.Popen(
-        extractor_command(url, single_video),
+        extractor_command(url, single_video, cookies_file=cookies_file),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,
@@ -469,7 +490,7 @@ def log_internal(message):
     print(json.dumps(entry, ensure_ascii=False), file=sys.stdout, flush=True)
 
 
-def extractor_command(target, single_video=True):
+def extractor_command(target, single_video=True, cookies_file=_USE_CONFIG_COOKIES):
     command = [EXTRACTOR_BIN, "--dump-single-json", "--no-warnings"]
     if single_video:
         command.append("--no-playlist")
@@ -478,11 +499,35 @@ def extractor_command(target, single_video=True):
         command.append("--flat-playlist")
     if EXTRACTOR_ARGS:
         command.extend(["--extractor-args", EXTRACTOR_ARGS])
-    cookies_file = extractor_cookies_file()
+    if cookies_file is _USE_CONFIG_COOKIES:
+        cookies_file = extractor_cookies_file()
     if cookies_file:
         command.extend(["--cookies", cookies_file])
     command.append(target)
     return command
+
+
+def writable_cookies_copy():
+    """把只读 cookies 源复制到容器内可写临时文件,供 yt-dlp 回写。"""
+    source = extractor_cookies_file()
+    if not source:
+        return None
+    fd, path = tempfile.mkstemp(prefix="vod-extractor-cookies-", suffix=".txt")
+    try:
+        with os.fdopen(fd, "wb") as dst, open(source, "rb") as src:
+            shutil.copyfileobj(src, dst)
+        os.chmod(path, 0o600)
+        return path
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
 
 
 def extractor_cookies_file():

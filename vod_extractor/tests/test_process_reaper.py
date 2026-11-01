@@ -114,7 +114,7 @@ class RunExtractorRealSubprocessTest(unittest.TestCase):
         )
 
     def _run_with_code(self, code):
-        def fake_command(target, single_video=True):
+        def fake_command(target, single_video=True, cookies_file=None):
             return [sys.executable, "-c", code]
 
         with mock.patch.object(server, "extractor_command", side_effect=fake_command):
