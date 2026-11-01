@@ -13,6 +13,7 @@ import android.view.View
 import android.view.Window
 import android.widget.LinearLayout
 import androidx.core.graphics.ColorUtils
+import androidx.core.view.doOnLayout
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -335,18 +336,22 @@ internal fun MainActivity.showOptionListDialog(
             (recycler.layoutManager as? LinearLayoutManager)
                 ?.scrollToPositionWithOffset(focusIndex, recycler.height / 3)
         }
-        recycler.post {
+        // RecyclerView 首次布局完成后再聚焦当前项:只 post 一两次时 dialog
+        // 窗口尚未 attach/布局,findViewHolder 恒为 null,会退化成聚焦“关闭”。
+        recycler.doOnLayout {
             if (focusIndex < 0) {
                 close.requestFocus()
-                return@post
+                return@doOnLayout
             }
-            val tryFocus = {
-                val vh = recycler.findViewHolderForAdapterPosition(focusIndex)
-                vh?.itemView?.requestFocus()
-                vh != null
-            }
-            if (!tryFocus()) {
-                recycler.post { if (!tryFocus()) close.requestFocus() }
+            val vh = recycler.findViewHolderForAdapterPosition(focusIndex)
+            if (vh != null) {
+                vh.itemView.requestFocus()
+            } else {
+                recycler.postDelayed({
+                    recycler.findViewHolderForAdapterPosition(focusIndex)
+                        ?.itemView?.requestFocus()
+                        ?: close.requestFocus()
+                }, 120)
             }
         }
     }.show()
@@ -367,7 +372,10 @@ internal fun MainActivity.showProviderDialog(
     val currentIndex = providers.indexOfFirst { it.id == currentProvider }.takeIf { it >= 0 }
     showOptionListDialog(
         title = "选择视频源",
-        options = providers.map { it.name?.takeIf { name -> name.isNotBlank() } ?: it.id },
+        options = providers.map { provider ->
+            val name = provider.name?.takeIf { it.isNotBlank() } ?: provider.id
+            if (provider.id == currentProvider) "$name（当前）" else name
+        },
         currentIndex = currentIndex,
         onSelect = { index ->
             val provider = providers.getOrNull(index)?.id ?: return@showOptionListDialog
