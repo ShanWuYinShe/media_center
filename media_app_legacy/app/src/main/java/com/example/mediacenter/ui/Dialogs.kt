@@ -322,7 +322,7 @@ internal fun MainActivity.showOptionListDialog(
             this.adapter = listAdapter
         }
         card.addView(recycler, LinearLayout.LayoutParams(match(), 0, 1f).withTopMargin(dp(12)))
-        val close = pill("关闭", selected = true, heightDp = 48, horizontalPaddingDp = 28) { dismiss() }
+        val close = primaryPill("关闭", heightDp = 48, horizontalPaddingDp = 28) { dismiss() }
         card.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(16)))
         setContentView(card)
         window?.setBackgroundDrawableResource(android.R.color.transparent)
@@ -338,22 +338,24 @@ internal fun MainActivity.showOptionListDialog(
         }
         // RecyclerView 首次布局完成后再聚焦当前项:只 post 一两次时 dialog
         // 窗口尚未 attach/布局,findViewHolder 恒为 null,会退化成聚焦“关闭”。
-        recycler.doOnLayout {
+        // 老盒子/Dialog 窗口布局可能晚于固定延迟:轮询到行真正 attach 后再聚焦,
+        // 最多约 1.5s;仍失败才回退到关闭按钮。直接 postDelayed 一次会在
+        // findViewHolder 恒为 null 时静默退化成聚焦“关闭”。
+        fun focusCurrentRow(attempt: Int = 0) {
             if (focusIndex < 0) {
                 close.requestFocus()
-                return@doOnLayout
+                return
             }
             val vh = recycler.findViewHolderForAdapterPosition(focusIndex)
-            if (vh != null) {
-                vh.itemView.requestFocus()
+            if (vh != null && vh.itemView.requestFocus()) return
+            if (attempt < 15) {
+                recycler.postDelayed({ focusCurrentRow(attempt + 1) }, 100)
             } else {
-                recycler.postDelayed({
-                    recycler.findViewHolderForAdapterPosition(focusIndex)
-                        ?.itemView?.requestFocus()
-                        ?: close.requestFocus()
-                }, 120)
+                close.requestFocus()
             }
         }
+        recycler.doOnLayout { focusCurrentRow() }
+        setOnShowListener { recycler.postDelayed({ focusCurrentRow() }, 120) }
     }.show()
 }
 

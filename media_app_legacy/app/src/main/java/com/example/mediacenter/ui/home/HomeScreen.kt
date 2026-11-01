@@ -428,12 +428,13 @@ internal fun MainActivity.homeTopBar(
         //    弹窗的入口不能因为加载失败而消失;
         // 2) 占位 chip 按 OK 直接重试,不依赖错误卡片上的"重试"按钮。
         if (categories.isEmpty()) {
+            val loadingCategories = state.loading
             val placeholder = pill(
-                text = "分类加载失败，按 OK 重试",
+                text = if (loadingCategories) "正在加载分类…" else "分类加载失败，按 OK 重试",
                 selected = false,
                 heightDp = 44,
                 horizontalPaddingDp = 22,
-                onClick = { viewModel.retry() },
+                onClick = { if (!loadingCategories) viewModel.retry() },
             ).apply {
                 setOnKeyListener { _, keyCode, event ->
                     if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
