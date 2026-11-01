@@ -59,6 +59,16 @@ type VideoSummary = {
 
 ## Endpoints
 
+### `GET /healthz`（无版本前缀）
+
+无鉴权存活探针，同时可诊断 catalog 状态。公开路径 `/health`、`/api/health` 行为一致。
+
+```json
+{ "status": "ok", "version": "v1.1.0-3-gabc1234", "catalog": "ok" }
+```
+
+`catalog` 取值：`ok`（数据库已打开）、`disabled`（未配置 DB）、`error`（配置了 DB 但打开失败）。`error` 时 HTTP 状态为 **503**，`status` 为 `degraded`——服务仍能响应空目录，但这是必须告警的故障态。
+
 ### `GET /api/providers`
 
 返回 catalog 中有 approved 视频的所有视频源。
@@ -75,9 +85,11 @@ type VideoSummary = {
 { "items": [{ "id": "movies", "title": "电影", "description": "院线电影" }] }
 ```
 
-### `GET /api/providers/{provider}/categories/{categoryId}/videos?page=1&pageSize=20`
+### `GET /api/providers/{provider}/categories/{categoryId}/videos?page=1&pageSize=20&minDurationSeconds=600&maxDurationSeconds=2699`
 
 返回某分类下已审核的视频列表（分页，按 pinned > rank > score 排序）。
+
+`minDurationSeconds` / `maxDurationSeconds` 为可选的时长筛选（单位秒，**含边界**），用于「短片/中片/长片」等档位；两者可单独使用。启用筛选时时长缺失的视频会被排除，`total` 为筛选后的总数。参数非数字、负数或 `min > max` 返回 400 `BAD_REQUEST`。
 
 ```json
 {
@@ -122,19 +134,22 @@ YouTube **实时搜索**：经 vod_extractor 的 yt-dlp `ytsearch`（flat 模式
 ```json
 {
   "query": "经典电影",
-  "total": 1000000,
+  "total": 20,
   "items": [
-    { "id": "jNQXAC9IVRw", "title": "频道: 标题", "description": "…", "thumbnailUrl": "https://i.ytimg.com/...", "durationSeconds": 19 }
-  ],
-  "nextPageToken": "CAUQAA"
+    { "id": "jNQXAC9IVRw", "title": "频道: 标题", "thumbnailUrl": "https://i.ytimg.com/...", "durationSeconds": 19 }
+  ]
 }
 ```
+
+`total` 是本次返回条数（ytsearch 单页固定 20 条），不返回 `nextPageToken`。
 
 - 未配置 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 返回 503 `NOT_CONFIGURED`；yt-dlp 失败（cookies 失效、风控等）返回 502 `UPSTREAM_ERROR`。
 
 ### `GET /api/providers/youtube/resolve?id=<11字符视频ID>`
 
-YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返回该视频全部可播放清晰度档位（progressive mp4 优先，其次 HLS；按高度降序）。App 端一次拿到全部档位，切清晰度在播放器内本地换源，不需要重新解析。
+YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返回该视频全部可播放清晰度档位（按高度降序）。App 端一次拿到全部档位，切清晰度在播放器内本地换源，不需要重新解析。
+
+**格式选择**：每档高度只保留一条最佳候选（H.264 > VP9 > AV1，其次帧率，再优先音视频合一的 progressive/HLS）。YouTube 的 1080P+ 档位通常只有纯视频轨 + 纯音频轨：此时 `url` 是视频轨、`audioUrl` 是最高码率音轨，App 需用 `MergingMediaSource` 合流播放；没有可用音轨的纯视频格式不会下发（避免无声视频）。
 
 **鉴权/限流**：`X-App-Token` 同上；同一 IP 每分钟 20 次。端到端超时 40s（yt-dlp 解析需秒级时间）。
 
@@ -143,8 +158,8 @@ YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返�
   "options": [
     { "id": "yt-jNQXAC9IVRw-22", "kind": "vod", "label": "720P", "url": "https://…googlevideo.com/…",
       "mimeType": "video/mp4", "headers": {}, "qn": 720 },
-    { "id": "yt-jNQXAC9IVRw-308", "kind": "vod", "label": "1080P60", "url": "https://…/playlist.m3u8",
-      "mimeType": "application/x-mpegurl", "headers": {}, "qn": 1080 }
+    { "id": "yt-jNQXAC9IVRw-137-a140", "kind": "vod", "label": "1080P", "url": "https://…/videoplayback…",
+      "audioUrl": "https://…/videoplayback…", "mimeType": "video/mp4", "headers": {}, "qn": 1080 }
   ],
   "availableQualities": [ { "qn": 1080, "label": "1080P60" }, { "qn": 720, "label": "720P" } ],
   "durationSeconds": 19
@@ -152,6 +167,7 @@ YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返�
 ```
 
 - `options` 按清晰度从高到低排列，App 取首项播放；`mimeType` 为 `application/x-mpegurl` 时按 HLS 加载。
+- `audioUrl` 存在时代表音视频分离：`url` 是视频轨、`audioUrl` 是音轨，`audioMimeType` 为音轨容器（`audio/mp4`/`audio/webm`），App 必须合流播放。
 - 未配置 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 返回 503 `NOT_CONFIGURED`；解析失败（视频受限、cookies 失效、无可用格式）返回 502 `RESOLVE_FAILED`。
 - **部署硬前提**：`.wework/vod_extractor/youtube-cookies.txt` 必须存在，否则 YouTube 对数据中心 IP 的解析一律返回 bot 检测失败。
 

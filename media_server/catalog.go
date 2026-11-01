@@ -123,7 +123,11 @@ CREATE TABLE IF NOT EXISTS category_members (
   PRIMARY KEY (category_id, provider, native_id),
   FOREIGN KEY (provider, native_id) REFERENCES videos(provider, native_id)
 );
-CREATE INDEX IF NOT EXISTS idx_members_cat_status ON category_members(category_id, status);`
+CREATE INDEX IF NOT EXISTS idx_members_cat_status ON category_members(category_id, status);
+-- 公开读路径都带 provider 过滤:分类列表(provider+category+status)、
+-- provider 过滤搜索与分类归属查询(provider+status)。
+CREATE INDEX IF NOT EXISTS idx_members_provider_cat_status ON category_members(provider, category_id, status);
+CREATE INDEX IF NOT EXISTS idx_members_provider_status ON category_members(provider, status);`
 	if _, err := c.db.Exec(schema); err != nil {
 		return fmt.Errorf("ensure catalog schema: %w", err)
 	}
@@ -213,18 +217,21 @@ func stripPageSuffix(provider, nativeID string) string {
 // search。SQLite 的 GLOB 全串匹配天然锚定结尾,误伤面收窄到「恰以 _p<数字>
 // 结尾」的极端形态(导入路径已聚合分P,该形态实际不再产生)。
 // col 需带表前缀时传 "v.native_id" 这类限定名。
-func notPageGlobCond(col string) string {
+func notPageGlobCond(providerCol, nativeCol string) string {
+	// 只有 bilibili 的 native_id 会带分P后缀(stripPageSuffix 同样只对
+	// bilibili 生效)。不能对所有 provider 一刀切:合法的 YouTube 11 字符
+	// ID 完全可能以 "_p1" 结尾(如 abcdefgh_p1),那样会被公开列表静默隐藏。
 	return fmt.Sprintf(
-		"%[1]s NOT GLOB '*_p[0-9]' AND %[1]s NOT GLOB '*_p[0-9][0-9]' AND %[1]s NOT GLOB '*_p[0-9][0-9][0-9]'",
-		col)
+		"(%[1]s <> 'bilibili' OR (%[2]s NOT GLOB '*_p[0-9]' AND %[2]s NOT GLOB '*_p[0-9][0-9]' AND %[2]s NOT GLOB '*_p[0-9][0-9][0-9]'))",
+		providerCol, nativeCol)
 }
 
 // pageGlobCond 是 notPageGlobCond 的反相(选中页记录),供 ConsolidatePages
 // 清理工具扫描存量脏数据。
-func pageGlobCond(col string) string {
+func pageGlobCond(providerCol, nativeCol string) string {
 	return fmt.Sprintf(
-		"%[1]s GLOB '*_p[0-9]' OR %[1]s GLOB '*_p[0-9][0-9]' OR %[1]s GLOB '*_p[0-9][0-9][0-9]'",
-		col)
+		"(%[1]s = 'bilibili' AND (%[2]s GLOB '*_p[0-9]' OR %[2]s GLOB '*_p[0-9][0-9]' OR %[2]s GLOB '*_p[0-9][0-9][0-9]'))",
+		providerCol, nativeCol)
 }
 
 // ImportPending 把候选导入 catalog。每条按其 Status 落库:空或 "pending" 记为待审,"approved"
@@ -537,7 +544,7 @@ func (c *Catalog) DistinctProviders() ([]string, error) {
 	if c == nil {
 		return nil, nil
 	}
-	rows, err := c.db.Query(`SELECT DISTINCT provider FROM category_members WHERE status = 'approved' AND ` + notPageGlobCond("native_id") + ` ORDER BY provider ASC`)
+	rows, err := c.db.Query(`SELECT DISTINCT provider FROM category_members WHERE status = 'approved' AND ` + notPageGlobCond("provider", "native_id") + ` ORDER BY provider ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query distinct providers: %w", err)
 	}
@@ -559,7 +566,7 @@ func (c *Catalog) CategoriesForProvider(provider string) ([]string, error) {
 	if provider == "" || c == nil {
 		return nil, nil
 	}
-	rows, err := c.db.Query(`SELECT DISTINCT category_id FROM category_members WHERE provider = ? AND status = 'approved' AND `+notPageGlobCond("native_id")+` ORDER BY category_id ASC`, provider)
+	rows, err := c.db.Query(`SELECT DISTINCT category_id FROM category_members WHERE provider = ? AND status = 'approved' AND `+notPageGlobCond("provider", "native_id")+` ORDER BY category_id ASC`, provider)
 	if err != nil {
 		return nil, fmt.Errorf("query categories for provider: %w", err)
 	}
@@ -575,8 +582,45 @@ func (c *Catalog) CategoriesForProvider(provider string) ([]string, error) {
 	return out, rows.Err()
 }
 
+// DurationBounds 是分类列表的可选时长过滤(单位秒,含边界)。零值字段表示
+// 该侧不过滤;两端都为零等价于不启用过滤。时长缺失(NULL)的视频在启用过滤
+// 时被排除(无法判定所属档位)。
+type DurationBounds struct {
+	MinSec int64
+	MaxSec int64
+}
+
+func (b DurationBounds) enabled() bool { return b.MinSec > 0 || b.MaxSec > 0 }
+
+// conditions 返回时长过滤的 SQL 片段与参数(videos 表别名必须是 v)。
+func (b DurationBounds) conditions() (string, []any) {
+	var (
+		parts []string
+		args  []any
+	)
+	if b.MinSec > 0 {
+		parts = append(parts, "v.duration_sec >= ?")
+		args = append(args, b.MinSec)
+	}
+	if b.MaxSec > 0 {
+		parts = append(parts, "v.duration_sec <= ?")
+		args = append(args, b.MaxSec)
+	}
+	if len(parts) == 0 {
+		return "", nil
+	}
+	return " AND " + strings.Join(parts, " AND "), args
+}
+
 // ApprovedPageForProvider 返回某 provider 某分类 approved 列表的一页与总条数。
 func (c *Catalog) ApprovedPageForProvider(provider, categoryID string, page, pageSize int) ([]CatalogVideo, int, error) {
+	return c.ApprovedPageForProviderFiltered(provider, categoryID, page, pageSize, DurationBounds{})
+}
+
+// ApprovedPageForProviderFiltered 在 ApprovedPageForProvider 基础上叠加时长
+// 过滤。计数与列表共用同一 WHERE,保证 total 与分页内容一致;翻页时过滤条件
+// 由调用方原样透传(同一档位内 total 不变)。
+func (c *Catalog) ApprovedPageForProviderFiltered(provider, categoryID string, page, pageSize int, bounds DurationBounds) ([]CatalogVideo, int, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	categoryID = strings.TrimSpace(categoryID)
 	if provider == "" || categoryID == "" || c == nil {
@@ -588,10 +632,13 @@ func (c *Catalog) ApprovedPageForProvider(provider, categoryID string, page, pag
 	if pageSize < 1 {
 		pageSize = 1
 	}
+	durationCond, durationArgs := bounds.conditions()
+	countArgs := append([]any{provider, categoryID}, durationArgs...)
 	var total int
 	if err := c.db.QueryRow(
-		`SELECT COUNT(*) FROM category_members WHERE provider = ? AND category_id = ? AND status = 'approved' AND `+notPageGlobCond("native_id")+``,
-		provider, categoryID,
+		`SELECT COUNT(*) FROM category_members m JOIN videos v ON v.provider = m.provider AND v.native_id = m.native_id
+WHERE m.provider = ? AND m.category_id = ? AND m.status = 'approved' AND `+notPageGlobCond("m.provider", "v.native_id")+durationCond,
+		countArgs...,
 	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count approved for provider: %w", err)
 	}
@@ -599,13 +646,15 @@ func (c *Catalog) ApprovedPageForProvider(provider, categoryID string, page, pag
 		return []CatalogVideo{}, 0, nil
 	}
 	offset := (page - 1) * pageSize
+	listArgs := append([]any{provider, categoryID}, durationArgs...)
+	listArgs = append(listArgs, pageSize, offset)
 	rows, err := c.db.Query(`
 SELECT v.provider, v.native_id, v.title, v.description, v.creators, v.duration_sec, v.year, v.thumbnail_url, v.source_url
 FROM category_members m
 JOIN videos v ON v.provider = m.provider AND v.native_id = m.native_id
-WHERE m.provider = ? AND m.category_id = ? AND m.status = 'approved' AND `+notPageGlobCond("v.native_id")+`
+WHERE m.provider = ? AND m.category_id = ? AND m.status = 'approved' AND `+notPageGlobCond("m.provider", "v.native_id")+durationCond+`
 ORDER BY m.pinned DESC, (m.rank IS NULL), m.rank ASC, m.score DESC, v.native_id ASC
-LIMIT ? OFFSET ?`, provider, categoryID, pageSize, offset)
+LIMIT ? OFFSET ?`, listArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query approved page for provider: %w", err)
 	}
@@ -640,7 +689,7 @@ func (c *Catalog) ApprovedForCategory(categoryID string, limit int) ([]CatalogVi
 SELECT v.provider, v.native_id, v.title, v.description, v.creators, v.duration_sec, v.year, v.thumbnail_url, v.source_url
 FROM category_members m
 JOIN videos v ON v.provider = m.provider AND v.native_id = m.native_id
-WHERE m.category_id = ? AND m.status = 'approved' AND ` + notPageGlobCond("v.native_id") + `
+WHERE m.category_id = ? AND m.status = 'approved' AND ` + notPageGlobCond("m.provider", "v.native_id") + `
 ORDER BY m.pinned DESC, (m.rank IS NULL), m.rank ASC, m.score DESC, v.native_id ASC`
 	args := []any{categoryID}
 	if limit > 0 {
@@ -687,7 +736,7 @@ func (c *Catalog) ApprovedPage(categoryID string, page, pageSize int) ([]Catalog
 
 	var total int
 	if err := c.db.QueryRow(
-		`SELECT COUNT(*) FROM category_members WHERE category_id = ? AND status = 'approved' AND `+notPageGlobCond("native_id")+``,
+		`SELECT COUNT(*) FROM category_members WHERE category_id = ? AND status = 'approved' AND `+notPageGlobCond("provider", "native_id")+``,
 		categoryID,
 	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count approved: %w", err)
@@ -701,7 +750,7 @@ func (c *Catalog) ApprovedPage(categoryID string, page, pageSize int) ([]Catalog
 SELECT v.provider, v.native_id, v.title, v.description, v.creators, v.duration_sec, v.year, v.thumbnail_url, v.source_url
 FROM category_members m
 JOIN videos v ON v.provider = m.provider AND v.native_id = m.native_id
-WHERE m.category_id = ? AND m.status = 'approved' AND `+notPageGlobCond("v.native_id")+`
+WHERE m.category_id = ? AND m.status = 'approved' AND `+notPageGlobCond("m.provider", "v.native_id")+`
 ORDER BY m.pinned DESC, (m.rank IS NULL), m.rank ASC, m.score DESC, v.native_id ASC
 LIMIT ? OFFSET ?`, categoryID, pageSize, offset)
 	if err != nil {
@@ -822,6 +871,35 @@ WHERE 1=1`)
 	return out, rows.Err()
 }
 
+// CountMembers 统计与 ListMembers 相同过滤范围(category/status)的成员总数,
+// 供管理界面分页展示"共 N 条"。ListMembers 只返回一页,不能拿页长度当 total。
+func (c *Catalog) CountMembers(categoryID, status string) (int, error) {
+	if c == nil {
+		return 0, nil
+	}
+	var (
+		query strings.Builder
+		args  []any
+	)
+	query.WriteString(`SELECT COUNT(*) FROM category_members WHERE 1=1`)
+	if categoryID = strings.TrimSpace(categoryID); categoryID != "" {
+		query.WriteString(" AND category_id = ?")
+		args = append(args, categoryID)
+	}
+	if status = strings.TrimSpace(status); status != "" {
+		if !validMemberStatus(status) {
+			return 0, fmt.Errorf("count members: invalid status: %q", status)
+		}
+		query.WriteString(" AND status = ?")
+		args = append(args, status)
+	}
+	var total int
+	if err := c.db.QueryRow(query.String(), args...).Scan(&total); err != nil {
+		return 0, fmt.Errorf("count members: %w", err)
+	}
+	return total, nil
+}
+
 // PendingReviews 返回待审(status='pending')候选,排序同 ListMembers。
 // -catalog-review 子命令复用它逐条展示与放行/拒绝。
 func (c *Catalog) PendingReviews(opts PendingReviewsOptions) ([]PendingReviewItem, error) {
@@ -895,7 +973,7 @@ type CategoryStatusCounts struct {
 
 // OverviewCounts 一次性统计每个分类各状态的成员数。空库返回空 map(非 nil 错误)。
 func (c *Catalog) OverviewCounts() (map[string]CategoryStatusCounts, error) {
-	rows, err := c.db.Query(`SELECT category_id, status, COUNT(*) FROM category_members WHERE ` + notPageGlobCond("native_id") + ` GROUP BY category_id, status`)
+	rows, err := c.db.Query(`SELECT category_id, status, COUNT(*) FROM category_members WHERE ` + notPageGlobCond("provider", "native_id") + ` GROUP BY category_id, status`)
 	if err != nil {
 		return nil, fmt.Errorf("overview counts: %w", err)
 	}
@@ -925,7 +1003,7 @@ func (c *Catalog) OverviewCounts() (map[string]CategoryStatusCounts, error) {
 func (c *Catalog) CountByStatus(categoryID, status string) (int, error) {
 	var n int
 	err := c.db.QueryRow(
-		`SELECT COUNT(*) FROM category_members WHERE category_id=? AND status=? AND `+notPageGlobCond("native_id")+``,
+		`SELECT COUNT(*) FROM category_members WHERE category_id=? AND status=? AND `+notPageGlobCond("provider", "native_id")+``,
 		strings.TrimSpace(categoryID), strings.TrimSpace(status),
 	).Scan(&n)
 	if err != nil {
@@ -968,7 +1046,7 @@ func (c *Catalog) SearchApproved(query, provider string, page, pageSize int) ([]
 		pageSize = 1
 	}
 	like := "%" + escapeLike(strings.ToLower(query)) + "%"
-	where := `m.status = 'approved' AND ` + notPageGlobCond("v.native_id") + ` AND (
+	where := `m.status = 'approved' AND ` + notPageGlobCond("m.provider", "v.native_id") + ` AND (
   lower(v.title) LIKE ? ESCAPE '\' OR
   lower(COALESCE(v.description, '')) LIKE ? ESCAPE '\' OR
   lower(COALESCE(v.creators, '')) LIKE ? ESCAPE '\')`
@@ -1042,7 +1120,7 @@ func (c *Catalog) ConsolidatePages() (groups int, deleted int, created int, err 
 	rows, err := c.db.Query(`
 SELECT v.provider, v.native_id, v.title, v.description, v.creators, v.duration_sec, v.year, v.thumbnail_url, v.source_url
 FROM videos v
-WHERE ` + pageGlobCond("v.native_id") + `
+WHERE ` + pageGlobCond("v.provider", "v.native_id") + `
 ORDER BY v.provider, v.native_id`)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("query page videos: %w", err)

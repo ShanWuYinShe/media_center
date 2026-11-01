@@ -261,6 +261,11 @@ func (s *mediaServer) handleInternalItems(w http.ResponseWriter, r *http.Request
 		limit = 1000
 	}
 	offset := positiveInt(q.Get("offset"), 0)
+	total, err := s.catalog.CountMembers(category, status)
+	if err != nil {
+		s.writeError(w, fmt.Errorf("count members: %w", err))
+		return
+	}
 	items, err := s.catalog.ListMembers(category, status, limit, offset)
 	if err != nil {
 		s.writeError(w, fmt.Errorf("list members: %w", err))
@@ -270,7 +275,8 @@ func (s *mediaServer) handleInternalItems(w http.ResponseWriter, r *http.Request
 	for _, it := range items {
 		out = append(out, toInternalReviewItem(it))
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"items": out, "total": len(out)})
+	// total 是过滤范围内的总数,不是本页条数——管理界面依赖它算总页数。
+	s.writeJSON(w, http.StatusOK, map[string]any{"items": out, "total": total, "limit": limit, "offset": offset})
 }
 
 // internalReviewRequest 是一次审校变更:status/pinned/rank 任一非空即更新该字段。

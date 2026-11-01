@@ -54,3 +54,16 @@ func TestAppUpdateManifestUnmarshal(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateAppUpdateManifestAllowsMissingSize(t *testing.T) {
+	// 体积以磁盘 APK 为准:手动清单可以不写 sizeBytes(早期文件常见),
+	// 不能因此让整个更新检查不可用;sha256 仍是完整性边界。
+	m := AppUpdateManifest{VersionCode: 1, VersionName: "1.0", SHA256: strings.Repeat("a", 64)}
+	if err := validateAppUpdateManifest(m); err != nil {
+		t.Fatalf("manifest without sizeBytes should be valid: %v", err)
+	}
+	m.SHA256 = "short"
+	if err := validateAppUpdateManifest(m); err == nil {
+		t.Fatal("invalid sha256 must be rejected")
+	}
+}

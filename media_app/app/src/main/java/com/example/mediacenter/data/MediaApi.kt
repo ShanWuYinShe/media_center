@@ -62,20 +62,36 @@ class MediaApi(
         categoryId: String,
         page: Int = 1,
         pageSize: Int = 18,
-    ): VideosResponse = get(
-        pathSegments = listOf("providers", provider, "categories", categoryId, "videos"),
-        query = mapOf(
+        minDurationSeconds: Long? = null,
+        maxDurationSeconds: Long? = null,
+    ): VideosResponse {
+        val query = mutableMapOf(
             "page" to page.toString(),
             "pageSize" to pageSize.toString(),
-        ),
-    )
+        )
+        // 时长筛选在服务端完成:客户端过滤只能覆盖已加载页,会让"长片"等
+        // 档位在未翻完页时显示为空,与用户预期不符。
+        minDurationSeconds?.let { query["minDurationSeconds"] = it.toString() }
+        maxDurationSeconds?.let { query["maxDurationSeconds"] = it.toString() }
+        return get(
+            pathSegments = listOf("providers", provider, "categories", categoryId, "videos"),
+            query = query,
+        )
+    }
 
     /** 服务端搜索(approved 目录,按 provider 过滤,跨分类去重排序)。 */
-    suspend fun search(query: String, provider: String): SearchResponse = get(
+    suspend fun search(
+        query: String,
+        provider: String,
+        page: Int = 1,
+        pageSize: Int = 30,
+    ): SearchResponse = get(
         pathSegments = listOf("search"),
         query = mapOf(
             "q" to query,
             "provider" to provider,
+            "page" to page.toString(),
+            "pageSize" to pageSize.toString(),
         ),
     )
 

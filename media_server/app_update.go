@@ -233,9 +233,9 @@ func validateAppUpdateManifest(manifest AppUpdateManifest) error {
 	if strings.TrimSpace(manifest.VersionName) == "" {
 		return errors.New("versionName is required")
 	}
-	if manifest.SizeBytes <= 0 {
-		return errors.New("sizeBytes must be positive")
-	}
+	// 不校验 manifest.SizeBytes:响应里的体积以磁盘 APK 实际大小为准(见
+	// readAppUpdateManifest)。早期手工清单可能没写 sizeBytes,强制要求会让
+	// 整个更新检查不可用,而体积本身不是安全边界(sha256 才是)。
 	if _, err := hex.DecodeString(manifest.SHA256); err != nil || len(manifest.SHA256) != sha256.Size*2 {
 		return errors.New("sha256 must be a hex encoded SHA-256 digest")
 	}

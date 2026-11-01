@@ -20,6 +20,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
+import com.example.mediacenter.ui.theme.tvButtonFocusScale
+import com.example.mediacenter.ui.theme.tvPillButtonBorder
+import com.example.mediacenter.ui.theme.tvPillButtonShape
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.CardGray
 import com.example.mediacenter.ui.theme.ErrorRed
@@ -51,6 +54,9 @@ fun ErrorView(
                 // tv Button + 项目统一焦点态(聚焦 Apple Blue 底/白字),替代 M3
                 // OutlinedButton 的弱焦点指示,与 SelectChip/ActionRow 视觉一致。
                 Button(
+                    shape = tvPillButtonShape(),
+                    border = tvPillButtonBorder(),
+                    scale = tvButtonFocusScale(),
                     onClick = onRetry,
                     modifier = Modifier.requiredHeight(48.dp).focusRequester(retryFocus),
                     colors = ButtonDefaults.colors(

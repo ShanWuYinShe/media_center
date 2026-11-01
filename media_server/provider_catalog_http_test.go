@@ -241,3 +241,69 @@ func TestProviderCatalogRouteDispatch(t *testing.T) {
 		}
 	}
 }
+
+func TestCategoryVideosDurationFilterHTTP(t *testing.T) {
+	c := openTestCatalog(t)
+	for id, dur := range map[string]int64{"BVshort": 5 * 60, "BVmid": 20 * 60, "BVlong": 60 * 60} {
+		mustUpsert(t, c, "bilibili", id, id, dur)
+		approveTo(t, c, "movies", "bilibili", id)
+	}
+	s := &mediaServer{
+		categoriesByID: map[string]ContentCategory{
+			"movies": {ID: "movies", Title: "Movies", Description: "d"},
+		},
+		catalog: c,
+	}
+
+	var body VideosResponse
+	rec := getJSON(t, s, "/api/v1/providers/bilibili/categories/movies/videos?minDurationSeconds=600&maxDurationSeconds=2699", &body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if body.Total != 1 || len(body.Items) != 1 || body.Items[0].ID != "BVmid" {
+		t.Fatalf("filtered body = %+v", body)
+	}
+
+	// 非法参数必须 400,不能静默忽略后返回全量
+	for _, path := range []string{
+		"/api/v1/providers/bilibili/categories/movies/videos?minDurationSeconds=abc",
+		"/api/v1/providers/bilibili/categories/movies/videos?minDurationSeconds=-1",
+		"/api/v1/providers/bilibili/categories/movies/videos?minDurationSeconds=600&maxDurationSeconds=100",
+	} {
+		if rec := getJSON(t, s, path, nil); rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400", path, rec.Code)
+		}
+	}
+}
+
+func TestProviderCategoriesFollowConfigOrder(t *testing.T) {
+	c := openTestCatalog(t)
+	for _, pair := range []struct{ provider, id, cat string }{
+		{"bilibili", "BV1z", "zeta"},
+		{"bilibili", "BV1a", "alpha"},
+	} {
+		mustUpsert(t, c, pair.provider, pair.id, pair.id, 60)
+		approveTo(t, c, pair.cat, pair.provider, pair.id)
+	}
+	// contentCategories.json 的编排顺序是 zeta → alpha(与字典序相反):
+	// 首页分类顺序应听编排,而不是 id 字母序。
+	s := &mediaServer{
+		categories: []ContentCategory{
+			{ID: "zeta", Title: "Zeta", Description: "z"},
+			{ID: "alpha", Title: "Alpha", Description: "a"},
+		},
+		categoriesByID: map[string]ContentCategory{
+			"zeta":  {ID: "zeta", Title: "Zeta", Description: "z"},
+			"alpha": {ID: "alpha", Title: "Alpha", Description: "a"},
+		},
+		catalog: c,
+	}
+	var body CategoriesResponse
+	rec := getJSON(t, s, "/api/v1/providers/bilibili/categories", &body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if len(body.Items) != 2 || body.Items[0].ID != "zeta" || body.Items[1].ID != "alpha" {
+		t.Fatalf("categories order = %+v, want [zeta alpha]", body.Items)
+	}
+}

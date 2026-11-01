@@ -16,6 +16,7 @@ func TestPageRecordFilteringBySuffixGlob(t *testing.T) {
 	c := openTestCatalog(t)
 	fixtures := []struct{ provider, id, title string }{
 		{"youtube", "ab_pdefX9Zk", "合法YouTubeID中间含_p"},
+		{"youtube", "abcdefgh_p1", "合法YouTubeID以_p1结尾(仅bilibili才当分P)"},
 		{"youtube", "dQw4w9WgXcQ", "正常YouTubeID"},
 		{"bilibili", "BV1base", "正常基础视频"},
 		{"bilibili", "BV1base_p2", "分P第2页"},
@@ -31,7 +32,7 @@ func TestPageRecordFilteringBySuffixGlob(t *testing.T) {
 			t.Fatalf("approve %s: %v", f.id, err)
 		}
 	}
-	allVisible := map[string]bool{"ab_pdefX9Zk": true, "dQw4w9WgXcQ": true, "BV1base": true}
+	allVisible := map[string]bool{"ab_pdefX9Zk": true, "abcdefgh_p1": true, "dQw4w9WgXcQ": true, "BV1base": true}
 
 	// expected 是该查询维度下应可见的 ID 集合;页记录(_p<数字> 结尾)一律不得出现。
 	assertVisibleOnly := func(name string, items []CatalogVideo, total int, expected map[string]bool) {
@@ -74,7 +75,7 @@ func TestPageRecordFilteringBySuffixGlob(t *testing.T) {
 		t.Fatalf("ApprovedPageForProvider youtube: %v", err)
 	}
 	assertVisibleOnly("ApprovedPageForProvider(youtube)", ytPage, ytTotal,
-		map[string]bool{"ab_pdefX9Zk": true, "dQw4w9WgXcQ": true})
+		map[string]bool{"ab_pdefX9Zk": true, "abcdefgh_p1": true, "dQw4w9WgXcQ": true})
 
 	biliPage, biliTotal, err := c.ApprovedPageForProvider("bilibili", "movies", 1, 40)
 	if err != nil {
@@ -90,7 +91,7 @@ func TestPageRecordFilteringBySuffixGlob(t *testing.T) {
 		t.Fatalf("SearchApproved: %v", err)
 	}
 	assertVisibleOnly("SearchApproved", found, foundTotal,
-		map[string]bool{"ab_pdefX9Zk": true})
+		map[string]bool{"ab_pdefX9Zk": true, "abcdefgh_p1": true})
 
 	// 分类/provider 维度辅助查询:页记录不吞掉分类与 provider。
 	cats, err := c.CategoriesForProvider("bilibili")
@@ -103,8 +104,8 @@ func TestPageRecordFilteringBySuffixGlob(t *testing.T) {
 	}
 
 	// 审核统计口径:页记录不计入 approved 数。
-	if n, err := c.CountByStatus("movies", "approved"); err != nil || n != 3 {
-		t.Fatalf("CountByStatus approved = %d err %v, want 3", n, err)
+	if n, err := c.CountByStatus("movies", "approved"); err != nil || n != 4 {
+		t.Fatalf("CountByStatus approved = %d err %v, want 4", n, err)
 	}
 
 	// ConsolidatePages:按同一精确定义选中 3 条页记录并并入基础视频。

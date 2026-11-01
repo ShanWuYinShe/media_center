@@ -2,6 +2,7 @@ package com.example.mediacenter.ui.search
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.mediacenter.data.ApiException
 import com.example.mediacenter.data.ContentCategory
 import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.MediaRepositoryHolder
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -30,6 +32,13 @@ data class SearchUiState(
     val categories: List<ContentCategory> = emptyList(),
     val isSearching: Boolean = false,
     val error: String? = null,
+    val page: Int = 1,
+    val total: Int = 0,
+    val isLoadingMore: Boolean = false,
+    val loadMoreFailed: Boolean = false,
+    // 服务端目录搜索可分页;youtube 实时搜索/本地回退是单页,置 false
+    val paged: Boolean = false,
+    val noMore: Boolean = true,
 )
 
 /**
@@ -63,18 +72,37 @@ class SearchViewModel(
     // 后台补全 job 引用:provider 切换时取消旧补全,防止旧源数据混入新源缓存
     // (refreshCatalogFast 会 clear+putAll,旧补全晚到会覆盖新源内容)。
     private var completeJob: Job? = null
+    // 搜索翻页 job:新关键词搜索开始时取消,避免旧页结果追加到新查询后面。
+    private var loadMoreJob: Job? = null
 
     init {
         viewModelScope.launch {
             queryFlow
-                .debounce(400)
+                .debounce(700)
                 .distinctUntilChanged()
                 .collectLatest { query -> performSearch(query) }
         }
     }
 
     fun search(query: String) {
-        _uiState.value = _uiState.value.copy(query = query)
+        // 清空/过短时立即清结果,不等 400ms 防抖:用户按了清除就该马上看到空态。
+        _uiState.value = if (query.trim().length < 2) {
+            loadMoreJob?.cancel()
+            _uiState.value.copy(
+                query = query,
+                results = emptyList(),
+                isSearching = false,
+                error = null,
+                isLoadingMore = false,
+                loadMoreFailed = false,
+                paged = false,
+                noMore = true,
+                total = 0,
+                page = 1,
+            )
+        } else {
+            _uiState.value.copy(query = query)
+        }
         queryFlow.value = query
     }
 
@@ -87,11 +115,14 @@ class SearchViewModel(
 
     // 快速加载:各分类前 FAST_PAGES 页(秒回，足够覆盖首搜常见结果)。
     private suspend fun refreshCatalogFast() {
+        // 先标记未就绪:provider 切换后若刷新失败,不能继续拿旧缓存当
+        // 当前源的结果(catalogReady 仍为 true 会跳过下面的失败分支)。
+        catalogReady = false
         try {
             // 新目录接管前取消旧补全:否则旧 provider 的后台补全晚到会把
             // 旧源数据混进新缓存(completeCatalog 合并处另有 provider 校验双保险)。
             completeJob?.cancel()
-            repository.refreshCredentials()
+            viewModelScope.launch { repository.refreshCredentials() }
             val cats = repository.categories()
             _uiState.value = _uiState.value.copy(categories = cats)
             val loaded = coroutineScope {
@@ -158,14 +189,26 @@ class SearchViewModel(
     }
 
     private suspend fun performSearch(query: String) {
-        if (query.length < 2) {
+        // 新查询接管:取消旧查询的翻页,避免旧页结果混进新列表。
+        loadMoreJob?.cancel()
+        if (query.trim().length < 2) {
             _uiState.value = _uiState.value.copy(results = emptyList(), isSearching = false, error = null)
             return
         }
-        _uiState.value = _uiState.value.copy(isSearching = true, error = null)
+        _uiState.value = _uiState.value.copy(
+            isSearching = true,
+            error = null,
+            isLoadingMore = false,
+            loadMoreFailed = false,
+            paged = false,
+            noMore = true,
+            page = 1,
+        )
         // 远程两级(youtube 实时通道 / server 搜索)任一失败置位:两级全失败且
         // 本地也无结果时,把"网络不可用"与"真无结果"区分开,不再静默回退。
         var remoteFailed = false
+        // 429 是限流而不是网络故障:提示必须区分,否则用户会误以为是网络问题。
+        var rateLimited = false
         // YouTube 实时搜索:优先调 server 的 YouTube 通道(ytsearch 实时搜索),不查本地
         // catalog(YouTube 内容不要求先入库)。失败仍落到下方本地目录过滤——
         // 至少能搜到已审核入库的 YouTube 内容。
@@ -176,27 +219,49 @@ class SearchViewModel(
                 throw e
             } catch (e: Exception) {
                 remoteFailed = true
+                if (e is ApiException && e.statusCode == 429) rateLimited = true
                 AppLog.w("Search", "youtube search failed, fallback to local catalog: ${e.message}", e)
                 null
             }
             if (remote != null) {
-                _uiState.value = _uiState.value.copy(isSearching = false, results = remote, error = null)
+                _uiState.value = _uiState.value.copy(
+                    isSearching = false,
+                    results = remote,
+                    error = null,
+                    total = remote.size,
+                    page = 1,
+                    // ytsearch 单页固定 20 条,没有翻页令牌
+                    paged = false,
+                    noMore = true,
+                )
                 return
             }
         }
         // 优先服务端搜索:跨全部分类页、按置顶/分数排序,一次请求出全量结果。
         // 旧版 server 没有 /api/search 或瞬时网络失败时回退本地目录过滤。
         val serverResults = try {
-            repository.search(query)
+            repository.search(query, page = 1, pageSize = SEARCH_PAGE_SIZE)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             remoteFailed = true
+            if (e is ApiException && e.statusCode == 429) rateLimited = true
             AppLog.w("Search", "server search failed, fallback to local catalog: ${e.message}", e)
             null
         }
         if (serverResults != null) {
-            _uiState.value = _uiState.value.copy(isSearching = false, results = serverResults, error = null)
+            val items = serverResults.items.orEmpty()
+            val noMore = items.isEmpty() || (serverResults.total > 0 && items.size >= serverResults.total)
+            _uiState.value = _uiState.value.copy(
+                isSearching = false,
+                results = items,
+                error = null,
+                total = serverResults.total,
+                page = 1,
+                // 服务端目录搜索支持 page/pageSize:还有结果时滚动到底继续拉
+                paged = !noMore,
+                noMore = noMore,
+            )
             return
         }
         // ── 本地回退:拉目录缓存后按标题过滤 ──
@@ -234,12 +299,65 @@ class SearchViewModel(
         }
         // 远程两级全失败且本地无匹配:显式报网络错误,否则用户把"搜索服务挂了"
         // 误读成"没有这个视频"。
-        val searchError = if (results.isEmpty() && remoteFailed) {
-            "搜索服务暂不可用（网络异常），请检查网络后重试"
-        } else {
-            null
+        val searchError = when {
+            results.isNotEmpty() -> null
+            rateLimited -> "搜索过于频繁，请稍后再试"
+            remoteFailed -> "搜索服务暂不可用（网络异常），请检查网络后重试"
+            else -> null
         }
-        _uiState.value = _uiState.value.copy(isSearching = false, results = results, error = searchError)
+        _uiState.value = _uiState.value.copy(
+            isSearching = false,
+            results = results,
+            error = searchError,
+            // 本地回退是一次性快照,没有翻页
+            total = results.size,
+            page = 1,
+            paged = false,
+            noMore = true,
+        )
+    }
+
+    /** 搜索结果分页:滚动到底时按当前关键词与服务端 total 拉下一页。 */
+    fun loadMore() {
+        val state = _uiState.value
+        if (!state.paged || state.isSearching || state.isLoadingMore || state.loadMoreFailed ||
+            state.noMore || state.query.trim().length < 2
+        ) {
+            return
+        }
+        if (state.total > 0 && state.results.size >= state.total) return
+        val query = state.query
+        val nextPage = state.page + 1
+        _uiState.update { it.copy(isLoadingMore = true, loadMoreFailed = false) }
+        loadMoreJob = viewModelScope.launch {
+            try {
+                val response = repository.search(query, nextPage, SEARCH_PAGE_SIZE)
+                _uiState.update { current ->
+                    // 期间改了关键词:丢弃旧页
+                    if (current.query != query) return@update current
+                    val merged = (current.results + response.items.orEmpty()).distinctBy { it.id }
+                    current.copy(
+                        results = merged,
+                        page = nextPage,
+                        total = response.total,
+                        isLoadingMore = false,
+                        noMore = response.items.isNullOrEmpty() ||
+                            (response.total > 0 && merged.size >= response.total),
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (_uiState.value.query == query) {
+                    _uiState.update { it.copy(isLoadingMore = false, loadMoreFailed = true) }
+                }
+            }
+        }
+    }
+
+    fun retryLoadMore() {
+        _uiState.update { it.copy(loadMoreFailed = false) }
+        loadMore()
     }
 
     // 目录缓存是否与当前 provider 一致
@@ -253,5 +371,7 @@ class SearchViewModel(
         const val FAST_PAGES = 2
         // 每分类最多拉取的页数(后台补全用)，控制本地目录规模(18 条/页)。
         const val MAX_PAGES_PER_CATEGORY = 5
+        // 搜索结果每页条数:与服务端 pageSize 上限(40)留余量,兼顾首屏速度
+        const val SEARCH_PAGE_SIZE = 30
     }
 }

@@ -8,17 +8,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.ui.components.TvChipButton
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.CardSpacing
 import com.example.mediacenter.ui.theme.RowVerticalSpacing
@@ -38,6 +42,10 @@ fun CategoryRow(
     progressById: Map<String, Float> = emptyMap(),
     loadFailed: Boolean = false,
 ) {
+    // "查看全部"在行标题右侧,空间焦点搜索从卡片上移时会落到上一行卡片,
+    // 几乎无法选中它。给首张卡片显式指定 up 目标,保证遥控器可达。
+    val seeAllFocus = remember { FocusRequester() }
+
     Column(modifier = modifier.padding(vertical = RowVerticalSpacing)) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenHorizontalPadding),
@@ -52,14 +60,13 @@ fun CategoryRow(
                 modifier = Modifier.weight(1f).padding(vertical = 8.dp),
             )
             onSeeAll?.let { onClick ->
-                TextButton(onClick = onClick) {
-                    Text(
-                        text = "\u67E5\u770B\u5168\u90E8",
-                        color = AppleBlue,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                // 用胶囊按钮而非 TextButton:TV 上 Material TextButton 的焦点
+                // 指示很弱,而"查看全部"是要用遥控器精确选中的动作。
+                TvChipButton(
+                    label = "查看全部",
+                    onClick = onClick,
+                    modifier = Modifier.focusRequester(seeAllFocus),
+                )
             }
         }
         if (videos.isEmpty()) {
@@ -79,15 +86,20 @@ fun CategoryRow(
                 // 而不是行首（TV 上丢失浏览位置是高频烦恼）。
                 modifier = Modifier.focusRestorer(),
             ) {
-                items(videos, key = { it.id }) { video ->
+                itemsIndexed(videos, key = { _, video -> video.id }) { index, video ->
                     // LazyRow item 横/纵轴均无界:必须固定卡片宽度,aspectRatio 才能
                     // 稳定推导高度——否则尺寸回退到 AsyncImage 固有尺寸,占位图与
                     // 真实图片尺寸不同会引发加载前后布局跳变。
+                    val focusModifier = if (index == 0 && onSeeAll != null) {
+                        Modifier.focusProperties { up = seeAllFocus }
+                    } else {
+                        Modifier
+                    }
                     VideoCard(
                         video = video,
                         onClick = { onVideoClick(video) },
                         progress = progressById[video.id],
-                        modifier = Modifier.width(240.dp),
+                        modifier = Modifier.width(240.dp).then(focusModifier),
                     )
                 }
             }

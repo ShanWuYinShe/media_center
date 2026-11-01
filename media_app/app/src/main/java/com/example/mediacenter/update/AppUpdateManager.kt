@@ -127,6 +127,10 @@ class AppUpdateManager(
     // 下载专用 client:禁用重定向——同源 host 校验只看 manifest.apkUrl,若跟随
     // 302 到外域即被绕过(本服务不依赖重定向下发 APK)。派生共享连接池。
     private val downloadClient = client.newBuilder()
+        // APK 下载是几十 MB 的长连接:共享客户端的默认 10s 读超时在弱网/CDN
+        // 抖动时会误杀正常下载。放宽到 60s(仅此客户端,不影响目录接口)。
+        .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
         .followRedirects(false)
         .followSslRedirects(false)
         .build()

@@ -96,6 +96,11 @@ class BilibiliApi(
 
         val (options, qualities) = buildPlaybackOptions(bvid, pageIndex, payload)
         if (options.isEmpty()) throw BilibiliApiException("B 站未返回播放流(可能触发风控)")
+        // 日志放在这里而不是纯解析函数里:解析函数被 JVM 单测直接调用,
+        // 不应依赖 android.util.Log。
+        options.firstOrNull()?.segments?.takeIf { it.size > 1 }?.let { segments ->
+            AppLog.i("Bili", "multi-segment durl (${segments.size} segments), will concatenate: $bvid")
+        }
 
         val pageDurations = if (pages.isNotEmpty()) pages.map { it.duration } else emptyList()
         PlaybackResult(
@@ -120,22 +125,25 @@ class BilibiliApi(
      * 其它清晰度不能复用同一条 url,而是通过 [resolvePlayback] 按新 qn 重新
      * 解析获取,这里只把它们作为可切换列表暴露给 UI。
      */
-    private fun buildPlaybackOptions(
+    internal fun buildPlaybackOptions(
         bvid: String,
         pageIndex: Int,
         payload: BiliPlayUrlResponse,
     ): Pair<List<PlaybackOption>, List<QualityOption>> {
         val data = payload.data ?: return emptyList<PlaybackOption>() to emptyList<QualityOption>()
-        // 多段 durl(size>1,个别老视频分段提供)当前只播第一段;记日志便于发现这类内容
-        data.durl?.takeIf { it.size > 1 }?.let {
-            AppLog.w("Bili", "multi-segment durl (${it.size} segments), playing first segment only: $bvid")
-        }
-        val durlUrl = data.durl?.firstOrNull()?.url ?: return emptyList<PlaybackOption>() to buildAvailableQualities(data)
+        // durl 可能有多段(个别老视频按时间切片提供)。全部保留并交给播放器
+        // 顺序拼接(ConcatenatingMediaSource);只播第一段会直接截断剩余内容。
+        val segmentUrls = data.durl.orEmpty()
+            .mapNotNull { it.url?.takeIf(String::isNotBlank) }
+            .distinct()
+        val firstUrl = segmentUrls.firstOrNull()
+            ?: return emptyList<PlaybackOption>() to buildAvailableQualities(data)
         val option = PlaybackOption(
             id = "bili-$bvid-p$pageIndex-q${data.quality}",
             kind = "vod",
             label = qualityLabel(data.quality),
-            url = durlUrl,
+            url = firstUrl,
+            segments = segmentUrls.takeIf { it.size > 1 },
             mimeType = "video/mp4",
             headers = DIRECT_HEADERS,
             qn = data.quality,

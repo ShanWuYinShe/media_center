@@ -33,7 +33,10 @@ type mediaServer struct {
 	categories     []ContentCategory
 	categoriesByID map[string]ContentCategory
 	catalog        *Catalog
-	crashLimiter   *ipWindowLimiter
+	// catalogErr 记录配置了 DB 但打开失败的原因:此时服务仍可响应(空目录),
+	// 但 /health 会标记 degraded,避免"进程活着但全站空白"被监控漏掉。
+	catalogErr   error
+	crashLimiter *ipWindowLimiter
 	// 凭证端点 per-IP 限流(独立于崩溃上报限流器)。
 	credentialsLimiter *ipWindowLimiter
 	// 搜索端点 per-IP 限流:公开匿名端点中最重的一个(count+list 两次全表
@@ -157,6 +160,7 @@ func main() {
 	if config.CatalogDBPath != "" {
 		if catalog, err := OpenCatalog(config.CatalogDBPath); err != nil {
 			log.Printf("warning: open catalog %q failed: %v", config.CatalogDBPath, err)
+			server.catalogErr = err
 		} else {
 			server.catalog = catalog
 			defer catalog.Close()
@@ -258,7 +262,21 @@ func (s *mediaServer) serveAPI(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && (r.URL.Path == "/health" || r.URL.Path == "/healthz" || r.URL.Path == "/api/health"):
 		// /healthz 是独立站约定的无鉴权存活探针(nginx 直接探此路径);
 		// /health 是容器 healthcheck 与既有调用方的原名;/api/health 为兼容保留。
-		s.writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version})
+		// 配置了 catalog DB 却打开失败时返回 503 + degraded:服务还能响应空目录,
+		// 但这是"全站空白"的故障态,必须让探针/监控看见,而不是永远 status=ok。
+		status := http.StatusOK
+		payload := map[string]any{"status": "ok", "version": version}
+		switch {
+		case s.catalogErr != nil:
+			status = http.StatusServiceUnavailable
+			payload["status"] = "degraded"
+			payload["catalog"] = "error"
+		case s.catalog == nil:
+			payload["catalog"] = "disabled"
+		default:
+			payload["catalog"] = "ok"
+		}
+		s.writeJSON(w, status, payload)
 	case strings.HasPrefix(r.URL.Path, "/internal/"):
 		s.handleInternal(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/providers":
@@ -435,15 +453,33 @@ func (s *mediaServer) handleProviderCategories(w http.ResponseWriter, r *http.Re
 		log.Printf("list categories for provider %s: %v", provider, err)
 		return
 	}
-	items := make([]PublicCategory, 0, len(categoryIDs))
+	// 分类顺序以 contentCategories.json 的编排顺序为准(运营可调),而不是
+	// catalog 里的 category_id 字典序——否则首页分类顺序完全由 id 拼写决定。
+	present := make(map[string]struct{}, len(categoryIDs))
 	for _, id := range categoryIDs {
+		present[id] = struct{}{}
+	}
+	items := make([]PublicCategory, 0, len(categoryIDs))
+	added := make(map[string]struct{}, len(categoryIDs))
+	for _, cat := range s.categories {
+		if _, ok := present[cat.ID]; !ok {
+			continue
+		}
+		items = append(items, PublicCategory{ID: cat.ID, Title: cat.Title, Description: cat.Description})
+		added[cat.ID] = struct{}{}
+	}
+	// 兜底:只出现在 categoriesByID、没进入 categories 切片的分类(调用方
+	// 构造不完整/配置源不一致)仍按定义输出;两边都没有的才算未定义分类,
+	// 标题带上 id 便于定位配置缺失。
+	for _, id := range categoryIDs {
+		if _, ok := added[id]; ok {
+			continue
+		}
 		if cat, ok := s.categoriesByID[id]; ok {
 			items = append(items, PublicCategory{ID: cat.ID, Title: cat.Title, Description: cat.Description})
-		} else {
-			// catalog 有 approved 数据但 contentCategories.json 未定义该分类:
-			// 标题带上 id 便于定位配置缺失,而不是把裸 id 当标题展示。
-			items = append(items, PublicCategory{ID: id, Title: "未定义分类 " + id})
+			continue
 		}
+		items = append(items, PublicCategory{ID: id, Title: "未定义分类 " + id})
 	}
 	s.writeJSON(w, http.StatusOK, CategoriesResponse{Items: items})
 }
@@ -452,6 +488,11 @@ func (s *mediaServer) handleProviderCategories(w http.ResponseWriter, r *http.Re
 func (s *mediaServer) handleProviderCategoryVideos(w http.ResponseWriter, r *http.Request, provider, categoryID string) {
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	page, pageSize, err := paginationFromRequest(r)
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	bounds, err := durationBoundsFromRequest(r)
 	if err != nil {
 		s.writeError(w, err)
 		return
@@ -468,7 +509,7 @@ func (s *mediaServer) handleProviderCategoryVideos(w http.ResponseWriter, r *htt
 		})
 		return
 	}
-	items, total, catErr := s.catalog.ApprovedPageForProvider(provider, categoryID, page, pageSize)
+	items, total, catErr := s.catalog.ApprovedPageForProviderFiltered(provider, categoryID, page, pageSize, bounds)
 	if catErr != nil {
 		s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"})
 		log.Printf("list videos provider=%s category=%s: %v", provider, categoryID, catErr)
@@ -504,6 +545,34 @@ func paginationFromRequest(r *http.Request) (int, int, *apiError) {
 		pageSize = ps
 	}
 	return page, pageSize, nil
+}
+
+// durationBoundsFromRequest 解析分类列表的时长筛选参数(秒,含边界)。
+// 缺省/0 表示该侧不过滤;两端都提供时必须 min<=max。非法值一律 400,
+// 不让脏参数退化成"静默忽略"导致 UI 显示与预期档位不符。
+func durationBoundsFromRequest(r *http.Request) (DurationBounds, *apiError) {
+	var bounds DurationBounds
+	for _, param := range []struct {
+		name string
+		dst  *int64
+	}{
+		{"minDurationSeconds", &bounds.MinSec},
+		{"maxDurationSeconds", &bounds.MaxSec},
+	} {
+		raw := strings.TrimSpace(r.URL.Query().Get(param.name))
+		if raw == "" {
+			continue
+		}
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value < 0 {
+			return DurationBounds{}, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: param.name + " 参数不合法。"}
+		}
+		*param.dst = value
+	}
+	if bounds.MinSec > 0 && bounds.MaxSec > 0 && bounds.MinSec > bounds.MaxSec {
+		return DurationBounds{}, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "时长筛选区间不合法。"}
+	}
+	return bounds, nil
 }
 
 func (s *mediaServer) writeJSON(w http.ResponseWriter, status int, payload any) {

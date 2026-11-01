@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -83,9 +85,16 @@ func TestBuildYouTubePlaybackMixedFormats(t *testing.T) {
 	if result.Options[0].QN != 1080 || result.Options[1].QN != 720 || result.Options[2].QN != 360 {
 		t.Fatalf("expected heights [1080 720 360], got %v", []int{result.Options[0].QN, result.Options[1].QN, result.Options[2].QN})
 	}
-	// 1080p65 HLS 胜出(fps 最高)
+	// 1080p65 HLS 胜出(fps 最高);纯视频轨配独立音轨(否则是无声视频)
 	if result.Options[0].URL != "https://x/1080p65" || result.Options[0].MimeType != "application/x-mpegurl" {
 		t.Fatalf("1080 option should be HLS 1080p65, got %+v", result.Options[0])
+	}
+	if result.Options[0].AudioURL != "https://x/audio" {
+		t.Fatalf("split video option must carry audio url, got %+v", result.Options[0])
+	}
+	// 合一流(progressive/HLS muxed)不应带 AudioURL
+	if result.Options[2].AudioURL != "" {
+		t.Fatalf("muxed option must not carry audio url, got %+v", result.Options[2])
 	}
 	// 720p60 HLS(fps 60)保留,不被 720p30 progressive 覆盖
 	if result.Options[1].URL != "https://x/720p60" {
@@ -274,6 +283,8 @@ func TestHandleYouTubeResolve(t *testing.T) {
 			"formats": [
 				{"format_id": "18", "url": "https://gvs/360", "ext": "mp4", "height": 360, "fps": 30,
 				 "vcodec": "avc1.42001E", "acodec": "mp4a.40.2", "protocol": "https"},
+				{"format_id": "140", "url": "https://gvs/audio", "ext": "m4a", "height": 0, "fps": 0,
+				 "vcodec": "none", "acodec": "mp4a.40.2", "protocol": "https", "abr": 128},
 				{"format_id": "308", "url": "https://gvs/1080", "ext": "mp4", "height": 1080, "fps": 60,
 				 "vcodec": "avc1.64002a", "acodec": "none", "protocol": "m3u8_native"}
 			]
@@ -288,8 +299,10 @@ func TestHandleYouTubeResolve(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
-		`"id":"yt-jNQXAC9IVRw-308"`,
+		`"id":"yt-jNQXAC9IVRw-308-a140"`,
 		`"url":"https://gvs/1080"`,
+		`"audioUrl":"https://gvs/audio"`,
+		`"audioMimeType":"audio/mp4"`,
 		`"mimeType":"application/x-mpegurl"`,
 		`"mimeType":"video/mp4"`,
 		`"qn":1080`,
@@ -331,6 +344,150 @@ func TestHandleYouTubeResolveGuards(t *testing.T) {
 	rec = getWithToken(t, s4, "/api/providers/youtube/resolve?id=jNQXAC9IVRw")
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("extractor fail: status = %d", rec.Code)
+	}
+}
+
+func TestBuildYouTubePlaybackSplitDash(t *testing.T) {
+	// YouTube 1080P+ 的实际形态:纯视频轨(DASH https)+ 独立 m4a 音轨。
+	info := ytdlpInfo{
+		ID: "abc12345678",
+		Formats: []ytdlpFormat{
+			mkFormat("18", "https://x/360", "mp4", 360, 30, "avc1.42001E", "mp4a.40.2", "https"),
+			mkFormat("137", "https://x/1080-video", "mp4", 1080, 30, "avc1.640028", "none", "https"),
+			mkFormat("251", "https://x/audio-opus", "webm", 0, 0, "none", "opus", "https"),
+			mkFormat("140", "https://x/audio-m4a", "m4a", 0, 0, "none", "mp4a.40.2", "https"),
+		},
+	}
+	result := buildYouTubePlayback(info)
+	if len(result.Options) != 2 {
+		t.Fatalf("expected 2 options, got %+v", result.Options)
+	}
+	top := result.Options[0]
+	if top.QN != 1080 || top.URL != "https://x/1080-video" || top.AudioURL != "https://x/audio-m4a" {
+		t.Fatalf("1080 option should merge best m4a audio, got %+v", top)
+	}
+	if top.MimeType != "video/mp4" {
+		t.Fatalf("DASH video mime = %q", top.MimeType)
+	}
+	if top.AudioMimeType != "audio/mp4" {
+		t.Fatalf("split audio mime = %q, want audio/mp4", top.AudioMimeType)
+	}
+}
+
+func TestBuildYouTubePlaybackDropsSilentVideo(t *testing.T) {
+	// 只有纯视频轨、没有任何音轨时,不能返回"无声视频"当可播放档位。
+	info := ytdlpInfo{
+		ID: "abc12345678",
+		Formats: []ytdlpFormat{
+			mkFormat("137", "https://x/1080-video", "mp4", 1080, 30, "avc1", "none", "https"),
+			mkFormat("sb0", "https://x/sb", "mhtml", 1080, 0, "none", "none", "https"),
+		},
+	}
+	if got := buildYouTubePlayback(info); len(got.Options) != 0 {
+		t.Fatalf("silent video must not be offered, got %+v", got.Options)
+	}
+}
+
+func TestBuildYouTubePlaybackPrefersH264ForHardwareDecode(t *testing.T) {
+	info := ytdlpInfo{
+		ID: "abc12345678",
+		Formats: []ytdlpFormat{
+			// AV1 60fps 与 H.264 30fps 同高度:电视盒子硬解优先 H.264,
+			// 即使帧率更低(软解 AV1 4K 会直接卡死)。
+			mkFormat("399", "https://x/1080-av1", "mp4", 1080, 60, "av01.0.08M.08", "none", "https"),
+			mkFormat("137", "https://x/1080-h264", "mp4", 1080, 30, "avc1.640028", "none", "https"),
+			mkFormat("140", "https://x/audio", "m4a", 0, 0, "none", "mp4a.40.2", "https"),
+		},
+	}
+	result := buildYouTubePlayback(info)
+	if len(result.Options) != 1 || result.Options[0].URL != "https://x/1080-h264" {
+		t.Fatalf("h264 should win on TV compatibility, got %+v", result.Options)
+	}
+}
+
+func TestBuildYouTubePlaybackMuxedHLSBeatsSplit(t *testing.T) {
+	info := ytdlpInfo{
+		ID: "abc12345678",
+		Formats: []ytdlpFormat{
+			mkFormat("137", "https://x/1080-video", "mp4", 1080, 30, "avc1", "none", "https"),
+			mkFormat("140", "https://x/audio", "m4a", 0, 0, "none", "mp4a", "https"),
+			mkFormat("399", "https://x/1080-hls", "mp4", 1080, 30, "avc1", "mp4a", "m3u8_native"),
+		},
+	}
+	result := buildYouTubePlayback(info)
+	if len(result.Options) != 1 {
+		t.Fatalf("expected 1 option, got %+v", result.Options)
+	}
+	opt := result.Options[0]
+	if opt.URL != "https://x/1080-hls" || opt.AudioURL != "" || opt.MimeType != "application/x-mpegurl" {
+		t.Fatalf("muxed HLS should win over split merge, got %+v", opt)
+	}
+}
+
+func TestResolveHandlerNegativeCacheWithoutReason(t *testing.T) {
+	// 上游 502 不带结构化 reason 时,负缓存仍必须按失败处理:曾因用
+	// "reason != \"\"" 判定,零值结果被当成成功回放(200 + 空 options)。
+	swapResolveCache(t)
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error":"upstream broke"}`))
+	}))
+	defer srv.Close()
+	s := newResolveTestServer(t, srv.URL)
+
+	first := resolveRequest(t, s, "dQw4w9WgXcQ")
+	if first.Code != http.StatusBadGateway {
+		t.Fatalf("first resolve = %d, want 502", first.Code)
+	}
+	second := resolveRequest(t, s, "dQw4w9WgXcQ")
+	if second.Code != http.StatusBadGateway {
+		t.Fatalf("cached failure without reason = %d, want 502 (body=%s)", second.Code, second.Body.String())
+	}
+	if hits != 1 {
+		t.Fatalf("upstream hit %d times, want 1", hits)
+	}
+}
+
+func TestResolveSingleflightCoalescesConcurrentCalls(t *testing.T) {
+	// 同一 ID 的并发解析只能拉起一次 yt-dlp(vod_extractor 并发上限只有 2,
+	// 每次解析还消耗 cookies 寿命)。
+	swapResolveCache(t)
+	var hits int32
+	started := make(chan struct{})
+	var once sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		once.Do(func() { close(started) })
+		time.Sleep(150 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"id":"dQw4w9WgXcQ","title":"t","duration":10,"formats":[{"format_id":"18","url":"https://v.example/x.mp4","ext":"mp4","height":360,"fps":30,"vcodec":"avc1","acodec":"mp4a","protocol":"https"}]}`))
+	}))
+	defer srv.Close()
+	s := newResolveTestServer(t, srv.URL)
+
+	type result struct {
+		code int
+		body string
+	}
+	results := make(chan result, 2)
+	go func() {
+		rec := resolveRequest(t, s, "dQw4w9WgXcQ")
+		results <- result{rec.Code, rec.Body.String()}
+	}()
+	<-started
+	go func() {
+		rec := resolveRequest(t, s, "dQw4w9WgXcQ")
+		results <- result{rec.Code, rec.Body.String()}
+	}()
+	for i := 0; i < 2; i++ {
+		got := <-results
+		if got.code != http.StatusOK {
+			t.Fatalf("concurrent resolve = %d body=%s", got.code, got.body)
+		}
+	}
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Fatalf("upstream hit %d times, want 1 (singleflight)", n)
 	}
 }
 

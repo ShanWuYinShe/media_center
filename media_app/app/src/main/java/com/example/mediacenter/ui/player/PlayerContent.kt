@@ -9,9 +9,12 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Build
+import android.os.Bundle
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -24,8 +27,11 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -33,6 +39,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
@@ -43,6 +50,7 @@ import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.data.playbackStorageKey
 import com.example.mediacenter.log.AppLog
+import com.example.mediacenter.player.PlaybackMediaSourceFactory
 import com.example.mediacenter.player.PlaybackService
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
@@ -97,6 +105,9 @@ internal fun PlayerContent(
     // 上次加载流所属的分P,用于判定"换清晰度"与"换分P"
     var lastPage by remember { mutableIntStateOf(playbackResult.pages.currentPage) }
     val controlsFocus = remember { FocusRequester() }
+    // 控制条隐藏时承接遥控器焦点:否则唯一可聚焦的控件被移出组合,焦点
+    // 落回 Window 根,Box 上的 onPreviewKeyEvent 收不到事件,控制条再也唤不出。
+    val playerFocus = remember { FocusRequester() }
     // 多P视频的分P位置不能跨流恢复,只在单P视频上启用断点续播
     val canResume = playbackResult.pages.totalPages <= 1
     // 播放错误自动重试:签名地址过期/网络抖动最常见,首次错误自动重载一次
@@ -210,14 +221,37 @@ internal fun PlayerContent(
             }
         }
     }
+    // 播放器参数要"随时读到最新值":分P切换只改 playbackResult,不会重建
+    // 这个 effect;若闭包直接捕获参数,退出时会把位置写到首P的 key、并把
+    // 首P的页码写进观看历史。
+    val latestPlaybackResult by rememberUpdatedState(playbackResult)
+
+    // listener 挂载/摘除只跟随 controller 实例。**必须捕获 c 而不是在
+    // onDispose 里读 controller**:controller 由 null 变为实例时,旧 effect
+    // 的 onDispose 会先执行,此时读 controller 拿到的是刚连上的新实例,
+    // 会把它直接 release 掉(整个播放链路随之中断)。
     DisposableEffect(controller) {
-        controller?.addListener(playerListener)
+        val c = controller
+        c?.addListener(playerListener)
+        onDispose {
+            c?.removeListener(playerListener)
+            // 实例被替换(非退出)时释放旧 controller;退出路径由下面的
+            // Unit effect 统一保存位置并释放当前实例。
+            if (c != null && c !== controller) {
+                runCatching { c.release() }
+            }
+        }
+    }
+
+    // 页面级收尾:只在离开播放页时执行一次(Unit 不随 controller/分页变化)。
+    DisposableEffect(Unit) {
         onDispose {
             // 退出播放页前保存位置,保证"播放中途返回"也能续播。
             // 多P视频按页隔离存储(key 带 #pN),各页位置互不覆盖。
-            val posMs = controller?.currentPosition?.coerceAtLeast(0L) ?: 0L
-            val durMs = controller?.duration?.coerceAtLeast(0L) ?: 0L
-            val pagesInfo = playbackResult.pages
+            val c = controller
+            val posMs = c?.currentPosition?.coerceAtLeast(0L) ?: 0L
+            val durMs = c?.duration?.coerceAtLeast(0L) ?: 0L
+            val pagesInfo = latestPlaybackResult.pages
             PlaybackPositionStore.save(context, playbackStorageKey(videoId, pagesInfo.currentPage), posMs)
             // 回写观看历史(继续观看行):看完(距结尾不足 15s)的条目会被移除;
             // 多P回写绝对位置(前面各页时长累加)+ 最后观看页,继续观看点击后直达该页
@@ -230,8 +264,7 @@ internal fun PlayerContent(
                 if (totalPageSec > 0) totalPageSec else durMs / 1000,
                 page = pagesInfo.currentPage,
             )
-            controller?.removeListener(playerListener)
-            releaseOnce(controller)
+            releaseOnce(c)
             // 本 App 无后台播放需求:页面退出即停止播放服务
             context.stopService(Intent(context, PlaybackService::class.java))
         }
@@ -283,6 +316,28 @@ internal fun PlayerContent(
         val item = MediaItem.Builder()
             .setUri(stream.url)
             .apply { stream.mimeType?.let { setMimeType(it) } }
+            .apply {
+                // 音轨分离(YouTube 1080P+)与多段 durl(B 站老视频)所需的额外
+                // 地址经 extras 传给 PlaybackService,由 PlaybackMediaSourceFactory
+                // 在本地合成 Merging/Concatenating MediaSource
+                // (MediaController 不支持直接传 MediaSource)。
+                val extras = Bundle()
+                stream.audioUrl?.takeIf { it.isNotBlank() }?.let { audioUrl ->
+                    extras.putString(PlaybackMediaSourceFactory.EXTRA_AUDIO_URL, audioUrl)
+                    stream.audioMimeType?.takeIf { it.isNotBlank() }?.let {
+                        extras.putString(PlaybackMediaSourceFactory.EXTRA_AUDIO_MIME, it)
+                    }
+                }
+                stream.segments?.takeIf { it.size > 1 }?.let { segments ->
+                    extras.putStringArrayList(
+                        PlaybackMediaSourceFactory.EXTRA_SEGMENTS,
+                        ArrayList(segments),
+                    )
+                }
+                if (extras.size() > 0) {
+                    setMediaMetadata(MediaMetadata.Builder().setExtras(extras).build())
+                }
+            }
             .build()
         c.setMediaItem(item)
         c.prepare()
@@ -330,6 +385,20 @@ internal fun PlayerContent(
                     context,
                     playbackStorageKey(videoId, playbackResult.pages.currentPage),
                     pos,
+                )
+            }
+            // 每 30s 同步一次"继续观看"行:进程被杀时退出回写不会执行,
+            // 只靠退出保存会让首页进度长期停在打开播放页之前的状态。
+            if (isPlaying && tick % 60 == 0) {
+                val pages = playbackResult.pages
+                val offsetSec = pages.pageDurations.take(pages.currentPage).sum()
+                val totalSec = pages.pageDurations.sum()
+                WatchHistory.updatePosition(
+                    context,
+                    videoId,
+                    offsetSec + pos / 1000,
+                    if (totalSec > 0) totalSec else (dur / 1000),
+                    page = pages.currentPage,
                 )
             }
             delay(500)
@@ -399,9 +468,13 @@ internal fun PlayerContent(
             showControls = false
         }
     }
-    // 控制条显示时聚焦默认按钮
-    LaunchedEffect(showControls) {
-        if (showControls) controlsFocus.requestFocus()
+    // 控制条显示时聚焦默认按钮;隐藏时把焦点交给播放器根节点。
+    // overlayError/playerError 期间由错误层的重试按钮持有焦点,不要抢。
+    LaunchedEffect(showControls, overlayError, playerError, controller) {
+        if (controller == null || overlayError != null || playerError != null) return@LaunchedEffect
+        runCatching {
+            if (showControls) controlsFocus.requestFocus() else playerFocus.requestFocus()
+        }
     }
 
     // 断网恢复:播放错误源于网络时,网络可用后自动重试一次(解析 + 重新加载)
@@ -416,7 +489,14 @@ internal fun PlayerContent(
     // 服务连接失败 / 未就绪时给出明确反馈
     if (controllerFailed) {
         ErrorView(
-            message = "播放组件启动失败，请返回重试",
+            message = "播放组件启动失败",
+            autoFocusRetry = true,
+            // connectAttempts 归零触发 LaunchedEffect 重新连接;只清 Failed
+            // 标志不会重启连接流程,用户会卡在错误页。
+            onRetry = {
+                controllerFailed = false
+                connectAttempts = 0
+            },
             modifier = Modifier.fillMaxSize(),
         )
         return
@@ -427,22 +507,27 @@ internal fun PlayerContent(
     }
 
     if (playerError != null) {
-        ErrorView(
-            message = playerError!!,
-            autoFocusRetry = true,
-            onRetry = {
-                playerError = null
-                loadEpoch++
-                onRetryResolve()
-            },
-            modifier = Modifier.fillMaxSize(),
-        )
+        // 错误层叠在画面上,需要压暗底图才能读清文案
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.78f))) {
+            ErrorView(
+                message = playerError!!,
+                autoFocusRetry = true,
+                onRetry = {
+                    playerError = null
+                    loadEpoch++
+                    onRetryResolve()
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
         return
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .focusRequester(playerFocus)
+            .focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 if (event.key in CONTROL_KEYS && !showControls) {
@@ -476,12 +561,14 @@ internal fun PlayerContent(
         // 控制条与解析失败错误层互斥渲染：错误层盖在控制条上时，
         // 焦点可能落在被遮挡的控件上（看不见却拿到焦点）。
         if (overlayError != null) {
-            ErrorView(
-                message = overlayError,
-                onRetry = onRetryResolve,
-                autoFocusRetry = true,
-                modifier = Modifier.fillMaxSize(),
-            )
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.78f))) {
+                ErrorView(
+                    message = overlayError,
+                    onRetry = onRetryResolve,
+                    autoFocusRetry = true,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         } else if (showControls) {
             ControlsOverlay(
                 videoTitle = videoTitle,
@@ -494,6 +581,12 @@ internal fun PlayerContent(
                     if (controller?.isPlaying == true) controller?.pause() else controller?.play()
                 },
                 onSeek = { controller?.seekTo(it) },
+                // 相对快进/快退:以播放器当前位置为准,无需等 duration 就绪
+                onSeekBy = { delta ->
+                    controller?.let { c ->
+                        c.seekTo((c.currentPosition + delta).coerceAtLeast(0L))
+                    }
+                },
                 onSelectQuality = onSelectQuality,
                 onSelectPage = onSelectPage,
                 onBack = onBack,

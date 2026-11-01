@@ -75,7 +75,12 @@ data class PlaybackOption(
     val kind: String,
     val label: String,
     val url: String,
+    // 多段 durl(B 站个别老视频):按顺序拼接播放;单段时为 null。
+    val segments: List<String>? = null,
     val audioUrl: String? = null,
+    // 音视频分离时音轨的容器类型(audio/mp4、audio/webm);直链常无扩展名,
+    // 显式声明可让 ExoPlayer 直接选对提取器。
+    val audioMimeType: String? = null,
     val mimeType: String? = null,
     val headers: Map<String, String> = emptyMap(),
     val qn: Int = 0,

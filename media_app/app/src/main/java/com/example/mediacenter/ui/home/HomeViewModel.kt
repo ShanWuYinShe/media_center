@@ -8,6 +8,7 @@ import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.ProviderInfo
 import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.data.friendlyLoadMessage
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.ui.update.UpdateDialogState
 import com.example.mediacenter.update.AppUpdateHolder
@@ -56,7 +57,9 @@ class HomeViewModel(
         val timestamp: Long,
     )
 
-    private val firstPageCache = mutableMapOf<String, FirstPageCacheEntry>()
+    // 缓存写入发生在并行加载的多个协程里,用并发容器避免 HashMap 并发写损坏;
+    // 当前实现虽然都在主线程恢复,但调度器变更不应让缓存变成定时炸弹。
+    private val firstPageCache = java.util.concurrent.ConcurrentHashMap<String, FirstPageCacheEntry>()
 
     init {
         loadHome()
@@ -65,6 +68,8 @@ class HomeViewModel(
     }
 
     fun loadHome() {
+        // 凭证只影响清晰度,不能阻塞首页目录加载;后台刷新,失败静默降级
+        viewModelScope.launch { repository.refreshCredentials() }
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
@@ -95,12 +100,21 @@ class HomeViewModel(
                                 ) {
                                     cat.id to Result.success(cached.items)
                                 } else {
-                                    val result = runCatching { repository.catalogPage(cat.id).items.orEmpty() }
+                                    // 不能吞掉 CancellationException:切换 provider/退出首页会
+                                    // 取消本协程,吞掉后旧请求会被当成"失败分类"继续写状态,
+                                    // 出现旧 provider 的内容配新 currentProvider 的错配。
+                                    val result = try {
+                                        Result.success(repository.catalogPage(cat.id).items.orEmpty())
+                                    } catch (e: kotlinx.coroutines.CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        Result.failure(e)
+                                    }
                                     result.onSuccess {
                                         firstPageCache[cat.id] = FirstPageCacheEntry(provider, it, System.currentTimeMillis())
                                         // 缓存有上限:超限淘汰最早条目(分类数量有限,防御性兜底)
                                         while (firstPageCache.size > MaxFirstPageCacheEntries) {
-                                            firstPageCache.remove(firstPageCache.keys.first())
+                                            firstPageCache.keys.firstOrNull()?.let(firstPageCache::remove)
                                         }
                                     }
                                     cat.id to result
@@ -125,7 +139,10 @@ class HomeViewModel(
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 // 原始异常常是英文技术信息,直接上屏对 TV 用户不友好;记日志、给固定文案
                 AppLog.e("Home", "loadHome failed: ${e.message}", e)
-                _uiState.value = _uiState.value.copy(isLoading = false, error = "首页加载失败，请重试")
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = e.friendlyLoadMessage("首页加载失败，请重试"),
+                )
             }
         }
     }
@@ -133,6 +150,15 @@ class HomeViewModel(
     /** 切换视频源后重新加载首页内容。 */
     fun selectProvider(provider: String) {
         repository.setProvider(provider)
+        // 先清空旧源内容:否则新源加载期间,旧分类/旧 Hero 会顶着新 provider
+        // 标签短暂显示(甚至在新源加载失败时一直残留)。
+        _uiState.value = _uiState.value.copy(
+            categories = emptyList(),
+            categoryVideos = emptyMap(),
+            categoryErrors = emptySet(),
+            isLoading = true,
+            error = null,
+        )
         loadHome()
     }
 

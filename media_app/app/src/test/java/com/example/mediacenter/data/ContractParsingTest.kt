@@ -131,6 +131,20 @@ class ContractParsingTest {
     }
 
     @Test
+    fun `youtube resolve 解析音视频分离字段`() {
+        // 1080P+ 走 DASH:视频轨 url + 独立 audioUrl/audioMimeType
+        val resp = json.decodeFromString<YouTubeResolveResponse>(
+            "{\"options\":[{\"id\":\"yt-a-137-a140\",\"kind\":\"vod\",\"label\":\"1080P\"," +
+                "\"url\":\"https://x/v\",\"audioUrl\":\"https://x/a\",\"audioMimeType\":\"audio/mp4\"," +
+                "\"mimeType\":\"video/mp4\",\"headers\":{},\"qn\":1080}],\"availableQualities\":[{\"qn\":1080,\"label\":\"1080P\"}]}",
+        )
+        val option = resp.options.single()
+        assertEquals("https://x/a", option.audioUrl)
+        assertEquals("audio/mp4", option.audioMimeType)
+        assertEquals(1080, option.qn)
+    }
+
+    @Test
     fun `youtube resolve 缺 durationSeconds 时默认 0`() {
         // durationSeconds 在服务端是 omitempty,可能缺省
         val resp = json.decodeFromString<YouTubeResolveResponse>(

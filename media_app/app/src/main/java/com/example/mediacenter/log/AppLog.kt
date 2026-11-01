@@ -64,13 +64,16 @@ object AppLog {
 
     fun w(tag: String, message: String, error: Throwable? = null) {
         val safe = redact(message)
-        if (error != null) Log.w(fullTag(tag), safe, error) else Log.w(fullTag(tag), safe)
+        // 不能把 Throwable 直接交给 Logcat:异常 message 里常带签名直链
+        // (如 InvalidResponseCodeException 的 URL),Logcat 会原样输出,
+        // 与"签名地址不落盘"的合规口径冲突。栈文本先 redact 再输出。
+        Log.w(fullTag(tag), if (error == null) safe else "$safe\n${redact(Log.getStackTraceString(error))}")
         appendToFile("W", tag, safe, error)
     }
 
     fun e(tag: String, message: String, error: Throwable? = null) {
         val safe = redact(message)
-        if (error != null) Log.e(fullTag(tag), safe, error) else Log.e(fullTag(tag), safe)
+        Log.e(fullTag(tag), if (error == null) safe else "$safe\n${redact(Log.getStackTraceString(error))}")
         appendToFile("E", tag, safe, error)
     }
 
@@ -79,7 +82,7 @@ object AppLog {
      */
     fun logFatalBlocking(tag: String, message: String, error: Throwable) {
         val safe = redact(message)
-        Log.e(fullTag(tag), safe, error)
+        Log.e(fullTag(tag), "$safe\n${redact(Log.getStackTraceString(error))}")
         writeLine(format("E", tag, safe, error))
     }
 

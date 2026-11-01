@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import androidx.core.content.edit
 import com.example.mediacenter.BuildConfig
 import com.example.mediacenter.log.AppLog
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class MediaRepository(
     private val api: MediaApi,
@@ -23,7 +25,6 @@ class MediaRepository(
     private var lastCredentialsRefreshMs = 0L
 
     suspend fun providers(): List<ProviderInfo> {
-        refreshCredentials()
         val items = api.providers().items.orEmpty()
         if (items.isNotEmpty() && !providerInitialized.getAndSet(true)) {
             // 仅当没有持久化选择、或持久化的 provider 已从列表下线时才自动选
@@ -58,9 +59,13 @@ class MediaRepository(
 
     // 从 server 拉取 provider 凭证并注入到对应的 API 客户端。
     // 失败时静默降级为无凭证模式(不影响基本播放);TTL 内不重复拉取。
-    suspend fun refreshCredentials() {
+    // Mutex 防并发首拉:首页与搜索页可能同时触发,TTL 检查在请求前,
+    // 没有互斥时两条请求都会穿透。
+    private val credentialsMutex = Mutex()
+
+    suspend fun refreshCredentials() = credentialsMutex.withLock {
         val now = System.currentTimeMillis()
-        if (now - lastCredentialsRefreshMs < CREDENTIALS_REFRESH_TTL_MS) return
+        if (now - lastCredentialsRefreshMs < CREDENTIALS_REFRESH_TTL_MS) return@withLock
         try {
             val response = api.credentials()
             for (cred in response.credentials.orEmpty()) {
@@ -80,12 +85,25 @@ class MediaRepository(
     suspend fun categories(provider: String): List<ContentCategory> = api.categories(provider).items.orEmpty()
 
     // 拉取某个分类某一页的 approved 视频列表(server 只提供目录数据,无搜索接口)。
-    suspend fun catalogPage(categoryId: String, page: Int = 1, pageSize: Int = 18): VideosResponse =
-        api.categoryVideos(currentProvider, categoryId, page, pageSize)
+    // 时长筛选传 null 表示该侧不限制;翻页时必须原样透传同一组条件。
+    suspend fun catalogPage(
+        categoryId: String,
+        page: Int = 1,
+        pageSize: Int = 18,
+        minDurationSeconds: Long? = null,
+        maxDurationSeconds: Long? = null,
+    ): VideosResponse = api.categoryVideos(
+        currentProvider,
+        categoryId,
+        page,
+        pageSize,
+        minDurationSeconds,
+        maxDurationSeconds,
+    )
 
     /** 服务端搜索(当前 provider 内,approved 目录)。失败时由调用方回退本地过滤。 */
-    suspend fun search(query: String): List<VideoSummary> =
-        api.search(query, currentProvider).items.orEmpty()
+    suspend fun search(query: String, page: Int = 1, pageSize: Int = 30): SearchResponse =
+        api.search(query, currentProvider, page, pageSize)
 
     /**
      * YouTube 实时搜索:不走 catalog,直接调 server 的 YouTube 通道(ytsearch 实时搜索)。

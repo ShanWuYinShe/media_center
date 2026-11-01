@@ -1,5 +1,6 @@
 package com.example.mediacenter.ui.home
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,12 +24,15 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.tv.material3.Border
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
 import coil.compose.AsyncImage
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.CardGray
+import com.example.mediacenter.ui.theme.CardShape
+import com.example.mediacenter.ui.theme.FocusBorder
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.util.formatSeconds
 
@@ -47,11 +51,17 @@ fun VideoCard(
         modifier = modifier.aspectRatio(16f / 10f),
         scale = CardDefaults.scale(focusedScale = 1.05f),
         colors = CardDefaults.colors(containerColor = CardGray),
+        // 项目 TV 焦点态:近白 2dp 外框 + 放大;封面铺满时仅靠放大在暗色
+        // 画面上不够清晰,边框让"当前焦点在哪"一眼可见。
+        border = CardDefaults.border(
+            focusedBorder = Border(BorderStroke(2.dp, FocusBorder), shape = CardShape),
+        ),
     ) {
         Box {
             AsyncImage(
                 model = video.thumbnailUrl,
-                contentDescription = video.title,
+                // 标题文本已经在卡片内,图片对读屏是装饰性的,重复朗读只会打扰
+                contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
                 // 缩略图加载中/失败时以玻璃灰占位,避免空白卡片

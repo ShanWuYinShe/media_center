@@ -1,5 +1,6 @@
 package com.example.mediacenter.data
 
+import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
@@ -82,6 +83,20 @@ internal fun friendlyNetworkMessage(category: NetworkErrorCategory): String = wh
         "服务器拒绝连接，请稍后重试"
     NetworkErrorCategory.GENERIC_NETWORK ->
         "网络连接失败，请检查网络后重试"
+}
+
+/**
+ * 把加载失败异常转成可上屏的中文文案:MediaApi 的 IOException 已经是
+ * 分类后的友好提示(超时/TLS/DNS),ApiException 的 message 来自服务端
+ * 错误包络;只有未知异常才回退到调用方给的泛化文案,不把英文技术细节
+ * 直接展示给 TV 用户。
+ */
+fun Throwable.friendlyLoadMessage(fallback: String): String {
+    val raw = when (this) {
+        is ApiException, is IOException -> message
+        else -> null
+    }
+    return raw?.takeIf { it.isNotBlank() } ?: fallback
 }
 
 class ApiException(

@@ -13,15 +13,15 @@ import (
 
 func TestResolveCachePositiveLookup(t *testing.T) {
 	rc := &resolveCache{entries: make(map[string]resolveCacheEntry)}
-	if _, _, hit := rc.lookup("abc"); hit {
+	if _, _, _, hit := rc.lookup("abc"); hit {
 		t.Fatal("empty cache must miss")
 	}
 	rc.store("abc", resolveCacheEntry{
 		result:    PlaybackResultResponse{DurationSeconds: 42},
 		expiresAt: time.Now().Add(resolvePositiveCacheTTL),
 	})
-	res, reason, hit := rc.lookup("abc")
-	if !hit || reason != "" || res.DurationSeconds != 42 {
+	res, reason, failure, hit := rc.lookup("abc")
+	if !hit || failure || reason != "" || res.DurationSeconds != 42 {
 		t.Fatalf("positive hit broken: hit=%v reason=%q res=%+v", hit, reason, res)
 	}
 }
@@ -33,8 +33,8 @@ func TestResolveCacheNegativeHit(t *testing.T) {
 		reason:    "bot_check",
 		expiresAt: time.Now().Add(resolveNegativeCacheTTL),
 	})
-	_, reason, hit := rc.lookup("abc")
-	if !hit || reason != "bot_check" {
+	_, reason, failure, hit := rc.lookup("abc")
+	if !hit || !failure || reason != "bot_check" {
 		t.Fatalf("negative hit broken: hit=%v reason=%q", hit, reason)
 	}
 }
@@ -45,7 +45,7 @@ func TestResolveCacheExpiryDropsEntry(t *testing.T) {
 		result:    PlaybackResultResponse{},
 		expiresAt: time.Now().Add(-time.Second), // 已过期
 	})
-	if _, _, hit := rc.lookup("abc"); hit {
+	if _, _, _, hit := rc.lookup("abc"); hit {
 		t.Fatal("expired entry must miss")
 	}
 	if len(rc.entries) != 0 {
@@ -70,10 +70,10 @@ func TestResolveCacheEvictsOldestAtCapacity(t *testing.T) {
 	if len(rc.entries) > maxResolveCacheEntries {
 		t.Fatalf("cache cap exceeded: %d", len(rc.entries))
 	}
-	if _, _, hit := rc.lookup(firstID); hit {
+	if _, _, _, hit := rc.lookup(firstID); hit {
 		t.Fatal("oldest entry should have been evicted")
 	}
-	if _, _, hit := rc.lookup("newguy"); !hit {
+	if _, _, _, hit := rc.lookup("newguy"); !hit {
 		t.Fatal("newest entry should survive")
 	}
 }

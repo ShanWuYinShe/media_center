@@ -31,6 +31,10 @@ class PlaybackService : MediaSessionService() {
             .setDefaultRequestProperties(BILI_CDN_HEADERS - "User-Agent")
             // B 站 CDN 个别直链会 http↔https 302,默认不跟随跨协议重定向会直接加载失败
             .setAllowCrossProtocolRedirects(true)
+        // 视频轨 + 独立音轨(YouTube 1080P+ 的 DASH 形态)在服务端本地合流;
+        // MediaController 只能传 MediaItem,合流决策因此放在 MediaSource 层。
+        val defaultFactory = DefaultMediaSourceFactory(httpFactory)
+            .setLoadErrorHandlingPolicy(CappedLoadErrorHandlingPolicy(maxRetries = 2))
         val player = ExoPlayer.Builder(this)
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -42,10 +46,7 @@ class PlaybackService : MediaSessionService() {
                 false,
             )
             .setHandleAudioBecomingNoisy(true)
-            .setMediaSourceFactory(
-                DefaultMediaSourceFactory(httpFactory)
-                    .setLoadErrorHandlingPolicy(CappedLoadErrorHandlingPolicy(maxRetries = 2)),
-            )
+            .setMediaSourceFactory(PlaybackMediaSourceFactory(defaultFactory))
             .build()
         mediaSession = MediaSession.Builder(this, player).build()
         AppLog.i("Player", "PlaybackService created")

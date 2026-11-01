@@ -10,6 +10,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
+import com.example.mediacenter.ui.theme.tvButtonFocusScale
+import com.example.mediacenter.ui.theme.tvPillButtonBorder
+import com.example.mediacenter.ui.theme.tvPillButtonShape
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.AppleBlueDark
 import com.example.mediacenter.ui.theme.CardGray
@@ -22,6 +25,9 @@ internal fun SelectChip(
     onClick: () -> Unit,
 ) {
     Button(
+        shape = tvPillButtonShape(),
+        border = tvPillButtonBorder(),
+        scale = tvButtonFocusScale(),
         onClick = onClick,
         // 宽度上限让 maxLines/Ellipsis 真正生效:LazyRow 里无约束时超长分P名会宽出整屏
         modifier = Modifier.requiredHeight(48.dp).widthIn(max = 240.dp),

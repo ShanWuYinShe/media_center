@@ -49,6 +49,8 @@ class PlayerViewModel(
      * 未命中(如 bilibili,每次解析只含当前档一条流)仍按新 qn 重新解析。
      */
     fun selectQuality(qn: Int) {
+        // 重复点当前档位不重新解析(YouTube 解析虽被服务端缓存,仍是一次网络请求)
+        if (qn == currentQn) return
         val current = _uiState.value.playbackResult
         val active = current?.options?.firstOrNull()
         val match = current?.options?.firstOrNull { it.qn == qn }
@@ -89,6 +91,9 @@ class PlayerViewModel(
                 videoId
             }
             val result = repository.resolvePlayback(targetId, qn)
+            // 记录服务端实际给出的清晰度(可能因会员/片源自动降级),UI 选中态与
+            // 后续"重复点当前档位"判断都以它为准。
+            currentQn = result.options.firstOrNull()?.qn ?: qn
             _uiState.value = _uiState.value.copy(playbackResult = result, isLoading = false)
         } catch (e: CancellationException) {
             throw e

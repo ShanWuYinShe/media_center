@@ -332,3 +332,72 @@ func TestCatalogSearchApprovedOnlyReturnsApproved(t *testing.T) {
 		t.Fatalf("provider filter should exclude other providers: total=%d", total)
 	}
 }
+
+func TestCatalogApprovedPageDurationFilter(t *testing.T) {
+	c := openTestCatalog(t)
+	for id, dur := range map[string]int64{"BVshort": 5 * 60, "BVmid": 20 * 60, "BVlong": 60 * 60} {
+		mustUpsert(t, c, "bilibili", id, id, dur)
+		approveTo(t, c, "movies", "bilibili", id)
+	}
+
+	cases := []struct {
+		name  string
+		bound DurationBounds
+		want  []string
+	}{
+		{"all", DurationBounds{}, []string{"BVlong", "BVmid", "BVshort"}},
+		{"short", DurationBounds{MaxSec: 599}, []string{"BVshort"}},
+		{"medium", DurationBounds{MinSec: 600, MaxSec: 2699}, []string{"BVmid"}},
+		{"long", DurationBounds{MinSec: 2700}, []string{"BVlong"}},
+		{"medium+long", DurationBounds{MinSec: 600}, []string{"BVlong", "BVmid"}},
+		{"empty-range", DurationBounds{MinSec: 7200}, nil},
+	}
+	for _, tc := range cases {
+		items, total, err := c.ApprovedPageForProviderFiltered("bilibili", "movies", 1, 10, tc.bound)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if total != len(tc.want) {
+			t.Fatalf("%s: total = %d, want %d", tc.name, total, len(tc.want))
+		}
+		got := idsOf(items)
+		if len(got) != len(tc.want) {
+			t.Fatalf("%s: ids = %v, want %v", tc.name, got, tc.want)
+		}
+		for i := range tc.want {
+			if got[i] != tc.want[i] {
+				t.Fatalf("%s: ids = %v, want %v", tc.name, got, tc.want)
+			}
+		}
+	}
+}
+
+func TestCatalogCountMembersMatchesList(t *testing.T) {
+	c := openTestCatalog(t)
+	for _, id := range []string{"BV1a", "BV1b", "BV1c"} {
+		mustUpsert(t, c, "bilibili", id, id, 60)
+		approveTo(t, c, "movies", "bilibili", id)
+	}
+	// 加一条 pending 验证 status 过滤
+	mustUpsert(t, c, "bilibili", "BVpend", "pend", 60)
+	if _, err := c.AddPendingMember("movies", "bilibili", "BVpend", 1); err != nil {
+		t.Fatalf("add pending: %v", err)
+	}
+	for _, tc := range []struct {
+		category, status string
+		want             int
+	}{
+		{"movies", "", 4},
+		{"movies", "approved", 3},
+		{"movies", "pending", 1},
+		{"other", "", 0},
+	} {
+		got, err := c.CountMembers(tc.category, tc.status)
+		if err != nil {
+			t.Fatalf("count %s/%s: %v", tc.category, tc.status, err)
+		}
+		if got != tc.want {
+			t.Fatalf("count %s/%s = %d, want %d", tc.category, tc.status, got, tc.want)
+		}
+	}
+}

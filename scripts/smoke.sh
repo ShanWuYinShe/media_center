@@ -2,7 +2,7 @@
 # media_server 冒烟检查：对部署实例的核心只读接口做 curl + JSON 断言。
 #
 # 用法: scripts/smoke.sh <base-url> [vod-extractor-url]
-#   例: scripts/smoke.sh https://yinghuoren.com/api/media
+#   例: scripts/smoke.sh https://media.chaoset.com/api/v1
 #       scripts/smoke.sh http://localhost:8787 http://192.168.1.10:8790
 #
 # 覆盖端点（见 media_server/API.md）:
@@ -22,7 +22,7 @@ set -uo pipefail
 BASE="${1:-}"
 VOD_BASE="${2:-}"
 if [[ -z "${BASE}" ]] || [[ "${BASE}" == "-h" ]] || [[ "${BASE}" == "--help" ]]; then
-  echo "用法: scripts/smoke.sh <base-url> [vod-extractor-url]（如 https://yinghuoren.com/api/media http://host:8790）" >&2
+  echo "用法: scripts/smoke.sh <base-url> [vod-extractor-url]（如 https://media.chaoset.com/api/v1 http://host:8790）" >&2
   [[ -z "${BASE}" ]] && exit 2
   exit 0
 fi

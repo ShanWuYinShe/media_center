@@ -11,16 +11,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -31,19 +32,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
+import com.example.mediacenter.ui.theme.tvButtonFocusScale
+import com.example.mediacenter.ui.theme.tvPillButtonBorder
+import com.example.mediacenter.ui.theme.tvPillButtonShape
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.mediacenter.BuildConfig
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.PlaybackPositionStore
 import com.example.mediacenter.data.WatchHistory
+import com.example.mediacenter.data.providerDisplayName
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.update.AppUpdateHolder
 import com.example.mediacenter.update.UpdateCheckResult
+import com.example.mediacenter.ui.components.TvDialogButton
 import com.example.mediacenter.ui.components.TvIconButton
 import com.example.mediacenter.ui.components.TvScrollableText
 import com.example.mediacenter.ui.theme.AppleBlue
@@ -134,13 +141,17 @@ fun SettingsScreen(onBack: () -> Unit) {
             title = { Text(action.title, color = TextPrimary) },
             text = { Text(action.message, color = TextSecondary) },
             confirmButton = {
-                TextButton(onClick = {
-                    action.onConfirm()
-                    confirmAction = null
-                }) { Text("确认", color = TextPrimary) }
+                TvDialogButton(
+                    label = "确认",
+                    primary = true,
+                    onClick = {
+                        action.onConfirm()
+                        confirmAction = null
+                    },
+                )
             },
             dismissButton = {
-                TextButton(onClick = { confirmAction = null }) { Text("取消", color = TextSecondary) }
+                TvDialogButton(label = "取消", onClick = { confirmAction = null })
             },
             containerColor = CardGray,
         )
@@ -161,7 +172,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 )
             },
             confirmButton = {
-                TextButton(onClick = { showLogs = false }) { Text("关闭", color = TextPrimary) }
+                TvDialogButton(label = "关闭", primary = true, onClick = { showLogs = false })
             },
             containerColor = CardGray,
         )
@@ -187,6 +198,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             item {
                 SectionTitle("关于")
                 InfoRow("版本", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                InfoRow("视频源", providerDisplayName(MediaRepositoryHolder.repository.currentProvider))
                 InfoRow("服务端", BuildConfig.MEDIA_SERVER_URL)
                 InfoRow("服务端版本", serverVersion)
             }
@@ -287,9 +299,10 @@ private data class ConfirmAction(
 private fun SectionTitle(text: String) {
     Text(
         text = text,
-        color = TextTertiary,
-        fontSize = 13.sp,
-        modifier = Modifier.padding(horizontal = ScreenHorizontalPadding, vertical = 12.dp),
+        color = TextSecondary,
+        style = MaterialTheme.typography.labelLarge,
+        letterSpacing = 1.sp,
+        modifier = Modifier.padding(horizontal = ScreenHorizontalPadding, vertical = 10.dp),
     )
 }
 
@@ -307,7 +320,8 @@ private fun InfoRow(label: String, value: String) {
             color = TextPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.width(420.dp),
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(1f),
         )
     }
 }
@@ -315,11 +329,18 @@ private fun InfoRow(label: String, value: String) {
 @Composable
 private fun ActionRow(label: String, enabled: Boolean = true, onClick: () -> Unit) {
     Button(
+        shape = tvPillButtonShape(),
+        border = tvPillButtonBorder(),
+        scale = tvButtonFocusScale(),
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenHorizontalPadding, vertical = 6.dp).requiredHeight(48.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = ScreenHorizontalPadding, vertical = 2.dp)
+            .requiredHeight(52.dp),
         colors = ButtonDefaults.colors(
-            containerColor = CardGray,
+            // 透明底 + 行内分隔:设置项像"列表",焦点态仍用统一 Apple Blue
+            containerColor = CardGray.copy(alpha = 0.6f),
             focusedContainerColor = AppleBlue,
             contentColor = TextPrimary,
             focusedContentColor = TextPrimary,
@@ -331,7 +352,13 @@ private fun ActionRow(label: String, enabled: Boolean = true, onClick: () -> Uni
             color = if (enabled) TextPrimary else TextTertiary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            imageVector = Icons.Default.KeyboardArrowRight,
+            contentDescription = null,
+            tint = if (enabled) TextSecondary else TextTertiary,
+            modifier = Modifier.size(20.dp),
         )
     }
 }

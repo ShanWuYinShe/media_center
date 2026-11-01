@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -17,6 +16,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.mediacenter.data.AppUpdateInfo
+import com.example.mediacenter.ui.components.TvDialogButton
 import com.example.mediacenter.ui.components.TvScrollableText
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.CardGray
@@ -111,34 +111,32 @@ fun UpdateDialog(
         },
         confirmButton = {
             when (state) {
-                is UpdateDialogState.Available -> TextButton(
+                is UpdateDialogState.Available -> TvDialogButton(
+                    label = "更新",
+                    primary = true,
                     onClick = onStartDownload,
                     modifier = Modifier.focusRequester(primaryFocus),
-                ) {
-                    Text("更新", color = TextPrimary)
-                }
-                is UpdateDialogState.Downloading -> TextButton(onClick = {}, enabled = false) {
-                    Text("下载中", color = TextSecondary)
-                }
-                is UpdateDialogState.Failed -> TextButton(
+                )
+                is UpdateDialogState.Downloading -> TvDialogButton(
+                    label = "下载中",
+                    onClick = {},
+                    enabled = false,
+                )
+                is UpdateDialogState.Failed -> TvDialogButton(
+                    label = "重试",
+                    primary = true,
                     onClick = onRetryDownload,
                     modifier = Modifier.focusRequester(primaryFocus),
-                ) {
-                    Text("重试", color = TextPrimary)
-                }
+                )
             }
         },
         dismissButton = {
             when {
                 state !is UpdateDialogState.Downloading -> {
-                    TextButton(onClick = onDismiss) {
-                        Text("稍后", color = TextSecondary)
-                    }
+                    TvDialogButton(label = "稍后", onClick = onDismiss)
                 }
                 allowDismissDuringDownload -> {
-                    TextButton(onClick = onDismiss) {
-                        Text("后台下载", color = TextSecondary)
-                    }
+                    TvDialogButton(label = "后台下载", onClick = onDismiss)
                 }
             }
         },

@@ -2,19 +2,32 @@ package com.example.mediacenter.ui.search
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.requiredHeightIn
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -22,31 +35,50 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Button
+import androidx.tv.material3.ButtonDefaults
+import com.example.mediacenter.ui.theme.tvButtonFocusScale
+import com.example.mediacenter.ui.theme.tvPillButtonBorder
+import com.example.mediacenter.ui.theme.tvPillButtonShape
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.data.providerDisplayName
+import com.example.mediacenter.ui.components.EmptyStateView
+import com.example.mediacenter.ui.components.ErrorView
+import com.example.mediacenter.ui.components.LoadingIndicator
+import com.example.mediacenter.ui.home.VideoCard
+import com.example.mediacenter.ui.player.SelectChip
 import com.example.mediacenter.ui.theme.AppleBlue
+import com.example.mediacenter.ui.theme.CardGray
 import com.example.mediacenter.ui.theme.CardSpacing
 import com.example.mediacenter.ui.theme.DividerGray
-import com.example.mediacenter.ui.components.ErrorView
-import com.example.mediacenter.ui.home.VideoCard
-import com.example.mediacenter.ui.components.LoadingIndicator
-import com.example.mediacenter.ui.player.SelectChip
 import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
 import com.example.mediacenter.ui.theme.TextPrimary
+import com.example.mediacenter.ui.theme.TextSecondary
 import com.example.mediacenter.ui.theme.TextTertiary
 import com.example.mediacenter.util.NetworkRestoreEffect
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 // 搜索热词:TV 上用方向键输入很痛苦,空态展示常用词一键点选。
 // 与 legacy 版保持一致,后续可随 provider 演进。
 private val SEARCH_HOT_KEYWORDS = listOf(
     "动作", "喜剧", "科幻", "恐怖", "爱情", "悬疑",
     "国产", "港片", "好莱坞", "纪录", "战争", "动画",
+)
+
+// YouTube 的检索面比影视目录宽;复用电影类型热词会让用户以为搜不到别的内容。
+private val YOUTUBE_HOT_KEYWORDS = listOf(
+    "音乐", "纪录片", "科技", "旅行", "美食", "学习", "游戏", "电影",
 )
 
 @Composable
@@ -56,6 +88,7 @@ fun SearchScreen(
     viewModel: SearchViewModel = viewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val provider = MediaRepositoryHolder.repository.currentProvider
 
     BackHandler(onBack = onBack)
 
@@ -72,8 +105,18 @@ fun SearchScreen(
             value = state.query,
             onValueChange = { viewModel.search(it) },
             modifier = Modifier.fillMaxWidth().requiredHeightIn(min = 56.dp).focusRequester(searchFocus),
-            placeholder = { Text("搜索视频...", color = TextTertiary) },
+            placeholder = { Text("搜索视频 / 片名 / 关键词", color = TextTertiary) },
+            textStyle = MaterialTheme.typography.bodyLarge,
             singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { viewModel.search(state.query) }),
+            trailingIcon = {
+                if (state.query.isNotEmpty()) {
+                    IconButton(onClick = { viewModel.search("") }) {
+                        Icon(Icons.Default.Close, contentDescription = "清除搜索", tint = TextSecondary)
+                    }
+                }
+            },
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = AppleBlue,
                 unfocusedBorderColor = DividerGray,
@@ -83,18 +126,33 @@ fun SearchScreen(
             ),
         )
         Spacer(Modifier.height(12.dp))
+        // 剩余高度交给结果区:网格/空态/加载态都在同一块可视区里排布,
+        // 避免 fillMaxSize 抢整屏约束导致内容被顶出屏幕。
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
         when {
             state.isSearching -> LoadingIndicator()
-            state.error != null -> ErrorView(message = state.error!!, modifier = Modifier.fillMaxSize())
-            state.query.length < 2 -> {
+            state.error != null -> ErrorView(
+                message = state.error!!,
+                modifier = Modifier.fillMaxSize(),
+                onRetry = { viewModel.search(state.query) },
+                autoFocusRetry = true,
+            )
+            state.query.length < 2 -> Column(modifier = Modifier.fillMaxSize()) {
                 Text(
-                    "\u8F93\u5165\u81F3\u5C11 2 \u4E2A\u5B57\u7B26\u641C\u7D22\u89C6\u9891",
-                    color = TextTertiary,
-                    modifier = Modifier.padding(vertical = 24.dp),
+                    "输入至少 2 个字符搜索视频",
+                    color = TextSecondary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(vertical = 20.dp),
                 )
                 // 热门搜索词:一键点选,免去方向键逐字输入。
-                Text("\u70ED\u95E8\u641C\u7D22", color = TextTertiary, modifier = Modifier.padding(bottom = 12.dp))
-                SEARCH_HOT_KEYWORDS.chunked(6).forEach { rowWords ->
+                Text(
+                    "热门搜索 · ${providerDisplayName(provider)}",
+                    color = TextTertiary,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
+                val hotKeywords = if (provider == "youtube") YOUTUBE_HOT_KEYWORDS else SEARCH_HOT_KEYWORDS
+                hotKeywords.chunked(6).forEach { rowWords ->
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -105,29 +163,99 @@ fun SearchScreen(
                     }
                 }
             }
-            state.results.isEmpty() -> {
-                Text(
-                    "\u672A\u627E\u5230\u76F8\u5173\u89C6\u9891",
-                    color = TextTertiary,
-                    modifier = Modifier.padding(vertical = 24.dp),
-                )
-            }
-            else -> {
+            state.results.isEmpty() -> EmptyStateView(
+                message = "没有找到相关视频",
+                detail = "换个关键词或视频源再试试",
+                actionLabel = "清空搜索",
+                onAction = { viewModel.search("") },
+            )
+            else -> Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "搜索结果",
+                        color = TextSecondary,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        buildString {
+                            append("  ·  ")
+                            if (state.total > state.results.size) {
+                                append("已加载 ${state.results.size} / 共 ${state.total} 条")
+                            } else {
+                                append("${state.results.size} 条")
+                            }
+                            append(" · ${providerDisplayName(provider)}")
+                        },
+                        color = TextTertiary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 // 海报网格与首页视觉一致(纯文字行在 10ft 下识别度差、观感突兀);
                 // GridCells.Adaptive 让卡片宽度自适应 720p/1080p/4K。
+                val gridState = rememberLazyGridState()
+                // 接近底部时拉下一页(历史实现只取第一页,结果被硬截断在 20 条)
+                LaunchedEffect(gridState) {
+                    snapshotFlow {
+                        val layout = gridState.layoutInfo
+                        (layout.visibleItemsInfo.lastOrNull()?.index ?: -1) to layout.totalItemsCount
+                    }
+                        .distinctUntilChanged()
+                        .collect { (lastVisible, count) ->
+                            if (lastVisible >= 0 && count > 0 && lastVisible >= count - 4) {
+                                viewModel.loadMore()
+                            }
+                        }
+                }
                 LazyVerticalGrid(
-                    columns = GridCells.Adaptive(280.dp),
+                    columns = GridCells.Adaptive(240.dp),
+                    state = gridState,
                     horizontalArrangement = Arrangement.spacedBy(CardSpacing),
                     verticalArrangement = Arrangement.spacedBy(CardSpacing),
                     contentPadding = PaddingValues(bottom = 32.dp),
                     // 返回搜索结果时焦点回到原结果卡
-                    modifier = Modifier.fillMaxSize().focusRestorer(),
+                    modifier = Modifier.weight(1f).fillMaxWidth().focusRestorer(),
                 ) {
                     items(state.results, key = { it.id }) { video ->
                         VideoCard(video = video, onClick = { onVideoClick(video) })
                     }
+                    if (state.isLoadingMore || state.loadMoreFailed) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (state.loadMoreFailed) {
+                                    Button(
+                                        shape = tvPillButtonShape(),
+                                        border = tvPillButtonBorder(),
+                                        scale = tvButtonFocusScale(),
+                                        onClick = viewModel::retryLoadMore,
+                                        modifier = Modifier.requiredWidth(200.dp).requiredHeight(48.dp),
+                                        colors = ButtonDefaults.colors(
+                                            containerColor = CardGray,
+                                            focusedContainerColor = AppleBlue,
+                                            contentColor = TextPrimary,
+                                            focusedContentColor = TextPrimary,
+                                        ),
+                                    ) {
+                                        Text("重试加载", color = TextPrimary)
+                                    }
+                                } else {
+                                    CircularProgressIndicator(
+                                        color = AppleBlue,
+                                        modifier = Modifier.requiredSize(32.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
+        }
         }
     }
 }

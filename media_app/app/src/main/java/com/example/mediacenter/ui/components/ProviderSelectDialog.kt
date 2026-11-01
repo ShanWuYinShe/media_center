@@ -1,4 +1,6 @@
 package com.example.mediacenter.ui.components
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -12,19 +14,21 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
+import com.example.mediacenter.ui.theme.tvButtonFocusScale
+import com.example.mediacenter.ui.theme.tvPillButtonBorder
+import com.example.mediacenter.ui.theme.tvPillButtonShape
 import com.example.mediacenter.data.ProviderInfo
+import com.example.mediacenter.ui.components.TvDialogButton
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.AppleBlueDark
 import com.example.mediacenter.ui.theme.CardGray
 import com.example.mediacenter.ui.theme.TextPrimary
-import com.example.mediacenter.ui.theme.UiIcons
 import com.example.mediacenter.ui.theme.TextSecondary
 
 // 视频源切换弹层:仅当 server 返回多个 provider 时由首页展示。
@@ -46,6 +50,9 @@ fun ProviderSelectDialog(
             ) {
                 providers.forEach { provider ->
                     Button(
+                        shape = tvPillButtonShape(),
+                        border = tvPillButtonBorder(),
+                        scale = tvButtonFocusScale(),
                         onClick = { onSelect(provider.id) },
                         modifier = Modifier.fillMaxWidth().requiredHeight(48.dp),
                         colors = ButtonDefaults.colors(
@@ -60,7 +67,7 @@ fun ProviderSelectDialog(
                         // 用自绘矢量图标,不用 Unicode "✓" 拼进文本(字体 fallback 风格不一)。
                         if (provider.id == currentProvider) {
                             Icon(
-                                imageVector = UiIcons.Check,
+                                imageVector = Icons.Default.Check,
                                 contentDescription = null,
                                 tint = TextPrimary,
                                 modifier = Modifier.size(18.dp),
@@ -78,9 +85,7 @@ fun ProviderSelectDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("取消", color = TextSecondary)
-            }
+            TvDialogButton(label = "取消", onClick = onDismiss)
         },
         containerColor = CardGray,
     )

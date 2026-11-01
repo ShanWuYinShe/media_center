@@ -1,4 +1,9 @@
 package com.example.mediacenter.ui.player
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.PlayArrow
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
@@ -7,8 +12,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.width
@@ -48,7 +55,6 @@ import com.example.mediacenter.ui.theme.DividerGray
 import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.TextSecondary
-import com.example.mediacenter.ui.theme.UiIcons
 import com.example.mediacenter.util.formatDuration
 
 @Composable
@@ -61,13 +67,14 @@ internal fun ControlsOverlay(
     controlsFocus: FocusRequester,
     onTogglePlay: () -> Unit,
     onSeek: (Long) -> Unit,
+    onSeekBy: (Long) -> Unit,
     onSelectQuality: (Int) -> Unit,
     onSelectPage: (Int) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val currentQn = playbackResult.options.firstOrNull()?.qn
-    Box(modifier = modifier.background(Color.Black.copy(alpha = 0.55f))) {
+    Box(modifier = modifier.background(Color.Black.copy(alpha = 0.38f))) {
         // 顶部:标题 + 返回。渐变从屏幕顶向内容区渐隐,避免单色半透黑
         // 在 OLED 暗场上形成生硬的"色带"割裂画面。
         Row(
@@ -93,7 +100,7 @@ internal fun ControlsOverlay(
             )
             // TvIconButton:遥控器聚焦时有 Apple Blue 高亮背景，纯图标在 10ft 下焦点不可见
             TvIconButton(onClick = onBack, contentDescription = "返回") {
-                Icon(UiIcons.ArrowBack, contentDescription = null, tint = TextPrimary)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = TextPrimary)
             }
         }
         // 底部:进度 + 播放控制 + 分P + 清晰度。渐变自下而上渐隐,
@@ -172,15 +179,46 @@ internal fun ControlsOverlay(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 TvIconButton(
+                    onClick = { onSeekBy(-SEEK_STEP_MS) },
+                    contentDescription = "快退 10 秒",
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null, tint = TextPrimary)
+                }
+                TvIconButton(
                     onClick = onTogglePlay,
                     contentDescription = if (isPlaying) "暂停" else "播放",
                     modifier = Modifier.focusRequester(controlsFocus),
                 ) {
-                    Icon(
-                        imageVector = if (isPlaying) UiIcons.Pause else UiIcons.PlayArrow,
-                        contentDescription = null,
-                        tint = TextPrimary,
-                    )
+                    if (isPlaying) {
+                        // Pause 不在 material-icons-core 中:用两根圆角竖条绘制,
+                        // 避免为一个图标引入体积很大的 extended 图标库。
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.height(20.dp),
+                        ) {
+                            repeat(2) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(6.dp)
+                                        .fillMaxHeight()
+                                        .background(TextPrimary, RoundedCornerShape(1.dp)),
+                                )
+                            }
+                        }
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            tint = TextPrimary,
+                        )
+                    }
+                }
+                TvIconButton(
+                    onClick = { onSeekBy(SEEK_STEP_MS) },
+                    contentDescription = "快进 10 秒",
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = TextPrimary)
                 }
                 Spacer(Modifier.weight(1f))
             }

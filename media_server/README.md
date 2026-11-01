@@ -10,7 +10,7 @@ youtube provider 是受控例外——实时搜索与播放直链解析经内网
 - 目录服务从已审核（`approved`）的 catalog（SQLite）提供 provider 列表、分类列表、视频元数据。
 - `GET /api/providers`：有哪些视频源。
 - `GET /api/providers/{provider}/categories`：某视频源有哪些分类。
-- `GET /api/providers/{provider}/categories/{categoryId}/videos`：某分类下已审核的视频列表。
+- `GET /api/providers/{provider}/categories/{categoryId}/videos`：某分类下已审核的视频列表（分页；可选 `minDurationSeconds`/`maxDurationSeconds`）。
 - youtube provider 额外提供实时端点（见 `youtube.go`，均经 vod_extractor）。
 
 ## API

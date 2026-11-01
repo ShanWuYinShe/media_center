@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -198,6 +199,10 @@ type ytdlpFormat struct {
 	ACodec     string `json:"acodec"`
 	Protocol   string `json:"protocol"`
 	FormatNote string `json:"format_note"`
+	// Abr/Tbr 用于在纯音频格式中挑最高码率的一条;YouTube 的 m4a 音轨
+	// 通常带 abr,tbr 作为兜底。
+	Abr float64 `json:"abr"`
+	Tbr float64 `json:"tbr"`
 }
 
 type ytdlpInfo struct {
@@ -240,23 +245,24 @@ type resolveCache struct {
 
 var globalResolveCache = &resolveCache{entries: make(map[string]resolveCacheEntry)}
 
-// lookup 命中返回 (result, reason, true):failure 项 result 为零值、reason 为
-// 失败分类;未命中/已过期返回 false(过期项顺手清除)。
-func (rc *resolveCache) lookup(videoID string) (PlaybackResultResponse, string, bool) {
+// lookup 命中返回 (result, reason, failure, true):failure 项 result 为零值、
+// reason 为失败分类(可能为空——上游 502 未带结构化 reason 时也是失败,不能
+// 把零值结果当成功回放);未命中/已过期返回 false(过期项顺手清除)。
+func (rc *resolveCache) lookup(videoID string) (PlaybackResultResponse, string, bool, bool) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	e, ok := rc.entries[videoID]
 	if !ok {
-		return PlaybackResultResponse{}, "", false
+		return PlaybackResultResponse{}, "", false, false
 	}
 	if time.Now().After(e.expiresAt) {
 		delete(rc.entries, videoID)
-		return PlaybackResultResponse{}, "", false
+		return PlaybackResultResponse{}, "", false, false
 	}
 	if e.failure {
-		return PlaybackResultResponse{}, e.reason, true
+		return PlaybackResultResponse{}, e.reason, true, true
 	}
-	return e.result, "", true
+	return e.result, "", false, true
 }
 
 func (rc *resolveCache) store(videoID string, entry resolveCacheEntry) {
@@ -284,6 +290,56 @@ func (rc *resolveCache) store(videoID string, entry resolveCacheEntry) {
 		}
 	}
 	rc.entries[videoID] = entry
+}
+
+// ---- 同 ID 解析去重(单飞) ----
+//
+// App 在弱网/重试/多端同时打开同一视频时会并发请求 resolve。每次真实解析都
+// 要拉起一个 yt-dlp 进程(vod_extractor 并发上限只有 2),并消耗 cookies 寿命。
+// 缓存只能挡住"解析完成之后"的重复请求,挡不住"解析进行中"的并发风暴;这里
+// 让同一 videoID 的在途请求共享一次上游调用,等待者复用 leader 的结果。
+
+type resolveFlight struct {
+	done   chan struct{}
+	result PlaybackResultResponse
+	err    error
+}
+
+type resolveGroup struct {
+	mu    sync.Mutex
+	calls map[string]*resolveFlight
+}
+
+var globalResolveGroup = &resolveGroup{calls: make(map[string]*resolveFlight)}
+
+// do 执行(或加入)key 对应的解析。等待者尊重自己的 ctx 取消;leader 的 ctx
+// 取消会终止上游调用,所有等待者拿到同一个错误(下一次请求会重新发起)。
+func (g *resolveGroup) do(ctx context.Context, key string, fn func() (PlaybackResultResponse, error)) (PlaybackResultResponse, error) {
+	g.mu.Lock()
+	if flight, ok := g.calls[key]; ok {
+		g.mu.Unlock()
+		select {
+		case <-flight.done:
+			return flight.result, flight.err
+		case <-ctx.Done():
+			return PlaybackResultResponse{}, ctx.Err()
+		}
+	}
+	flight := &resolveFlight{done: make(chan struct{})}
+	g.calls[key] = flight
+	g.mu.Unlock()
+
+	defer func() {
+		if r := recover(); r != nil {
+			flight.err = fmt.Errorf("resolve panic: %v", r)
+		}
+		g.mu.Lock()
+		delete(g.calls, key)
+		g.mu.Unlock()
+		close(flight.done)
+	}()
+	flight.result, flight.err = fn()
+	return flight.result, flight.err
 }
 
 // resolveVideo 调 vod_extractor 解析视频,返回可播放的完整结果(流选项+清晰度列表)。
@@ -331,14 +387,17 @@ func (c *ytClient) resolveVideo(ctx context.Context, videoID string) (PlaybackRe
 
 // PlaybackOptionResponse 与 App 端 PlaybackOption(kotlinx.serialization)字段一一对应。
 type PlaybackOptionResponse struct {
-	ID       string            `json:"id"`
-	Kind     string            `json:"kind"`
-	Label    string            `json:"label"`
-	URL      string            `json:"url"`
-	AudioURL string            `json:"audioUrl,omitempty"`
-	MimeType string            `json:"mimeType,omitempty"`
-	Headers  map[string]string `json:"headers"`
-	QN       int               `json:"qn"`
+	ID       string `json:"id"`
+	Kind     string `json:"kind"`
+	Label    string `json:"label"`
+	URL      string `json:"url"`
+	AudioURL string `json:"audioUrl,omitempty"`
+	// AudioMimeType 只在音视频分离时下发:音频直链常无扩展名,显式声明
+	// 可让 ExoPlayer 直接选中正确的提取器/容器解析器。
+	AudioMimeType string            `json:"audioMimeType,omitempty"`
+	MimeType      string            `json:"mimeType,omitempty"`
+	Headers       map[string]string `json:"headers"`
+	QN            int               `json:"qn"`
 }
 
 // QualityOptionResponse 与 App 端 QualityOption 对应(qn 直接用视频高度,如 1080)。
@@ -355,96 +414,193 @@ type PlaybackResultResponse struct {
 	DurationSeconds    int64                    `json:"durationSeconds,omitempty"`
 }
 
-// isPlayableVideo 判断一个 yt-dlp format 是否包含视频轨且可直接播放
-// (排除纯音频与 storyboard/图片格式)。
-func isPlayableVideo(f ytdlpFormat) bool {
-	if f.URL == "" {
-		return false
-	}
-	// vcodec/acodec 为 "none" 表示该格式不含对应轨道。
-	return f.VCodec != "none" && f.VCodec != ""
-}
-
-// isProgressive 判断是否音视频合一的直链(单文件即可完整播放,兼容性最好)。
-func isProgressive(f ytdlpFormat) bool {
-	return f.ACodec != "none" && f.ACodec != "" && isPlayableVideo(f)
-}
-
 // isHLS 判断是否 HLS 播放列表(yt-dlp protocol 为 m3u8/m3u8_native)。
 func isHLS(f ytdlpFormat) bool {
 	return strings.Contains(f.Protocol, "m3u8")
 }
 
+func hasVideoTrack(f ytdlpFormat) bool { return f.VCodec != "" && f.VCodec != "none" }
+func hasAudioTrack(f ytdlpFormat) bool { return f.ACodec != "" && f.ACodec != "none" }
+
+// 播放候选的接入方式,数值越小越优先:
+//  1. 音视频合一直链:单文件、无二次请求,兼容性最好;
+//  2. 音视频合一 HLS:原生分片,音轨内嵌;
+//  3. 视频直链 + 独立音轨:App 用 MergingMediaSource 合流(YouTube 1080P+ 的主力形态);
+//  4. 视频 HLS + 独立音轨:同上,但走分片。
+const (
+	streamMuxedProgressive = iota
+	streamMuxedHLS
+	streamSplitProgressive
+	streamSplitHLS
+)
+
+type playbackCandidate struct {
+	format ytdlpFormat
+	audio  *ytdlpFormat
+	kind   int
+}
+
+// codecRank 给电视盒子硬解能力排序(H.264 > VP9 > AV1)。同清晰度下优先
+// H.264:老 TV 盒子对 VP9/AV1 硬解支持参差,软解 4K 会直接卡死。
+func codecRank(codec string) int {
+	switch {
+	case strings.HasPrefix(codec, "avc1"), strings.HasPrefix(codec, "h264"):
+		return 0
+	case strings.HasPrefix(codec, "vp9"), strings.HasPrefix(codec, "vp09"):
+		return 1
+	case strings.HasPrefix(codec, "av01"), strings.HasPrefix(codec, "av1"):
+		return 2
+	default:
+		return 3
+	}
+}
+
+// bestAudioFormat 在纯音频轨中挑一条:优先 m4a/mp4a(ExoPlayer 兼容性最好),
+// 再比码率。返回 nil 表示没有可用音轨。
+func bestAudioFormat(audio []ytdlpFormat) *ytdlpFormat {
+	if len(audio) == 0 {
+		return nil
+	}
+	sort.SliceStable(audio, func(i, j int) bool {
+		ai, aj := audio[i], audio[j]
+		iM4a := strings.EqualFold(ai.Ext, "m4a") || strings.Contains(ai.ACodec, "mp4a")
+		jM4a := strings.EqualFold(aj.Ext, "m4a") || strings.Contains(aj.ACodec, "mp4a")
+		if iM4a != jM4a {
+			return iM4a
+		}
+		if ai.Abr != aj.Abr {
+			return ai.Abr > aj.Abr
+		}
+		return ai.Tbr > aj.Tbr
+	})
+	return &audio[0]
+}
+
+// betterCandidate 决定同一高度下哪条候选更值得交给播放器:先看编码
+// (硬解兼容性),再看帧率,再看是否音视频合一,最后看码率。
+func betterCandidate(a, b playbackCandidate) bool {
+	if ar, br := codecRank(a.format.VCodec), codecRank(b.format.VCodec); ar != br {
+		return ar < br
+	}
+	if a.format.FPS != b.format.FPS {
+		return a.format.FPS > b.format.FPS
+	}
+	if a.kind != b.kind {
+		return a.kind < b.kind
+	}
+	return a.format.Tbr > b.format.Tbr
+}
+
+// audioMimeType 返回独立音轨的容器类型;空字符串表示交给播放器自行嗅探。
+func audioMimeType(f ytdlpFormat) string {
+	if strings.EqualFold(f.Ext, "m4a") || strings.Contains(f.ACodec, "mp4a") {
+		return "audio/mp4"
+	}
+	if strings.EqualFold(f.Ext, "webm") || strings.Contains(f.ACodec, "opus") {
+		return "audio/webm"
+	}
+	return ""
+}
+
+func streamMimeType(f ytdlpFormat) string {
+	if isHLS(f) {
+		return "application/x-mpegurl"
+	}
+	if strings.EqualFold(f.Ext, "webm") {
+		return "video/webm"
+	}
+	return "video/mp4"
+}
+
 // buildYouTubePlayback 从 yt-dlp 的 formats 中挑选可播放流,生成播放选项。
 //
 // 选择策略(App 播放器为 ExoPlayer/Media3,TV 盒子硬解以 H.264 为主):
-//  1. progressive mp4(音视频合一直链):兼容性最好,优先;
-//  2. HLS 播放列表(m3u8):覆盖高分辨率档位,每档高度取 fps 最高的一条;
-//  3. 同一高度同时存在 progressive 与 HLS 时保留 progressive(直链无分片开销)。
+//  1. 每档高度只保留一条最佳候选(编码 > 帧率 > 合流方式 > 码率);
+//  2. YouTube 的 1080P+ 档位通常只有「纯视频轨 + 纯音频轨」DASH 格式,
+//     服务端把最高码率音轨作为 AudioURL 一并下发,App 端合流播放;
+//  3. 纯视频轨且没有可用音轨的候选直接丢弃——宁可少一档,也不返回无声视频;
+//  4. progressive/HLS 合一流优先,避免额外的音画同步成本。
 //
 // 输出按高度降序排列;qn 直接采用视频高度(1080/720/...),App 端切清晰度
 // 直接在 options 内本地换源,不需要重新解析。
 func buildYouTubePlayback(info ytdlpInfo) PlaybackResultResponse {
-	progressive := make([]ytdlpFormat, 0, 4)
-	hls := make([]ytdlpFormat, 0, 8)
+	var muxed, muxedHLS, videoOnly, audioOnly []ytdlpFormat
 	for _, f := range info.Formats {
-		if !isPlayableVideo(f) {
+		if f.URL == "" {
 			continue
 		}
-		if f.Height <= 0 {
-			continue
-		}
-		if isProgressive(f) {
-			progressive = append(progressive, f)
-		} else if isHLS(f) {
-			hls = append(hls, f)
+		video, audio := hasVideoTrack(f), hasAudioTrack(f)
+		switch {
+		case video && audio:
+			if isHLS(f) {
+				muxedHLS = append(muxedHLS, f)
+			} else if f.Height > 0 {
+				muxed = append(muxed, f)
+			}
+		case video && !audio:
+			if f.Height > 0 {
+				videoOnly = append(videoOnly, f)
+			}
+		case !video && audio:
+			audioOnly = append(audioOnly, f)
 		}
 	}
 
-	// HLS 每档高度取 fps 最高的代表(YouTube HLS 同高度常有多 fps 变体)。
-	bestByHeight := make(map[int]ytdlpFormat, len(hls))
-	for _, f := range hls {
-		if cur, ok := bestByHeight[f.Height]; !ok || f.FPS > cur.FPS {
-			bestByHeight[f.Height] = f
+	bestAudio := bestAudioFormat(audioOnly)
+	byHeight := make(map[int]playbackCandidate, len(muxed)+len(muxedHLS)+len(videoOnly))
+	consider := func(c playbackCandidate) {
+		if c.format.Height <= 0 {
+			return
+		}
+		if cur, ok := byHeight[c.format.Height]; !ok || betterCandidate(c, cur) {
+			byHeight[c.format.Height] = c
 		}
 	}
-	// progressive 覆盖同高度的 HLS 代表(平局或更高 fps 时才顶掉)。
-	for _, f := range progressive {
-		if cur, ok := bestByHeight[f.Height]; !ok || f.FPS >= cur.FPS {
-			bestByHeight[f.Height] = f
+	for _, f := range muxed {
+		consider(playbackCandidate{format: f, kind: streamMuxedProgressive})
+	}
+	for _, f := range muxedHLS {
+		consider(playbackCandidate{format: f, kind: streamMuxedHLS})
+	}
+	if bestAudio != nil {
+		for _, f := range videoOnly {
+			kind := streamSplitProgressive
+			if isHLS(f) {
+				kind = streamSplitHLS
+			}
+			consider(playbackCandidate{format: f, audio: bestAudio, kind: kind})
 		}
 	}
 
-	heights := make([]int, 0, len(bestByHeight))
-	for h := range bestByHeight {
+	heights := make([]int, 0, len(byHeight))
+	for h := range byHeight {
 		heights = append(heights, h)
 	}
-	// 高度降序,同高度 progressive 优先(直接排除了重复,无需二次排序)。
-	for i := 0; i < len(heights); i++ {
-		for j := i + 1; j < len(heights); j++ {
-			if heights[j] > heights[i] {
-				heights[i], heights[j] = heights[j], heights[i]
-			}
-		}
-	}
+	sort.Sort(sort.Reverse(sort.IntSlice(heights)))
 
 	options := make([]PlaybackOptionResponse, 0, len(heights))
 	qualities := make([]QualityOptionResponse, 0, len(heights))
 	for _, h := range heights {
-		f := bestByHeight[h]
-		mime := "video/mp4"
-		if isHLS(f) {
-			mime = "application/x-mpegurl"
+		c := byHeight[h]
+		f := c.format
+		id := "yt-" + info.ID + "-" + f.FormatID
+		var audioURL, audioMime string
+		if c.audio != nil {
+			id += "-a" + c.audio.FormatID
+			audioURL = c.audio.URL
+			audioMime = audioMimeType(*c.audio)
 		}
 		label := heightLabel(h, f.FPS)
 		options = append(options, PlaybackOptionResponse{
-			ID:       "yt-" + info.ID + "-" + f.FormatID,
-			Kind:     "vod",
-			Label:    label,
-			URL:      f.URL,
-			MimeType: mime,
-			Headers:  map[string]string{},
-			QN:       h,
+			ID:            id,
+			Kind:          "vod",
+			Label:         label,
+			URL:           f.URL,
+			AudioURL:      audioURL,
+			AudioMimeType: audioMime,
+			MimeType:      streamMimeType(f),
+			Headers:       map[string]string{},
+			QN:            h,
 		})
 		qualities = append(qualities, QualityOptionResponse{QN: h, Label: label})
 	}
@@ -508,7 +664,7 @@ func (s *mediaServer) handleYouTubeSearch(w http.ResponseWriter, r *http.Request
 		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "搜索过于频繁,请稍后再试。"})
 		return
 	}
-	if s.yt.vodExtractorURL == "" {
+	if s.yt == nil || s.yt.vodExtractorURL == "" {
 		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "NOT_CONFIGURED", Message: "服务端未启用视频解析服务,搜索不可用。"})
 		return
 	}
@@ -545,7 +701,7 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "解析请求过于频繁,请稍后再试。"})
 		return
 	}
-	if s.yt.vodExtractorURL == "" {
+	if s.yt == nil || s.yt.vodExtractorURL == "" {
 		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "NOT_CONFIGURED", Message: "服务端未启用视频解析服务。"})
 		return
 	}
@@ -555,9 +711,11 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// 缓存优先:成功项直接回放,负缓存项快速失败(不消耗 yt-dlp 进程配额,
-	// 不再撞风控)。未命中才走真实解析。
-	if result, reason, hit := globalResolveCache.lookup(videoID); hit {
-		if reason != "" {
+	// 不再撞风控)。未命中才走真实解析。判定必须用 failure 标志而不是
+	// reason 是否为空:上游 502 未带结构化 reason 时同样是失败,回放零值
+	// 结果会变成一个"成功但没有播放地址"的 200。
+	if result, reason, failure, hit := globalResolveCache.lookup(videoID); hit {
+		if failure {
 			log.Printf("youtube resolve %s: cached failure (reason=%s)", videoID, reason)
 			s.writeError(w, &apiError{Status: http.StatusBadGateway, Code: "RESOLVE_FAILED", Message: "播放地址解析失败,该视频可能受限或稍后再试。"})
 			return
@@ -565,7 +723,11 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 		s.writeJSON(w, http.StatusOK, result)
 		return
 	}
-	result, err := s.yt.resolveVideo(r.Context(), videoID)
+	// 同 ID 并发请求共享一次 yt-dlp 解析:重试风暴/多端同时打开时不再
+	// 各自拉起进程(vod_extractor 并发上限只有 2,还会消耗 cookies 寿命)。
+	result, err := globalResolveGroup.do(r.Context(), videoID, func() (PlaybackResultResponse, error) {
+		return s.yt.resolveVideo(r.Context(), videoID)
+	})
 	if err != nil {
 		log.Printf("youtube resolve %s: %v", videoID, err)
 		// 只负缓存真实解析失败(502 带分类/504 超时);extractor 繁忙(503)
