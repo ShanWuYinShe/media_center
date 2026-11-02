@@ -46,6 +46,9 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -406,6 +409,15 @@ internal fun PlayerContent(
     LaunchedEffect(controller, overlayError, playerError) {
         if (controller == null || overlayError != null || playerError != null) return@LaunchedEffect
         runCatching { playerFocus.requestFocus() }
+    }
+    // 从系统设置/通知侧栏返回时 Activity 会 resume，但 controller 没变，
+    // 上面的 effect 不会重跑；如果不重新拿回焦点，遥控器会整体失灵。
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner, controller) {
+        if (controller == null) return@LaunchedEffect
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            runCatching { playerFocus.requestFocus() }
+        }
     }
 
     // 断网恢复:播放错误源于网络时,网络可用后自动重试一次(解析 + 重新加载)
