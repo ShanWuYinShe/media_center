@@ -189,7 +189,7 @@ internal fun ControlsOverlay(
             Text(
                 text = buildString {
                     append("长按 ← → 连续快退/快进")
-                    if (hasOptions) append(" · MENU 键选集/清晰度")
+                    if (hasOptions) append(" · 长按 OK 选集/清晰度")
                 },
                 color = TextSecondary,
                 fontSize = 13.sp,

@@ -62,6 +62,7 @@ import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.util.NetworkRestoreEffect
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -450,6 +451,11 @@ internal fun PlayerContent(
 
     val hasOptions = playbackResult.pages.totalPages > 1 ||
         playbackResult.availableQualities.size > 1
+    // OK 长按：部分 Android TV 遥控器的 MENU 键会被系统拦截去开通知/设置，
+    // 长按 OK 是所有遥控器都有的可靠入口。短按抬起时切播放/暂停。
+    var okHeld by remember { mutableStateOf(false) }
+    var okLongConsumed by remember { mutableStateOf(false) }
+    var okLongJob by remember { mutableStateOf<Job?>(null) }
 
     fun revealControls() {
         showControls = true
@@ -512,11 +518,29 @@ internal fun PlayerContent(
                         true
                     }
                     Key.DirectionCenter, Key.Enter -> {
-                        // OK 在抬起时切换：避免长按产生一串 KeyDown 把播放/暂停
-                        // 反复切换；按住期间只保证控制条可见。
-                        if (down) revealControls()
+                        if (down) {
+                            revealControls()
+                            if (!okHeld) {
+                                okHeld = true
+                                okLongConsumed = false
+                                okLongJob?.cancel()
+                                if (hasOptions) {
+                                    okLongJob = scope.launch {
+                                        delay(550)
+                                        if (okHeld) {
+                                            okLongConsumed = true
+                                            showOptions = true
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         if (up) {
-                            togglePlayback()
+                            okHeld = false
+                            okLongJob?.cancel()
+                            okLongJob = null
+                            if (!okLongConsumed) togglePlayback()
+                            okLongConsumed = false
                             revealControls()
                         }
                         true

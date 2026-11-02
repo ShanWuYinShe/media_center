@@ -233,9 +233,9 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
             }
         }
 
-        // OK 键:短按播放/暂停,长按(按住约 0.5 秒)旋转画面 —— 遥控器方向键已被
-        // 快退/快进、上一个/下一个占满,且 Android TV 不把 MENU 键派发给应用,长按 OK 是
-        // 所有遥控器都具备、可靠的“直接操作”入口。短按动作放到抬起时判定,以便区分长按。
+        // OK 键:短按播放/暂停,长按(约 0.5 秒)打开播放设置 —— 方向键已被
+        // 快退/快进、上下集占满；MENU 键在部分 Android TV 上会被系统拦截去开
+        // 通知/设置，长按 OK 是所有遥控器都具备的可靠入口。
         val longPressMs = 450L
         var centerDownTime = 0L
         var centerConsumedByLong = false
@@ -258,7 +258,7 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
                     centerConsumedByLong = false
                     if (!handledByLong) {
                         if (event.eventTime - centerDownTime >= longPressMs) {
-                            togglePlayerOrientation()
+                            openPlayerOptionsDialog()
                             showOverlay()
                         } else {
                             togglePlayback()
@@ -276,7 +276,7 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
                         centerConsumedByLong = false
                         event.startTracking()
                     } else if (event.isLongPress && !centerConsumedByLong) {
-                        togglePlayerOrientation()
+                        openPlayerOptionsDialog()
                         centerConsumedByLong = true
                         showOverlay()
                     }
@@ -333,26 +333,11 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
                         }
                         true
                     }
-                    // MENU/INFO 键:多清晰度视频弹清晰度选择;只有一种清晰度时
-                    // 保持原行为(旋转画面),清晰度弹窗没有单选项的价值。
+                    // MENU/INFO 仅作兼容兜底；部分 TV 会把它拦截成系统通知/设置。
                     KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO -> {
                         if (event.repeatCount == 0) {
-                            val qualities = viewModel.state.value.availableQualities
-                            if (qualities.size > 1) {
-                                val currentQn = viewModel.state.value.playing?.qn ?: 0
-                                val currentIndex = qualities.indexOfFirst { it.qn == currentQn }
-                                    .takeIf { it >= 0 }
-                                showOptionListDialog(
-                                    title = "清晰度",
-                                    options = qualities.map { it.label },
-                                    currentIndex = currentIndex,
-                                ) { index ->
-                                    qualities.getOrNull(index)?.let { viewModel.selectPlaybackQuality(it.qn) }
-                                }
-                            } else {
-                                togglePlayerOrientation()
-                                showOverlay()
-                            }
+                            openPlayerOptionsDialog()
+                            showOverlay()
                         }
                         true
                     }
@@ -491,6 +476,19 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
             }
         }
         titleRow.addView(titleColumn, LinearLayout.LayoutParams(0, wrap(), 1f))
+        // 触摸入口：长按 OK 是电视端路径，这个胶囊给鼠标/触摸直接打开同一弹窗。
+        val optionsButton = label("播放设置", 17f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(20), 0, dp(20), 0)
+            background = rounded(Colors.GlassFill, 999, 1, Colors.GlassBorder)
+            isFocusable = false
+            isClickable = true
+            setOnClickListener { openPlayerOptionsDialog() }
+        }
+        titleRow.addView(
+            optionsButton,
+            LinearLayout.LayoutParams(wrap(), dp(48)).withStartMargin(dp(18)),
+        )
         top.addView(titleRow, LinearLayout.LayoutParams(match(), wrap()))
         overlay.addView(top, FrameLayout.LayoutParams(match(), wrap(), Gravity.TOP))
 
@@ -551,7 +549,7 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
         val secondaryHint = label(
             buildString {
                 append("长按 ← → 连续快退/快进")
-                if (state.availableQualities.size > 1) append(" · MENU 键切换清晰度")
+                append(" · 长按 OK 播放设置")
             },
             14f,
             Colors.TEXT_SECONDARY,
@@ -611,3 +609,22 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
         return overlay
     }
 
+
+/** 播放设置：清晰度 + 旋转画面。长按 OK / MENU 或触摸胶囊共用。 */
+internal fun MainActivity.openPlayerOptionsDialog() {
+    val qualities = viewModel.state.value.availableQualities
+    val currentQn = viewModel.state.value.playing?.qn ?: 0
+    val labels = qualities.map { it.label }.toMutableList().apply { add("旋转画面") }
+    val currentIndex = qualities.indexOfFirst { it.qn == currentQn }.takeIf { it >= 0 }
+    showOptionListDialog(
+        title = "播放设置",
+        options = labels,
+        currentIndex = currentIndex,
+    ) { index ->
+        if (index in qualities.indices) {
+            viewModel.selectPlaybackQuality(qualities[index].qn)
+        } else {
+            togglePlayerOrientation()
+        }
+    }
+}
