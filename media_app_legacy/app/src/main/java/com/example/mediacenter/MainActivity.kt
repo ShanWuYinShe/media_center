@@ -82,6 +82,7 @@ class MainActivity : ComponentActivity() {
     internal var playerVideoRotationDegrees: Int = 0
     internal var playerVideoRotationUserSet: Boolean = false
     internal var playerSurface: PlayerViewHolder? = null
+    internal var playerScreen: FrameLayout? = null
     internal var orientationIndicator: TextView? = null
     internal var homeFocusArea: HomeFocusArea = HomeFocusArea.Category
     internal var rememberedCategoryId: String? = null
@@ -211,6 +212,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // 从系统设置/通知侧栏返回时窗口焦点被系统拿走，播放页的 screen
+        // 不会重建；这里重新拿回焦点，否则遥控器整个播放页无响应。
+        if (currentState.playing != null) playerScreen?.requestFocus()
         val apk = pendingUpdateApk ?: return
         lifecycleScope.launch {
             handleInstallLaunch(appUpdateManager.launchInstaller(apk), apk)

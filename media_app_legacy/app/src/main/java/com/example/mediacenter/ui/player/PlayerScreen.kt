@@ -418,6 +418,7 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
         updateCenterGlyph()
         // 触摸：整屏点按播放/暂停；进度条是只读指示器，不参与焦点。
         screen.setOnClickListener { togglePlayback() }
+        playerScreen = screen
         setContent(screen)
         screen.requestFocus()
         showOverlay()
