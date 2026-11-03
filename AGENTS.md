@@ -12,7 +12,7 @@
 - `media_app_legacy/` — API 19 原生 View/RecyclerView 兼容客户端（老电视/盒子，与新版保持同一 UI 语义）
 - `media_server/` — Go 目录服务（provider 列表、分类列表、视频元数据）+ youtube provider 的实时通道（yt-dlp ytsearch 实时搜索，无 Data API 配额；vod_extractor 解析代理，见 `media_server/youtube.go`）。
 - `vod_extractor/` — Python + yt-dlp 独立点播解析服务（YouTube 播放直链解析）。`media_server` 经 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 调用其 `POST /search`（实时搜索）与 `POST /extract`（播放直链解析）。
-  - **硬前提**：YouTube 对数据中心 IP 的**播放解析**触发 "Sign in to confirm you're not a bot"，故解析必须放置 cookies；**搜索**走 ytsearch flat 列表页不受影响，无 cookies 仍可用（验证方式：线上实测）。cookies 路径与挂载点、`VOD_EXTRACTOR_EXTRACTOR_ARGS`、过期重导出等运维细节以 `vod_extractor/AGENTS.md`「部署硬前提」为唯一维护处，此处不再复制。
+  - **硬前提**：YouTube 对数据中心 IP 的**播放解析**触发 "Sign in to confirm you're not a bot"，故解析必须放置 cookies；**搜索**走 ytsearch flat 列表页不受影响，无 cookies 仍可用（复核：`POST /search` 返回 200；`GET /health` 的 `failures.counts` 中 `bot_check` 不增长）。cookies 路径与挂载点、`VOD_EXTRACTOR_EXTRACTOR_ARGS`、过期重导出等运维细节以 `vod_extractor/AGENTS.md`「部署硬前提」为唯一维护处，此处不再复制。
 - `deploy/` — 独立站编排（media.chaoset.com）：nginx + media_server + vod_extractor 三服务自洽 compose，版本唯一来源 `deploy/versions.env`；操作细节见 `deploy/README.md`。
 
 App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部署方式。构建期未设置时回落到内置默认 `https://media.chaoset.com/api/v1`（独立站规范前缀）。旧前缀 `https://yinghuoren.com/api/media`（workwork 聚合栈过渡别名）**不由 workwork 反代**（`workwork/services/admin/configs/nginx.conf.tmpl` 注释明确「本机不再反代，旧路径落到 404 兜底」；`media_server` 代码里无 `/api/media` 前缀处理），由 **CF 边缘 308 重定向**到 `media.chaoset.com/api/*`；排障时查 CF 规则，不要查 nginx。
