@@ -17,6 +17,25 @@
 
 App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部署方式。构建期未设置时回落到内置默认 `https://media.chaoset.com/api/v1`（独立站规范前缀）。旧前缀 `https://yinghuoren.com/api/media`（workwork 聚合栈过渡别名）**不由 workwork 反代**（`workwork/services/admin/configs/nginx.conf.tmpl` 注释明确「本机不再反代，旧路径落到 404 兜底」；`media_server` 代码里无 `/api/media` 前缀处理），由 **CF 边缘 308 重定向**到 `media.chaoset.com/api/*`；排障时查 CF 规则，不要查 nginx。
 
+## CI 门禁与本地验证分工
+
+重活（全量测试、构建、打包、E2E、镜像构建）一律交给 GitHub Actions，本地只跑秒级检查。
+完整流程见全局 skill `github-ci-flow`：开发分支推送 → `gh pr create` → `gh pr checks --watch`
+全绿 → `gh pr merge --rebase --delete-branch` → 本地 `git pull --ff-only` 并清理 worktree。
+
+- 本地（提交前，秒级）：
+  - Go：`gofmt -l media_server/`（应无输出）+ `cd media_server && go build ./... && go vet ./...`（本机实测约 6s / 2s）。
+  - Python：`python3 -m py_compile vod_extractor/server.py`（秒级）；本机未装 ruff 时交 CI（CI 固定 `ruff==0.16.8`）。
+  - Android：日常不跑 Gradle（`assembleDebug`、单测、lint 均由 CI 执行）；APK 发版构建按 skill `media-app-release`。
+  - **不跑**：`go test ./...`（全量/含 `-race`）、Gradle 构建与单测、`docker build`。
+- CI 覆盖（`.github/workflows/ci.yml`，`push: main` + `pull_request: main`，共 3 个 job）：
+  - `Media Server (Go)`：gofmt、go vet、go build、`go test -race -count=1 ./...`。
+  - `VOD Extractor (Python)`：`py_compile`、ruff 0.16.8、unittest。
+  - `Media App (Android)`：`assembleDebug`、`testDebugUnitTest`、`lintDebug`，以及 legacy 变体 `assembleDebug`。
+- CI 覆盖不到、必须本地/真机验证的：Android TV 真机/模拟器安装与 UI 走查（APK 部署与 TV UI/UX 约定见 `media_app/AGENTS.md` 与 skill `media-app-release`/`media-app-tv-ui`）；youtube 播放解析的真实链路依赖服务器 cookies/PO Token，CI 只跑单测，改动该链路时需在服务器侧实测（见 `vod_extractor/AGENTS.md`）。
+- 镜像构建：本仓 CI 无镜像构建 job；`deploy/` 生产镜像由部署服务器 `make build` 构建（交付链路，不是开发机本地验证），本地不做 `docker build`。
+- 发版/发布门禁不变：media_app APK 发版流程按 skill `media-app-release`；服务端部署按 `deploy/README.md`。
+
 ## media_app（详见 media_app/AGENTS.md 与 skill）
 
 构建、版本号（git tag 驱动）、APK 部署与 TV UI/UX 设计约定以 `media_app/AGENTS.md` 为唯一维护处。其中发版流程另见 skill media-app-release，TV UI/UX 约定另见 skill media-app-tv-ui。
