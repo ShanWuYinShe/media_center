@@ -44,7 +44,7 @@ Go 服务，详见 `media_server/README.md`。本地编译检查：
 go build -C media_server -o /dev/null .
 ```
 
-部署编排在本仓库 `deploy/` 内（`media.chaoset.com` 独立站，与 workwork 聚合栈零互通）；此前 workwork 通过 git submodule 引用本仓库到 `services/media_center` 的方式已废弃（该检出已不存在）。
+部署编排在本仓库 `deploy/` 内（`media.chaoset.com` 独立站，与 workwork 聚合栈零互通）。
 
 部署后冒烟检查（对核心只读接口做 curl + JSON 断言，输出 PASS/FAIL，任一失败退出码 1）；可选第二参数传 vod_extractor 内网地址，顺带探活其 `/health`：
 
@@ -53,9 +53,6 @@ scripts/smoke.sh https://media.chaoset.com/api/v1   # 或 http://localhost:8787
 scripts/smoke.sh http://localhost:8787 http://192.168.1.10:8790   # 第二参数探活 vod_extractor
 ```
 
-## 工具链约定
-
-JS/Web 前端项目优先使用 Bun（`bun install`、`bun run`、`bun test`）。当前 `media_app` 是 Android TV 原生客户端，构建仍使用 Gradle/Android Studio 工具链；如果后续新增 Web 管理台或 H5 前端，应默认采用 Bun。
 
 ## API 契约
 
