@@ -59,6 +59,7 @@ class MainActivity : ComponentActivity() {
             MediaRepository(
                 api = MediaApi(BuildConfig.MEDIA_SERVER_URL),
                 prefs = getSharedPreferences("media_prefs", Context.MODE_PRIVATE),
+                context = applicationContext,
             ),
         )
     }

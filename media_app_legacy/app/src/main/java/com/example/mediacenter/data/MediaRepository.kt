@@ -1,5 +1,6 @@
 package com.example.mediacenter.data
 
+import android.content.Context
 import android.content.SharedPreferences
 import com.example.mediacenter.log.AppLog
 import java.util.concurrent.atomic.AtomicBoolean
@@ -11,6 +12,8 @@ class MediaRepository(
     private val bilibiliApi: BilibiliApi = BilibiliApi(),
     private val youtubeApi: YouTubeApi = YouTubeApi(api),
     private val prefs: SharedPreferences? = null,
+    // 首页首屏快照落盘用;为 null 时(测试/无 Context)快照功能自动关闭。
+    private val context: Context? = null,
 ) : MediaRepositoryApi {
     // 当前选中的 provider(默认 bilibili)。首次加载 providers 后仅在无持久化
     // 选择/原选择下线时自动选第一个;之后以用户选择为准。
@@ -74,6 +77,13 @@ class MediaRepository(
             currentProvider = items.first().id
             persistProvider()
         }
+    }
+
+    override fun loadHomeSnapshot(): HomeSnapshot? =
+        context?.let { HomeSnapshotStore.load(it) }
+
+    override fun saveHomeSnapshot(snapshot: HomeSnapshot) {
+        context?.let { HomeSnapshotStore.save(it, snapshot) }
     }
 
     /** 用户手动切换视频源,并持久化到 SharedPreferences。 */

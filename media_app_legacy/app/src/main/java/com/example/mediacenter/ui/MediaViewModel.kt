@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.mediacenter.data.ApiException
 import com.example.mediacenter.data.ContentCategory
+import com.example.mediacenter.data.HomeSnapshot
 import com.example.mediacenter.data.MediaRepositoryApi
 import com.example.mediacenter.data.PlaybackOption
 import com.example.mediacenter.data.PlaybackPages
@@ -16,6 +17,7 @@ import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.log.AppLog
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -26,6 +28,7 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 
 data class MediaUiState(
     val query: String = "",
@@ -201,7 +204,51 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
     }
 
     init {
-        loadCategoriesAndSearch()
+        viewModelScope.launch {
+            // 冷启动 SWR:先用上次首屏快照渲染,再后台静默刷新;快照不可用则走原流程。
+            val restored = restoreHomeSnapshot()
+            loadCategoriesAndSearch(initialSilent = restored)
+        }
+    }
+
+    /**
+     * 读取首页首屏快照并渲染(SWR)。只在 provider 一致、快照非空时采用;
+     * 读文件失败/过期/损坏都静默忽略,不影响原有启动流程。
+     */
+    private suspend fun restoreHomeSnapshot(): Boolean {
+        val snapshot = runCatchingCancellable {
+            withContext(Dispatchers.IO) { repository.loadHomeSnapshot() }
+        }.getOrNull() ?: return false
+        if (snapshot.provider != repository.currentProvider ||
+            snapshot.categories.isEmpty() ||
+            snapshot.items.isEmpty()
+        ) {
+            return false
+        }
+        val categoryId = snapshot.selectedCategoryId
+            .takeIf { id -> snapshot.categories.any { it.id == id } }
+            ?: snapshot.categories.first().id
+        mutableState.update { state ->
+            if (state.items.isNotEmpty()) {
+                state
+            } else {
+                state.copy(
+                    categories = snapshot.categories,
+                    selectedCategoryId = categoryId,
+                    items = snapshot.items,
+                    page = snapshot.page,
+                    canLoadMore = snapshot.canLoadMore,
+                    loading = false,
+                    error = null,
+                )
+            }
+        }
+        AppLog.i(
+            "Home",
+            "restored home snapshot: provider=${snapshot.provider}, " +
+                "category=$categoryId, ${snapshot.items.size} items",
+        )
+        return true
     }
 
     fun search(
@@ -209,9 +256,11 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         // 关键词搜索与分类浏览都限定在当前选中分类内——服务端无全局搜索接口,
         // 客户端聚合过滤依赖 categoryId;传 null 会直接返回空结果。
         categoryId: String? = mutableState.value.selectedCategoryId,
+        // 冷启动快照已渲染时以静默方式刷新:不闪加载态、失败保留快照内容。
+        silent: Boolean = false,
     ) {
         val current = mutableState.value
-        val silentRefresh = current.isContentScreen
+        val silentRefresh = silent || current.isContentScreen
         if (silentRefresh &&
             (query != current.query || categoryId != current.selectedCategoryId)
         ) {
@@ -247,7 +296,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
             // 则放弃重试,把错误静默丢弃,不覆盖新页面的状态。
             var attempt = 0
             while (true) {
-                val isSilent = mutableState.value.isContentScreen
+                val isSilent = silent || mutableState.value.isContentScreen
                 mutableState.update {
                     if (isSilent || it.isContentScreen) {
                         it.copy(loadMoreError = null)
@@ -273,12 +322,15 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                     repository.search(query, categoryId, page = 1, pageSize = PageSize)
                 }
                     .onSuccess { response ->
+                        val canLoadMoreFirstPage = query.isBlank() &&
+                            repository.currentProvider != "youtube" &&
+                            response.items.size >= PageSize
                         mutableState.update { state ->
                             state.copy(
                                 items = response.items,
                                 loading = if (isSilent || state.isContentScreen) state.loading else false,
                                 // 关键词搜索是一次性客户端聚合(已拉取多页),不分页;仅分类浏览才支持 loadMore。
-                                canLoadMore = query.isBlank() && repository.currentProvider != "youtube" && response.items.size >= PageSize,
+                                canLoadMore = canLoadMoreFirstPage,
                                 page = 1,
                                 loadMoreError = null,
                             )
@@ -294,6 +346,19 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                         }
                         // 后台预取列表视频的播放地址,用户点详情时直接可用。
                         prefetchVisiblePlayback(response.items)
+                        // 首屏成功加载后持久化快照(IO 线程),下次冷启动先渲染。
+                        if (query.isBlank() && categoryId != null) {
+                            val snapshot = HomeSnapshot(
+                                provider = repository.currentProvider,
+                                categories = mutableState.value.categories,
+                                selectedCategoryId = categoryId,
+                                items = response.items,
+                                page = 1,
+                                canLoadMore = canLoadMoreFirstPage,
+                                savedAtEpochMs = System.currentTimeMillis(),
+                            )
+                            withContext(Dispatchers.IO) { repository.saveHomeSnapshot(snapshot) }
+                        }
                         return@launch
                     }
                     .onFailure { error ->
@@ -1112,7 +1177,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         mutableState.update { it.copy(error = null) }
     }
 
-    private fun loadCategoriesAndSearch() {
+    private fun loadCategoriesAndSearch(initialSilent: Boolean = false) {
         loadHomeJob?.cancel()
         loadHomeJob = viewModelScope.launch {
             // 首屏用聚合请求一次拿 providers + 分类(老盒子弱网省一个 RTT);
@@ -1125,7 +1190,8 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                 // categories 失败时不调 search()。避免:网络持续不通 →
                 // categories 失败 + search(query="", null) 也 400 失败 →
                 // 用户陷入"重试 → 失败 → 重试"的死循环。
-                val silentRefresh = mutableState.value.isContentScreen
+                // 冷启动快照已在屏上时静默刷新:不闪加载态、失败保留快照。
+                val silentRefresh = initialSilent || mutableState.value.isContentScreen
                 mutableState.update {
                     if (silentRefresh) {
                         it.copy(loadMoreError = null)
@@ -1178,7 +1244,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                             },
                         )
                     }
-                    search(mutableState.value.query)
+                    search(mutableState.value.query, silent = silentRefresh)
                     return@launch
                 }
                 val error = categoriesResult.exceptionOrNull()
