@@ -16,7 +16,8 @@ import kotlinx.coroutines.launch
  * - 只在详情页停留 >=1.2s 后触发(见 DetailScreen):快速浏览列表不触发,避免
  *   把 YouTube 冷解析(占用 extractor 并发)浪费在"只看一眼"的视频上;
  * - 键包含 provider/videoId/qn,换 provider 或换清晰度不会误用;
- * - TTL 5 分钟 + 最多 8 条:播放直链有时效,过期结果不可回放;
+ * - TTL 5 分钟 + 最多 8 条:播放直链有时效,过期结果不可回放;TTL 内可被重复复用
+ *   (快速回看/重试同一视频不再重复解析);
  * - 与 PlayerViewModel 共享:预取在途时播放页等待同一任务,不重复解析;
  * - 失败静默丢弃,播放页照常重新解析并回填。
  */
@@ -54,15 +55,15 @@ object PlaybackPrefetcher {
     }
 
     /**
-     * 播放页取解析结果:命中缓存直接返回(一次性消费);预取在途则等待同一任务;
-     * 未命中返回 null,由调用方正常解析。
+     * 播放页取解析结果:命中缓存直接返回(TTL 内可重复复用,不消费);预取在途
+     * 则等待同一任务;未命中返回 null,由调用方正常解析。
      */
     suspend fun resolve(repository: MediaRepositoryApi, videoId: String, qn: Int?): PlaybackResult? {
         val key = keyOf(repository, videoId, qn)
-        take(key)?.let { return it }
+        get(key)?.let { return it }
         val job = synchronized(lock) { inflight[key] } ?: return null
         job.join()
-        return take(key)
+        return get(key)
     }
 
     /** 仅测试用:清空缓存与在途任务(JVM 测试进程内所有用例共享这个单例)。 */
@@ -83,9 +84,12 @@ object PlaybackPrefetcher {
     private fun keyOf(repository: MediaRepositoryApi, videoId: String, qn: Int?) =
         Key(repository.currentProvider, videoId, qn)
 
-    private fun take(key: Key): PlaybackResult? {
-        val entry = synchronized(lock) { cache.remove(key) } ?: return null
-        return if (fresh(entry)) entry.result else null
+    /** TTL 内命中返回结果并保留缓存项(过期项顺手清掉),供快速回看重复复用。 */
+    private fun get(key: Key): PlaybackResult? {
+        val entry = synchronized(lock) { cache[key] } ?: return null
+        if (fresh(entry)) return entry.result
+        synchronized(lock) { cache.remove(key) }
+        return null
     }
 
     private fun put(key: Key, result: PlaybackResult) {

@@ -1,7 +1,6 @@
 package com.example.mediacenter.ui.player
 
 import androidx.activity.compose.BackHandler
-import android.content.Intent
 import android.os.Bundle
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import androidx.compose.animation.AnimatedVisibility
@@ -63,7 +62,7 @@ import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.data.playbackStorageKey
 import com.example.mediacenter.player.PlaybackMediaSourceFactory
-import com.example.mediacenter.player.PlaybackService
+import com.example.mediacenter.player.PlaybackServiceKeepAlive
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.theme.BackgroundDark
@@ -244,6 +243,9 @@ internal fun PlayerContent(
     DisposableEffect(controller) {
         val c = controller
         c?.addListener(playerListener)
+        // 播放页重新挂载/连上 controller:取消上一条"退出后延迟停止"任务,
+        // 让 20s 保活窗口内快速回到播放页时复用同一个播放服务。
+        PlaybackServiceKeepAlive.onPlayerPageAttached()
         onDispose {
             c?.removeListener(playerListener)
             // 实例被替换(非退出)时释放旧 controller;退出路径由下面的
@@ -283,9 +285,11 @@ internal fun PlayerContent(
                     page = pagesInfo.currentPage,
                 )
             }
+            // 退出播放页:先暂停(保活期间不能后台出声),释放 controller,
+            // 播放服务保留 20s——快速回进同一视频可省掉服务/播放器重建。
+            runCatching { currentController?.pause() }
             controllerState.release()
-            // 本 App 无后台播放需求:页面退出即停止播放服务
-            context.stopService(Intent(context, PlaybackService::class.java))
+            PlaybackServiceKeepAlive.scheduleStop(context)
         }
     }
 
