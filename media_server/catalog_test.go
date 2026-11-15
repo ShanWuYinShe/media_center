@@ -208,6 +208,7 @@ func TestCategoryVideosPageReadsCatalogDirectly(t *testing.T) {
 		Description:  "desc",
 		DurationSec:  3600,
 		ThumbnailURL: "https://i0.hdslb.com/test.jpg",
+		Year:         "2023",
 	}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -245,6 +246,9 @@ func TestCategoryVideosPageReadsCatalogDirectly(t *testing.T) {
 	}
 	if summary.ThumbnailURLLarge != "https://i0.hdslb.com/test.jpg"+bilibiliLargeThumbSuffix {
 		t.Fatalf("thumbnailUrlLarge = %q", summary.ThumbnailURLLarge)
+	}
+	if summary.Year != "2023" {
+		t.Fatalf("year = %q, want 2023", summary.Year)
 	}
 }
 

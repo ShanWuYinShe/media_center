@@ -55,6 +55,7 @@ type VideoSummary = {
   thumbnailUrl?: string;       // 卡片尺寸缩略图（B 站图床为 ~640px CDN 变体）
   thumbnailUrlLarge?: string;  // 详情页大图；未知图床与 thumbnailUrl 相同
   durationSeconds?: number;
+  year?: string;               // 发布年份（目录数据才有，youtube 实时搜索可能省略）
 };
 ```
 

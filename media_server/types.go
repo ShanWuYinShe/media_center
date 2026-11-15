@@ -13,6 +13,8 @@ type VideoSummary struct {
 	ThumbnailURL      string `json:"thumbnailUrl,omitempty"`
 	ThumbnailURLLarge string `json:"thumbnailUrlLarge,omitempty"`
 	DurationSeconds   int64  `json:"durationSeconds,omitempty"`
+	// Year 是 catalog 里的发布年份(如 "2023");youtube 实时搜索无此字段时省略。
+	Year string `json:"year,omitempty"`
 }
 
 type ProviderInfo struct {

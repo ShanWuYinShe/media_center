@@ -19,5 +19,6 @@ func (s *mediaServer) summaryFromCatalogVideo(cv CatalogVideo) VideoSummary {
 		ThumbnailURL:      cardThumb,
 		ThumbnailURLLarge: largeThumb,
 		DurationSeconds:   cv.DurationSec,
+		Year:              cv.Year,
 	}
 }

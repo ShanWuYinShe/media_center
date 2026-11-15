@@ -65,4 +65,4 @@ MEDIA_SERVER_INTERNAL_TOKEN="$TOKEN" scripts/sync-bilibili-collections.py \
 
 ## 数据模型
 
-分类浏览与搜索只返回 `approved` 数据，**不做实时上游搜索/采集**。候选经 admin `/internal/catalog/import` 导入 → 人工 + AI 审核 → 上线 `approved`。`VideoSummary` 有六个字段：`id`（nativeId）、`title`、`description`、`thumbnailUrl`（卡片尺寸，B 站图床为 ~640px CDN 变体）、`thumbnailUrlLarge`（详情页大图，未知图床与前者相同）、`durationSeconds`。
+分类浏览与搜索只返回 `approved` 数据，**不做实时上游搜索/采集**。候选经 admin `/internal/catalog/import` 导入 → 人工 + AI 审核 → 上线 `approved`。`VideoSummary` 有七个字段：`id`（nativeId）、`title`、`description`、`thumbnailUrl`（卡片尺寸，B 站图床为 ~640px CDN 变体）、`thumbnailUrlLarge`（详情页大图，未知图床与前者相同）、`durationSeconds`、`year`（发布年份；youtube 实时搜索可能省略）。
