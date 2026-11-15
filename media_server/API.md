@@ -66,8 +66,25 @@ type VideoSummary = {
 无鉴权存活探针，同时可诊断 catalog 状态。公开路径 `/health`、`/api/health` 行为一致。
 
 ```json
-{ "status": "ok", "version": "v1.1.0-3-gabc1234", "catalog": "ok" }
+{
+  "status": "ok",
+  "version": "v1.1.0-3-gabc1234",
+  "catalog": "ok",
+  "cache": {
+    "resolveMemoryHits": 0,
+    "resolveDiskHits": 0,
+    "resolveUpstreams": 0,
+    "searchHits": 0,
+    "categoryHits": 0,
+    "warmRuns": 0
+  }
+}
 ```
+
+`cache` 是进程内缓存命中/上游调用计数（阶段 0 观测）：`resolveMemoryHits`/`resolveDiskHits`
+为 YouTube 播放解析的内存/磁盘缓存命中次数，`resolveUpstreams` 为真实调用 vod_extractor 的次数，
+`searchHits`/`categoryHits` 为 YouTube 实时搜索/分类快照缓存命中，`warmRuns` 为后台预热成功轮数。
+进程重启归零，仅用于验证缓存是否在用户路径生效。
 
 `catalog` 取值：`ok`（数据库已打开）、`disabled`（未配置 DB）、`error`（配置了 DB 但打开失败）。`error` 时 HTTP 状态为 **503**，`status` 为 `degraded`——服务仍能响应空目录，但这是必须告警的故障态。
 

@@ -58,6 +58,9 @@ type mediaServer struct {
 	youtubeCategoryCache *youtubeResultCache
 	youtubeCategoryGroup *youtubeFlightGroup
 
+	// 缓存命中/上游调用计数(见 cache_stats.go);/healthz 的 cache 字段读取。
+	cacheStats cacheStats
+
 	// 凭证热加载:admin 生成 providerCredentials.json 后无需重启本服务。
 	// credentialsMu 保护 (credentials, credsStat) 二元组;读路径先原子快照,
 	// 仅在文件 mtime/size 变化时才重新解析(每请求最多一次 stat,解析失败
@@ -287,7 +290,12 @@ func (s *mediaServer) serveAPI(w http.ResponseWriter, r *http.Request) {
 		// 配置了 catalog DB 却打开失败时返回 503 + degraded:服务还能响应空目录,
 		// 但这是"全站空白"的故障态,必须让探针/监控看见,而不是永远 status=ok。
 		status := http.StatusOK
-		payload := map[string]any{"status": "ok", "version": version}
+		payload := map[string]any{
+			"status":  "ok",
+			"version": version,
+			// 缓存命中/上游调用计数:部署后验证缓存是否真正命中(见 cache_stats.go)。
+			"cache": s.cacheStats.snapshot(),
+		}
 		switch {
 		case s.catalogErr != nil:
 			status = http.StatusServiceUnavailable
