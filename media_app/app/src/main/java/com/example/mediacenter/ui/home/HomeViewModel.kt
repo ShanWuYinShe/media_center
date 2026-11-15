@@ -329,10 +329,17 @@ class HomeViewModel(
         }
         contentJob?.cancel()
         loadMoreJob?.cancel()
-        // SWR 刷新同一分类:保留已渲染内容,不闪骨架;其它情况(切分类/首次)照常清空。
+        // SWR 刷新同一分类:保留已渲染内容,不闪骨架。
         val keepShownItems = keepContent &&
             _uiState.value.selectedTab == categoryId &&
             _uiState.value.items.isNotEmpty()
+        // 过期缓存(超出 TTL 但仍在内存):先展示旧内容再后台刷新,避免
+        // "切回刚才看过的分类"闪一下骨架;刷新失败也保留旧内容。
+        val staleCache = if (!keepContent) {
+            categoryCache[categoryId]?.takeIf { it.provider == provider }
+        } else {
+            null
+        }
         if (keepShownItems) {
             _uiState.update {
                 it.copy(
@@ -343,6 +350,28 @@ class HomeViewModel(
                     error = null,
                 )
             }
+        } else if (staleCache != null) {
+            // 过期但不是空的分类:立即渲染旧内容,后台刷新到达后原地替换。
+            _uiState.update {
+                it.copy(
+                    selectedTab = categoryId,
+                    items = staleCache.items,
+                    page = staleCache.page,
+                    total = staleCache.total,
+                    canLoadMore = staleCache.canLoadMore,
+                    // 内容已在屏上,isLoading 只用于拦住期间的 loadMore 抢跑
+                    // (后台刷新会整页替换 items,不能同时追加旧页)。
+                    isLoading = true,
+                    isLoadingMore = false,
+                    loadMoreError = null,
+                    error = null,
+                )
+            }
+            AppLog.i(
+                "Perf",
+                "home category $categoryId: stale cache shown " +
+                    "(${staleCache.items.size} items), refreshing",
+            )
         } else {
             _uiState.update {
                 it.copy(
@@ -395,8 +424,9 @@ class HomeViewModel(
             } catch (e: Exception) {
                 AppLog.e("Home", "load category $categoryId failed: ${e.message}", e)
                 if (_uiState.value.selectedTab == categoryId) {
-                    // SWR 刷新失败且已有内容:保留快照内容,只记日志。
-                    val hasContent = keepContent && _uiState.value.items.isNotEmpty()
+                    // SWR/过期缓存刷新失败且已有内容:保留旧内容,只记日志。
+                    val hasContent = (keepContent || staleCache != null) &&
+                        _uiState.value.items.isNotEmpty()
                     _uiState.update {
                         if (hasContent) {
                             it.copy(isLoading = false)
