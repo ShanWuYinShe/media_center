@@ -330,6 +330,8 @@ func (s *mediaServer) handleYouTubeSearch(w http.ResponseWriter, r *http.Request
 // handleYouTubeResolve 实现 GET /api/providers/youtube/resolve?id=
 // 代理 vod_extractor 解析播放地址,返回 App 端 PlaybackResult 结构。
 func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Request) {
+	// 直链带时效签名,禁止缓存留存在客户端/中间代理(过期后回放只会得到 403)。
+	w.Header().Set("Cache-Control", "no-store")
 	// 鉴权先于限流（同 handleYouTubeSearch）。
 	if !s.requireAppToken(w, r) {
 		return

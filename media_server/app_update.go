@@ -72,6 +72,9 @@ func appUpdateVariant(r *http.Request) string {
 }
 
 func (s *mediaServer) handleAppUpdate(w http.ResponseWriter, r *http.Request) {
+	// 204(已是最新/清单缺失)也是 RFC 9110 默认可缓存状态码;不显式 no-store
+	// 会让发布新版本后客户端长期拿到缓存 204,更新通道静默失效。
+	w.Header().Set("Cache-Control", "no-store")
 	variant := appUpdateVariant(r)
 	manifest, err := s.readAppUpdateManifest(r, variant)
 	if err != nil {
