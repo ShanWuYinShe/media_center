@@ -118,8 +118,12 @@ internal fun PlayerContent(
     var isPlaying by remember { mutableStateOf(false) }
     // 缓冲中提示：卡顿不再表现为“画面冻住不知道在干嘛”
     var isBuffering by remember { mutableStateOf(false) }
-    // 首帧封面:只在进入播放页的首次加载显示,首帧渲染后淡出。
+    // 首帧封面:进入播放页的首次加载显示,首帧渲染后淡出。
     var showPoster by remember { mutableStateOf(posterUrl != null) }
+    // 合集无缝切集/换集时新封面到达:重新盖住旧画面,首帧渲染后再淡出。
+    LaunchedEffect(posterUrl) {
+        if (posterUrl != null) showPoster = true
+    }
     // 最近一次遥控器按键时间：控制条显示期间有任何操作都重置自动隐藏计时
     var lastInteractionMs by remember { mutableLongStateOf(0L) }
     var positionMs by remember { mutableLongStateOf(0L) }
@@ -132,8 +136,9 @@ internal fun PlayerContent(
     // 的 30s 下限/5s 持久化粒度限制)。同分P内换清晰度/播放错误重试时携位续播;
     // 跨分P是不同内容,位置必须清零。READY 后无条件 seekTo 该值。
     var pendingSeekMs by remember { mutableLongStateOf(0L) }
-    // 上次加载流所属的分P,用于判定"换清晰度"与"换分P"
+    // 上次加载流所属的视频/分P,用于判定"换清晰度"、"换分P"与"合集切集"
     var lastPage by remember { mutableIntStateOf(playbackResult.pages.currentPage) }
+    var lastVideoId by remember { mutableStateOf(videoId) }
     // 控制条隐藏时承接遥控器焦点:全局按键始终由播放器根节点处理，
     // 控制层只做信息展示，不抢焦点。
     val playerFocus = remember { FocusRequester() }
@@ -250,6 +255,9 @@ internal fun PlayerContent(
     }
 
     // 页面级收尾:只在离开播放页时执行一次(Unit 不随 controller/分页变化)。
+    // 用 rememberUpdatedState 读"当前集":合集无缝切集后这里必须保存新集的进度,
+    // 直接捕获参数会永远写回进入播放页时的第一集。
+    val latestVideoId by rememberUpdatedState(videoId)
     DisposableEffect(Unit) {
         onDispose {
             // 退出播放页前保存位置,保证"播放中途返回"也能续播。
@@ -260,15 +268,16 @@ internal fun PlayerContent(
             val pagesInfo = latestPlaybackResult.pages
             // 退出保存含 SharedPreferences + JSON 编解码,不能在主线程做(低端盒子会掉帧);
             // 用应用级 IO 作用域:onDispose 处 rememberCoroutineScope 已随页面取消。
+            val saveVideoId = latestVideoId
             BackgroundWork.scope.launch {
-                PlaybackPositionStore.save(context, playbackStorageKey(videoId, pagesInfo.currentPage), posMs)
+                PlaybackPositionStore.save(context, playbackStorageKey(saveVideoId, pagesInfo.currentPage), posMs)
                 // 回写观看历史(继续观看行):看完(距结尾不足 15s)的条目会被移除;
                 // 多P回写绝对位置(前面各页时长累加)+ 最后观看页,继续观看点击后直达该页
                 val offsetSec = pagesInfo.pageDurations.take(pagesInfo.currentPage).sum()
                 val totalPageSec = pagesInfo.pageDurations.sum()
                 WatchHistory.updatePosition(
                     context,
-                    videoId,
+                    saveVideoId,
                     offsetSec + posMs / 1000,
                     if (totalPageSec > 0) totalPageSec else durMs / 1000,
                     page = pagesInfo.currentPage,
@@ -287,7 +296,11 @@ internal fun PlayerContent(
         // 换源保进度:同分P重载前捕获精确位置;stop 后位置归零,捕获值经
         // pendingSeekMs 传递到 READY 回调。首次加载时 controller 位置为 0,
         // 走原有断点续播流程;跨分P强制归零(不同内容不能携位)。
-        val samePage = playbackResult.pages.currentPage == lastPage
+        // 合集无缝切集:换了视频必须当作"跨内容"处理,位置清零(不能把上一集
+        // 的播放位置 seek 到下一集);同视频换清晰度/换分P才考虑携位。
+        val sameVideo = videoId == lastVideoId
+        lastVideoId = videoId
+        val samePage = sameVideo && playbackResult.pages.currentPage == lastPage
         lastPage = playbackResult.pages.currentPage
         val captured = if (samePage) {
             runCatching { c.currentPosition }.getOrDefault(0L).coerceAtLeast(0L)

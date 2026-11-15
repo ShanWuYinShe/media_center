@@ -13,8 +13,6 @@ import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.VideosResponse
 import com.example.mediacenter.testutil.MainDispatcherRule
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.async
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -42,7 +40,13 @@ class PlayerViewModelTest {
         override suspend fun catalogPage(
             categoryId: String, page: Int, pageSize: Int, minDurationSeconds: Long?, maxDurationSeconds: Long?,
         ): VideosResponse = VideosResponse()
-        override suspend fun collectionFor(videoId: String): VideoCollectionResponse = collection
+
+        // 模拟服务端:合集队列里当前集的下标随请求的 videoId 变化。
+        override suspend fun collectionFor(videoId: String): VideoCollectionResponse {
+            val items = collection.items.orEmpty()
+            return collection.copy(currentIndex = items.indexOfFirst { it.id == videoId })
+        }
+
         override suspend fun search(query: String, page: Int, pageSize: Int): SearchResponse = SearchResponse()
         override suspend fun youtubeSearch(query: String): SearchResponse = SearchResponse()
         override suspend fun resolvePlayback(videoId: String, qn: Int?): PlaybackResult {
@@ -79,18 +83,22 @@ class PlayerViewModelTest {
     }
 
     @Test
-    fun `单P片尾发出合集下一集事件`() = runTest {
+    fun `单P片尾无缝切到合集下一集`() = runTest {
         val repo = FakeRepository(playback(0, 0), collection("A", "B"))
         val vm = PlayerViewModel("A", repository = repo)
         advanceUntilIdle()
+        assertEquals("A", vm.uiState.value.videoId)
         assertEquals(PlaybackNext.Episode(VideoSummary(id = "B", title = "B")), vm.uiState.value.next)
 
-        val event = async { vm.episodeEvents.first() }
-        // 先让收集器真正订阅(StandardTestDispatcher 不调度就不会订阅),
-        // 否则 tryEmit 在无订阅者时会被丢弃。
-        advanceUntilIdle()
         assertEquals(true, vm.onPlaybackEnded())
-        assertEquals("B", event.await().id)
+        advanceUntilIdle()
+
+        // 页内无缝切集:同一个 ViewModel 解析下一集,不重建播放页/播放服务。
+        assertEquals("B", vm.uiState.value.videoId)
+        assertEquals("B", vm.uiState.value.title)
+        assertEquals(listOf("A", "B"), repo.resolvedIds)
+        assertNull("B 已是最后一集", vm.uiState.value.next)
+        assertNull(vm.uiState.value.error)
     }
 
     @Test
