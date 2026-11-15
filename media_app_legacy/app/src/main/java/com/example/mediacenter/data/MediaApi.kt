@@ -67,6 +67,10 @@ class MediaApi(
 
     suspend fun providers(): ProvidersResponse = get(listOf("providers"))
 
+    // 首页启动聚合:providers + 当前 provider 分类一次返回(老盒子省一次 RTT)。
+    suspend fun bootstrap(provider: String): ProviderBootstrapResponse =
+        get(listOf("providers", provider, "bootstrap"))
+
     // 凭证接口需要 X-App-Token(与服务端 MEDIA_SERVER_APP_API_TOKEN 一致):
     // 凭证是共享账号会话 cookie,服务端只向持令牌的客户端下发。
     // allowHttpFallback=false:SESSDATA/令牌绝不走明文 HTTP 降级——TLS 握手
