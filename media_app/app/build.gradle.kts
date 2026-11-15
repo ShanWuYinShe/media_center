@@ -235,6 +235,8 @@ dependencies {
     implementation("androidx.tv:tv-material:1.0.0")
     // activity-ktx 由 activity-compose 传递引入,不重复声明
     implementation("androidx.activity:activity-compose:1.13.0")
+    // JankStats(帧卡顿观测):阶段 0 建立现场基线,采集开销极低,仅写本地日志。
+    implementation("androidx.metrics:metrics-performance:1.0.0")
     implementation("androidx.navigation:navigation-compose:2.9.0")
 
     // Coil
