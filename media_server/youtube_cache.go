@@ -93,9 +93,13 @@ type resolveGroup struct {
 
 var globalResolveGroup = &resolveGroup{calls: make(map[string]*resolveFlight)}
 
-// do 执行(或加入)key 对应的解析。等待者尊重自己的 ctx 取消;leader 的 ctx
-// 取消会终止上游调用,所有等待者拿到同一个错误(下一次请求会重新发起)。
-func (g *resolveGroup) do(ctx context.Context, key string, fn func() (PlaybackResultResponse, error)) (PlaybackResultResponse, error) {
+// do 执行(或加入)key 对应的解析。等待者尊重自己的 ctx 取消;leader 的上游调用
+// 由调用方用脱离取消的 ctx 执行(见 handleYouTubeResolve),避免一个客户端断开
+// 让所有等待者一起 502。
+//
+// 命名返回值是必需的:fn panic 时 defer 里 recover 后只能通过命名返回值把错误
+// 交给 leader;否则 leader 会拿到 (零值, nil) 并被 handler 当成成功正缓存。
+func (g *resolveGroup) do(ctx context.Context, key string, fn func() (PlaybackResultResponse, error)) (result PlaybackResultResponse, err error) {
 	g.mu.Lock()
 	if flight, ok := g.calls[key]; ok {
 		g.mu.Unlock()
@@ -112,13 +116,16 @@ func (g *resolveGroup) do(ctx context.Context, key string, fn func() (PlaybackRe
 
 	defer func() {
 		if r := recover(); r != nil {
-			flight.err = fmt.Errorf("resolve panic: %v", r)
+			result = PlaybackResultResponse{}
+			err = fmt.Errorf("resolve panic: %v", r)
 		}
+		flight.result = result
+		flight.err = err
 		g.mu.Lock()
 		delete(g.calls, key)
 		g.mu.Unlock()
 		close(flight.done)
 	}()
-	flight.result, flight.err = fn()
-	return flight.result, flight.err
+	result, err = fn()
+	return result, err
 }

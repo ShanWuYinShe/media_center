@@ -33,7 +33,9 @@ type mediaServer struct {
 	catalog        *Catalog
 	// catalogErr 记录配置了 DB 但打开失败的原因:此时服务仍可响应(空目录),
 	// 但 /health 会标记 degraded,避免"进程活着但全站空白"被监控漏掉。
-	catalogErr   error
+	catalogErr error
+	// YouTube resolve 成功结果的持久缓存(独立 SQLite 文件);nil 时只用内存缓存。
+	resolveDisk  *resolveDiskCache
 	crashLimiter *ipWindowLimiter
 	// 凭证端点 per-IP 限流(独立于崩溃上报限流器)。
 	credentialsLimiter *ipWindowLimiter
@@ -172,6 +174,18 @@ func main() {
 		} else {
 			server.catalog = catalog
 			defer catalog.Close()
+		}
+	}
+
+	// resolve 持久缓存:放 catalog 同级的 data 目录(容器内 /app/data 持久卷),
+	// 进程重启/发布后 YouTube 播放仍可毫秒回放。打开失败只降级为内存缓存。
+	if config.ResolveCacheDBPath != "" && config.VODExtractorURL != "" {
+		if cache, err := openResolveDiskCache(config.ResolveCacheDBPath); err != nil {
+			log.Printf("warning: open resolve cache %q failed: %v (memory cache only)", config.ResolveCacheDBPath, err)
+		} else {
+			server.resolveDisk = cache
+			defer cache.close()
+			log.Printf("youtube resolve cache persisted at %s", config.ResolveCacheDBPath)
 		}
 	}
 
