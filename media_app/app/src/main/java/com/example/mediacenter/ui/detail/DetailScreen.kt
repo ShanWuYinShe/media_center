@@ -43,7 +43,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import kotlinx.coroutines.delay
 import com.example.mediacenter.data.MediaRepositoryHolder
+import com.example.mediacenter.data.PlaybackPrefetcher
 import com.example.mediacenter.data.PlaybackPositionStore
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.playbackStorageKey
@@ -76,6 +78,12 @@ fun DetailScreen(
     onBack: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
+    // 停留 1.2s 才预取播放地址:快速浏览列表不触发,避免把 YouTube 冷解析
+    // (占用 extractor 并发)浪费在"只看一眼"的视频上;玩家点"播放"时通常已就绪。
+    LaunchedEffect(video.id) {
+        delay(1200)
+        PlaybackPrefetcher.prefetch(MediaRepositoryHolder.repository, video.id)
+    }
     val provider = MediaRepositoryHolder.repository.currentProvider
 
     // 全屏封面做背景(压暗 + 渐隐到页面底色),前景是"封面 + 信息/操作"分栏。

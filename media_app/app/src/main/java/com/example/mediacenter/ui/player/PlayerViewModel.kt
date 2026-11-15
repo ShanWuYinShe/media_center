@@ -7,6 +7,7 @@ import com.example.mediacenter.data.ApiException
 import com.example.mediacenter.data.BilibiliApiException
 import com.example.mediacenter.data.MediaRepositoryApi
 import com.example.mediacenter.data.MediaRepositoryHolder
+import com.example.mediacenter.data.PlaybackPrefetcher
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.parsePageId
@@ -129,7 +130,11 @@ class PlayerViewModel(
             } else {
                 videoId
             }
-            val result = repository.resolvePlayback(targetId, qn)
+            // 详情页预取命中/在途时直接用,省掉解析等待;未命中正常解析并回填。
+            val prefetched = PlaybackPrefetcher.resolve(repository, targetId, qn)
+            val result = prefetched ?: repository.resolvePlayback(targetId, qn).also {
+                PlaybackPrefetcher.put(repository, targetId, qn, it)
+            }
             // 记录服务端实际给出的清晰度(可能因会员/片源自动降级),UI 选中态与
             // 后续"重复点当前档位"判断都以它为准。
             currentQn = result.options.firstOrNull()?.qn ?: qn
