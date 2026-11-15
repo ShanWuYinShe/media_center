@@ -65,6 +65,16 @@ object PlaybackPrefetcher {
         return take(key)
     }
 
+    /** 仅测试用:清空缓存与在途任务(JVM 测试进程内所有用例共享这个单例)。 */
+    @androidx.annotation.VisibleForTesting
+    internal fun clearForTest() {
+        synchronized(lock) {
+            inflight.values.forEach { it.cancel() }
+            inflight.clear()
+            cache.clear()
+        }
+    }
+
     /** 播放页解析成功后回填,后续切分P/重试可复用。 */
     fun put(repository: MediaRepositoryApi, videoId: String, qn: Int?, result: PlaybackResult) {
         put(keyOf(repository, videoId, qn), result)

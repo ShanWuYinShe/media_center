@@ -11,6 +11,7 @@ import com.example.mediacenter.data.VideoCollectionInfo
 import com.example.mediacenter.data.VideoCollectionResponse
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.VideosResponse
+import com.example.mediacenter.data.PlaybackPrefetcher
 import com.example.mediacenter.testutil.MainDispatcherRule
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -18,6 +19,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 
@@ -25,6 +27,13 @@ import org.junit.Test
 class PlayerViewModelTest {
     @get:Rule
     val mainDispatcher = MainDispatcherRule()
+
+    @Before
+    fun setUp() {
+        // 预取器是进程级单例:上一条用例解析过的视频会被下一条命中,导致
+        // "同一 VM 解析了几次"的断言失真。每个用例前清空。
+        PlaybackPrefetcher.clearForTest()
+    }
 
     private class FakeRepository(
         private val playback: PlaybackResult,
