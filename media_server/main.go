@@ -48,6 +48,14 @@ type mediaServer struct {
 	youtubeSearchLimiter  *ipWindowLimiter
 	youtubeResolveLimiter *ipWindowLimiter
 
+	// YouTube 实时通道缓存(见 youtube_snapshot_cache.go):分类快照 + 搜索 TTL 缓存
+	// 与单飞,避免每次浏览/搜索都拉起 yt-dlp(并发上限 2,冷启动秒级到数十秒)。
+	youtubeCacheOnce     sync.Once
+	youtubeSearchCache   *youtubeResultCache
+	youtubeSearchGroup   *youtubeFlightGroup
+	youtubeCategoryCache *youtubeResultCache
+	youtubeCategoryGroup *youtubeFlightGroup
+
 	// 凭证热加载:admin 生成 providerCredentials.json 后无需重启本服务。
 	// credentialsMu 保护 (credentials, credsStat) 二元组;读路径先原子快照,
 	// 仅在文件 mtime/size 变化时才重新解析(每请求最多一次 stat,解析失败
@@ -140,6 +148,8 @@ func main() {
 	}
 	if config.VODExtractorURL != "" {
 		log.Printf("youtube resolve enabled (vod extractor at %s)", config.VODExtractorURL)
+		// 后台轮流预热分类/热词,让分类页与热词搜索走缓存;不阻塞启动。
+		server.startYouTubeCacheWarmer()
 	}
 
 	if config.CredentialsPath != "" {

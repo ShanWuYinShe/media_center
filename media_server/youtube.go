@@ -314,7 +314,7 @@ func (s *mediaServer) handleYouTubeSearch(w http.ResponseWriter, r *http.Request
 		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "QUERY_TOO_LONG", Message: "搜索关键词过长。"})
 		return
 	}
-	items, err := s.yt.searchVideos(r.Context(), query)
+	items, err := s.cachedYouTubeSearch(r.Context(), query)
 	if err != nil {
 		log.Printf("youtube search %q: %v", query, err)
 		s.writeError(w, &apiError{Status: http.StatusBadGateway, Code: "UPSTREAM_ERROR", Message: "YouTube 搜索暂不可用,请稍后再试。"})
