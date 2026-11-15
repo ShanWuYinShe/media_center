@@ -55,6 +55,8 @@ data class VideoSummary(
     // 详情页大图;旧服务端不返回时回退 thumbnailUrl。
     val thumbnailUrlLarge: String? = null,
     val durationSeconds: Long? = null,
+    // 发布年份(目录数据才有;youtube 实时搜索可能为空)。
+    val year: String? = null,
 )
 
 @Serializable

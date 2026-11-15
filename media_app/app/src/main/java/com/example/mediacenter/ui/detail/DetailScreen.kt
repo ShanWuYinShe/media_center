@@ -164,17 +164,33 @@ fun DetailScreen(
                         overflow = TextOverflow.Ellipsis,
                     )
                     val duration = video.durationSeconds
-                    if (duration != null && duration > 0) {
+                    val year = video.year?.takeIf { it.isNotBlank() }
+                    if ((duration != null && duration > 0) || year != null) {
                         Spacer(Modifier.height(10.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = formatSeconds(duration),
-                                color = TextSecondary,
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier
-                                    .background(CardGray.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
-                                    .padding(horizontal = 8.dp, vertical = 3.dp),
-                            )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            if (duration != null && duration > 0) {
+                                Text(
+                                    text = formatSeconds(duration),
+                                    color = TextSecondary,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier
+                                        .background(CardGray.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
+                                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                                )
+                            }
+                            if (year != null) {
+                                Text(
+                                    text = year,
+                                    color = TextSecondary,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier
+                                        .background(CardGray.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
+                                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                                )
+                            }
                         }
                     }
                     Spacer(Modifier.height(8.dp))
