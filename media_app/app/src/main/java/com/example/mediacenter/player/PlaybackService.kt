@@ -14,8 +14,9 @@ import com.example.mediacenter.net.BILI_CDN_HEADERS
 
 /**
  * 播放服务:ExoPlayer + MediaSession 常驻于此,提供系统媒体栏卡片、通知控制与媒体按键。
- * 播放页通过 MediaController 异步绑定驱动播放;播放页退出时由页面显式
- * stopService 停止(本 App 无后台播放需求,退出播放页即停止)。
+ * 播放页通过 MediaController 异步绑定驱动播放;播放页退出时先暂停,并由
+ * [PlaybackServiceKeepAlive] 排定延迟停止(20s 保活窗口,快速回进播放页可复用
+ * 同一会话;本 App 无后台播放需求,窗口结束即停止)。
  */
 class PlaybackService : MediaSessionService() {
 

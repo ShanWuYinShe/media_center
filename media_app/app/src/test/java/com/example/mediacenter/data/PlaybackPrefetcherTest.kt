@@ -2,10 +2,17 @@ package com.example.mediacenter.data
 
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Before
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 class PlaybackPrefetcherTest {
+    @Before
+    fun setUp() {
+        // 进程级单例:避免用例间缓存串味。
+        PlaybackPrefetcher.clearForTest()
+    }
+
     private class FakeRepository : MediaRepositoryApi {
         override val currentProvider: String = "bilibili"
 
@@ -47,14 +54,18 @@ class PlaybackPrefetcherTest {
     }
 
     @Test
-    fun `预取结果只能被播放页消费一次`() = runTest {
+    fun `TTL 内预取结果可重复复用`() = runTest {
         val repository = FakeRepository()
         val videoId = "BV1prefetch-once"
         val expected = repository.resolvePlayback(videoId, null)
         PlaybackPrefetcher.put(repository, videoId, null, expected)
 
         assertEquals(expected, PlaybackPrefetcher.resolve(repository, videoId, null))
-        assertNull("消费后应回落为未命中", PlaybackPrefetcher.resolve(repository, videoId, null))
+        assertEquals(
+            "快速回看同一视频应继续命中,不再重复解析",
+            expected,
+            PlaybackPrefetcher.resolve(repository, videoId, null),
+        )
     }
 
     @Test
