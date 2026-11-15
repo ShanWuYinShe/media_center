@@ -30,6 +30,7 @@ import com.example.mediacenter.ui.theme.CardSpacing
 import com.example.mediacenter.ui.theme.DividerGray
 import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
 import com.example.mediacenter.ui.theme.VideoGridMinWidth
+import com.example.mediacenter.util.DevicePerformance
 
 /**
  * 目录/搜索首屏加载骨架:与 [PagedVideoGrid] 同列宽、同卡片比例的占位卡,
@@ -44,16 +45,22 @@ fun VideoGridSkeleton(
     modifier: Modifier = Modifier,
     itemCount: Int = 9,
 ) {
-    val transition = rememberInfiniteTransition(label = "video-grid-skeleton")
-    val breath by transition.animateFloat(
-        initialValue = 0.55f,
-        targetValue = 0.95f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 900, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "video-grid-skeleton-breath",
-    )
+    // 低端盒子用静态骨架:呼吸动画每帧都要重绘,1-2GB 盒子把 GPU 留给首帧与滚动。
+    val breath = if (DevicePerformance.isLowEnd) {
+        STATIC_SKELETON_ALPHA
+    } else {
+        val transition = rememberInfiniteTransition(label = "video-grid-skeleton")
+        val value by transition.animateFloat(
+            initialValue = 0.55f,
+            targetValue = 0.95f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 900, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "video-grid-skeleton-breath",
+        )
+        value
+    }
     LazyVerticalGrid(
         columns = GridCells.Adaptive(VideoGridMinWidth),
         contentPadding = PaddingValues(
@@ -69,6 +76,8 @@ fun VideoGridSkeleton(
         items(itemCount) { SkeletonCard() }
     }
 }
+
+private const val STATIC_SKELETON_ALPHA = 0.8f
 
 @Composable
 private fun SkeletonCard() {
