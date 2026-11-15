@@ -4,6 +4,7 @@ import android.content.Intent
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Player
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -37,6 +38,19 @@ class PlaybackService : MediaSessionService() {
         val defaultFactory = DefaultMediaSourceFactory(httpFactory)
             .setLoadErrorHandlingPolicy(CappedLoadErrorHandlingPolicy(maxRetries = 2))
         val player = ExoPlayer.Builder(this)
+            // 起播缓冲调优:默认 bufferForPlayback=2.5s,解析完成后还要再等缓冲才出画;
+            // 降到 1.2s 让起播更快,重缓冲阈值降到 3s(配合"连续失败自动降档"兜底,
+            // 弱网下优先保证起播,而不是先攒 5s 再播)。
+            .setLoadControl(
+                DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(
+                        /* minBufferMs = */ 15_000,
+                        /* maxBufferMs = */ 50_000,
+                        /* bufferForPlaybackMs = */ 1_200,
+                        /* bufferForPlaybackAfterRebufferMs = */ 3_000,
+                    )
+                    .build(),
+            )
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
