@@ -52,7 +52,8 @@ type VideoSummary = {
   id: string;            // nativeId（如 BV1xxx），App 直接用它调本地解析器
   title: string;
   description: string;
-  thumbnailUrl?: string;
+  thumbnailUrl?: string;       // 卡片尺寸缩略图（B 站图床为 ~640px CDN 变体）
+  thumbnailUrlLarge?: string;  // 详情页大图；未知图床与 thumbnailUrl 相同
   durationSeconds?: number;
 };
 ```

@@ -55,7 +55,8 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
         val backdrop = ThumbnailImageView(this).apply { alpha = 0f }
         screen.addView(backdrop, frameMatch())
         screen.addView(detailBackdropScrim(), frameMatch())
-        loadBackdropImage(details.thumbnailUrl, emptyMap(), backdrop)
+        // 详情页用服务端下发的大图;旧服务端不返回时回退卡片缩略图。
+        loadBackdropImage(details.thumbnailUrlLarge ?: details.thumbnailUrl, emptyMap(), backdrop)
         // 详情页采用 Android TV / Material 设计规范的固定 dp/sp 值:
         // 标题 30sp(headline)、正文 18sp、说明 14sp(caption,均 ≥ TV 最小可读字号),
         // 主操作与可聚焦控件 ≥ 48dp 焦点目标,页边距满足 48/27dp overscan 安全区。
@@ -128,7 +129,7 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
         hero.addView(heroImage, frameMatch())
         hero.addView(heroInitials, frameMatch())
         loadImage(
-            url = details.thumbnailUrl,
+            url = details.thumbnailUrlLarge ?: details.thumbnailUrl,
             headers = emptyMap(),
             image = heroImage,
             placeholder = heroInitials,

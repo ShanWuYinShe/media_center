@@ -11,11 +11,13 @@ func (s *mediaServer) summaryFromCatalogVideo(cv CatalogVideo) VideoSummary {
 	if strings.HasPrefix(thumb, "http://") {
 		thumb = "https://" + strings.TrimPrefix(thumb, "http://")
 	}
+	cardThumb, largeThumb := thumbnailVariants(thumb)
 	return VideoSummary{
-		ID:              cv.NativeID,
-		Title:           cv.Title,
-		Description:     cv.Description,
-		ThumbnailURL:    thumb,
-		DurationSeconds: cv.DurationSec,
+		ID:                cv.NativeID,
+		Title:             cv.Title,
+		Description:       cv.Description,
+		ThumbnailURL:      cardThumb,
+		ThumbnailURLLarge: largeThumb,
+		DurationSeconds:   cv.DurationSec,
 	}
 }

@@ -140,10 +140,11 @@ func (c *ytClient) searchVideos(ctx context.Context, query string) ([]VideoSumma
 			duration = int64(*e.Duration)
 		}
 		summaries = append(summaries, VideoSummary{
-			ID:              e.ID,
-			Title:           title,
-			ThumbnailURL:    bestThumbnailURL(e),
-			DurationSeconds: duration,
+			ID:                e.ID,
+			Title:             title,
+			ThumbnailURL:      youtubeCardThumbnail(e),
+			ThumbnailURLLarge: bestThumbnailURL(e),
+			DurationSeconds:   duration,
 		})
 	}
 	return summaries, nil

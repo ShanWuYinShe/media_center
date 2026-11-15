@@ -161,6 +161,7 @@ class MediaRepository(
             title = video.title,
             description = video.description,
             thumbnailUrl = video.thumbnailUrl,
+            thumbnailUrlLarge = video.thumbnailUrlLarge ?: video.thumbnailUrl,
             durationSeconds = video.durationSeconds,
         )
     }

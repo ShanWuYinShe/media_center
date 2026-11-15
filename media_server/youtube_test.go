@@ -220,9 +220,11 @@ func TestHandleYouTubeSearch(t *testing.T) {
 		`"id":"jNQXAC9IVRw"`,
 		`"title":"jawed: Me at the zoo"`,
 		`"thumbnailUrl":"https://i/maxres.jpg"`,
+		`"thumbnailUrlLarge":"https://i/maxres.jpg"`,
 		`"durationSeconds":19`,
 		`"id":"abc12345678"`,
 		`"thumbnailUrl":"https://i/fallback.jpg"`,
+		`"thumbnailUrlLarge":"https://i/fallback.jpg"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("response missing %s:\n%s", want, body)
