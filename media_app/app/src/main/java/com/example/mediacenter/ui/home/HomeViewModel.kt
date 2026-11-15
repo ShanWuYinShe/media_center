@@ -14,6 +14,7 @@ import com.example.mediacenter.data.WatchEntry
 import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.data.friendlyLoadMessage
 import com.example.mediacenter.log.AppLog
+import com.example.mediacenter.util.DevicePerformance
 import com.example.mediacenter.ui.update.UpdateDialogState
 import com.example.mediacenter.update.AppUpdateHolder
 import kotlinx.coroutines.CancellationException
@@ -146,7 +147,8 @@ class HomeViewModel(
             provider = repository.currentProvider,
             categories = state.categories,
             selectedTab = state.selectedTab,
-            items = state.items.take(HomePageSize),
+            // 低端盒子少存一些首屏快照:减少 JSON 编解码与内存占用。
+            items = state.items.take(if (DevicePerformance.isLowEnd) 12 else HomePageSize),
             total = state.total,
             savedAtEpochMs = System.currentTimeMillis(),
         )

@@ -35,6 +35,9 @@ class MediaCenterApp : Application(), ImageLoaderFactory {
         AppLog.init(this)
         // 注入全局 repository 的持久化 context(provider 选择重启后恢复)
         com.example.mediacenter.data.MediaRepositoryHolder.init(this)
+        // 设备性能档位(低端盒子降级骨架动画/缓存容量),启动时判定一次。
+        com.example.mediacenter.util.DevicePerformance.init(this)
+        AppLog.i("Perf", "device tier: lowEnd=${com.example.mediacenter.util.DevicePerformance.isLowEnd}")
         // 更新协调器同样需要 application context(首页/设置页共用一份更新状态)
         com.example.mediacenter.update.AppUpdateHolder.init(this)
         // 记录真实系统版本:国产 TV 盒子常在设置里显示 4.4.2 但 Build.VERSION 实际是 21+

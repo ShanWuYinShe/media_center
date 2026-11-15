@@ -2,6 +2,7 @@ package com.example.mediacenter.data
 
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.util.BackgroundWork
+import com.example.mediacenter.util.DevicePerformance
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -20,14 +21,14 @@ import kotlinx.coroutines.launch
  * - 失败静默丢弃,播放页照常重新解析并回填。
  */
 object PlaybackPrefetcher {
-    private const val MAX_ENTRIES = 8
+    private val maxEntries: Int = if (DevicePerformance.isLowEnd) 4 else 8
     private const val TTL_MS = 5 * 60 * 1000L
 
     private data class Key(val provider: String, val videoId: String, val qn: Int?)
     private data class Entry(val result: PlaybackResult, val fetchedAtMs: Long)
 
     private val lock = Any()
-    private val cache = LinkedHashMap<Key, Entry>(MAX_ENTRIES, 0.75f, true)
+    private val cache = LinkedHashMap<Key, Entry>(maxEntries, 0.75f, true)
     private val inflight = HashMap<Key, Job>()
 
     /** 发起预取;已有未过期缓存或在途任务时直接复用。失败只记日志。 */
@@ -80,7 +81,7 @@ object PlaybackPrefetcher {
     private fun put(key: Key, result: PlaybackResult) {
         synchronized(lock) {
             cache[key] = Entry(result, System.currentTimeMillis())
-            while (cache.size > MAX_ENTRIES) {
+            while (cache.size > maxEntries) {
                 val eldest = cache.keys.firstOrNull() ?: break
                 cache.remove(eldest)
             }
