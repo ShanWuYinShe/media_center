@@ -81,8 +81,10 @@ fun DetailScreen(
     // 全屏封面做背景(压暗 + 渐隐到页面底色),前景是"封面 + 信息/操作"分栏。
     // 比纯黑底更有内容氛围,也不会像单列长滚动那样把播放按钮推到首屏外。
     Box(modifier = Modifier.fillMaxSize()) {
+        // 详情页用服务端下发的大图(卡片缩略图只有 ~640px,铺满全屏会糊)。
+        val posterUrl = video.thumbnailUrlLarge ?: video.thumbnailUrl
         AsyncImage(
-            model = video.thumbnailUrl,
+            model = posterUrl,
             contentDescription = null,
             modifier = Modifier.fillMaxSize().alpha(0.32f),
             contentScale = ContentScale.Crop,
@@ -131,7 +133,7 @@ fun DetailScreen(
                 verticalAlignment = Alignment.Top,
             ) {
                 AsyncImage(
-                    model = video.thumbnailUrl,
+                    model = posterUrl,
                     contentDescription = null,
                     // 左列封面占 45% 宽、16:9、圆角;源图为横版封面,裁成竖版海报
                     // 会切掉两侧主体,故保持横版并与右侧标题同顶线。

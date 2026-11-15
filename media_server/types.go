@@ -4,11 +4,15 @@ package main
 // 不再包含任何 delivery/playback/provider 相关字段——能否本地解析是
 // provider 的固有属性,App 端按 provider 自行决定怎么拿播放地址。
 type VideoSummary struct {
-	ID              string `json:"id"`
-	Title           string `json:"title"`
-	Description     string `json:"description"`
-	ThumbnailURL    string `json:"thumbnailUrl,omitempty"`
-	DurationSeconds int64  `json:"durationSeconds,omitempty"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	// ThumbnailURL 是卡片尺寸缩略图(B 站 CDN 变体 ~640px,弱网首屏带宽关键);
+	// ThumbnailURLLarge 是详情页用的大图,App 本地详情页用它做封面/背景。
+	// 未知图床两个字段相同,旧客户端只读 thumbnailUrl 行为不变。
+	ThumbnailURL      string `json:"thumbnailUrl,omitempty"`
+	ThumbnailURLLarge string `json:"thumbnailUrlLarge,omitempty"`
+	DurationSeconds   int64  `json:"durationSeconds,omitempty"`
 }
 
 type ProviderInfo struct {

@@ -41,7 +41,10 @@ data class VideoSummary(
     val id: String,
     val title: String,
     val description: String? = null,
+    // 卡片尺寸缩略图(服务端对 B 站图床下发 ~640px 变体,弱网首屏带宽关键)。
     val thumbnailUrl: String? = null,
+    // 详情页大图;旧服务端不返回时回退 thumbnailUrl。
+    val thumbnailUrlLarge: String? = null,
     val durationSeconds: Long? = null,
 )
 

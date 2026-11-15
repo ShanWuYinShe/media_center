@@ -62,7 +62,7 @@ App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部�
 
 以本仓库 `media_server/API.md` 为准。业务接口规范前缀 `/api/v1`（如 `/api/v1/providers`），旧 `/api/*` 为过渡期废弃别名，两者行为一致。App 侧目录数据只消费 providers、providers/{provider}/categories、providers/{provider}/categories/{catID}/videos 三个接口；另消费 App 更新接口 `/api/v1/app/update`、`/api/v1/app/download`、凭证接口 `/api/v1/providers/credentials`；youtube provider 额外消费实时端点 `/api/v1/providers/youtube/search` 与 `/api/v1/providers/youtube/resolve`（均要求 `X-App-Token`，见 `media_server/youtube.go` 与 API.md）。`GET /healthz` 为无版本前缀的存活探针。
 播放由 App 端收到 `VideoSummary.id`（nativeId）后按 provider 处理：bilibili 本地解析、youtube 调 server 解析端点。详情页由 App 端本地从 `VideoSummary` 构造，不调 server。
-`VideoSummary` 只有 `id/title/description/thumbnailUrl/durationSeconds` 五个字段。
+`VideoSummary` 有 `id/title/description/thumbnailUrl/thumbnailUrlLarge/durationSeconds` 六个字段；`thumbnailUrl` 是卡片尺寸、`thumbnailUrlLarge` 是详情页大图（未知图床两者相同，旧客户端只读前者行为不变）。
 
 ## 约束
 

@@ -180,6 +180,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                             id = video.id, title = video.title,
                             description = video.description,
                             thumbnailUrl = video.thumbnailUrl,
+                            thumbnailUrlLarge = video.thumbnailUrlLarge ?: video.thumbnailUrl,
                             durationSeconds = video.durationSeconds,
                         )
                         sem.withPermit {
@@ -1210,6 +1211,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
             title = title,
             description = description,
             thumbnailUrl = thumbnailUrl,
+            thumbnailUrlLarge = thumbnailUrlLarge ?: thumbnailUrl,
             durationSeconds = durationSeconds,
             playbackOptions = listOfNotNull(failedOption),
         )

@@ -239,8 +239,12 @@ func TestCategoryVideosPageReadsCatalogDirectly(t *testing.T) {
 	if summary.ID != "BV1cat" {
 		t.Fatalf("id = %q, want BV1cat", summary.ID)
 	}
-	if summary.ThumbnailURL != "https://i0.hdslb.com/test.jpg" {
+	// B 站图床由服务端下发卡片/详情两个尺寸变体,卡片图不再下载原始大图。
+	if summary.ThumbnailURL != "https://i0.hdslb.com/test.jpg"+bilibiliCardThumbSuffix {
 		t.Fatalf("thumbnailUrl = %q", summary.ThumbnailURL)
+	}
+	if summary.ThumbnailURLLarge != "https://i0.hdslb.com/test.jpg"+bilibiliLargeThumbSuffix {
+		t.Fatalf("thumbnailUrlLarge = %q", summary.ThumbnailURLLarge)
 	}
 }
 
