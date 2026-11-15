@@ -18,6 +18,8 @@ import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.theme.BackgroundDark
+import com.example.mediacenter.util.BackgroundWork
+import kotlinx.coroutines.launch
 
 @Composable
 fun PlayerScreen(
@@ -40,17 +42,16 @@ fun PlayerScreen(
     // 合集下一集由 ViewModel 发出事件,UI 只做"登记历史 + 导航"。
     LaunchedEffect(viewModel, context) {
         viewModel.episodeEvents.collect { nextEpisode ->
-            WatchHistory.upsert(
-                context,
-                WatchEntry(
-                    videoId = nextEpisode.id,
-                    provider = MediaRepositoryHolder.repository.currentProvider,
-                    title = nextEpisode.title,
-                    thumbnailUrl = nextEpisode.thumbnailUrl.orEmpty(),
-                    durationSeconds = nextEpisode.durationSeconds ?: 0L,
-                    page = 0,
-                ),
+            val entry = WatchEntry(
+                videoId = nextEpisode.id,
+                provider = MediaRepositoryHolder.repository.currentProvider,
+                title = nextEpisode.title,
+                thumbnailUrl = nextEpisode.thumbnailUrl.orEmpty(),
+                durationSeconds = nextEpisode.durationSeconds ?: 0L,
+                page = 0,
             )
+            // 登记历史是 SP + JSON 写盘,移出主线程;导航不等待它完成。
+            BackgroundWork.scope.launch { WatchHistory.upsert(context, entry) }
             onNextVideo(nextEpisode)
         }
     }
@@ -66,6 +67,7 @@ fun PlayerScreen(
                     playbackResult = result,
                     collection = state.collection,
                     overlayError = state.error,
+                    isLoading = state.isLoading,
                     onSelectQuality = viewModel::selectQuality,
                     onSelectPage = viewModel::selectPage,
                     onRetryResolve = viewModel::resolvePlayback,
@@ -86,7 +88,8 @@ fun PlayerScreen(
             }
         }
         when {
-            state.isLoading && result == null -> LoadingIndicator()
+            // 首次解析(尤其 YouTube 冷解析)可能持续数秒,给一句明确状态而不是裸转圈。
+            state.isLoading && result == null -> LoadingIndicator(message = "正在解析播放地址…")
             state.error != null && result == null -> ErrorView(
                 message = state.error!!, autoFocusRetry = true,
                 onRetry = { viewModel.resolvePlayback() },

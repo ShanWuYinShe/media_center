@@ -17,6 +17,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -95,6 +96,45 @@ class SearchViewModelTest {
         assertEquals(2, state.results.size)
         assertFalse(state.paged)
         assertTrue(state.noMore)
+    }
+
+    @Test
+    fun `输入达到两字立即进入加载态`() = runTest {
+        val repo = FakeRepository(searchHandler = { q, _, _ ->
+            SearchResponse(query = q, total = 1, items = listOf(video("v1")))
+        })
+        val vm = SearchViewModel(repo)
+        vm.search("dota")
+        // 防抖窗口内就应是加载态:此前 isSearching 要等 600ms 后才置 true,
+        // UI 会先闪一下"没有找到相关视频"。
+        assertTrue(vm.uiState.value.isSearching)
+        advanceTimeBy(700)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.isSearching)
+        assertEquals(1, vm.uiState.value.results.size)
+    }
+
+    @Test
+    fun `搜索失败后同一关键词重试会再次发起请求`() = runTest {
+        var attempts = 0
+        val repo = FakeRepository(searchHandler = { q, _, _ ->
+            attempts++
+            if (attempts == 1) throw IOException("boom")
+            SearchResponse(query = q, total = 1, items = listOf(video("v1")))
+        })
+        val vm = SearchViewModel(repo)
+        waitSearch(vm, "dota")
+        assertEquals("boom", vm.uiState.value.error)
+        assertEquals(1, attempts)
+
+        // 重试按钮与重复点同一个热词都走这里:query 相同,queryFlow 不会发射,
+        // 必须显式重跑,否则此前是一次静默 no-op。
+        vm.search("dota")
+        assertTrue(vm.uiState.value.isSearching)
+        advanceUntilIdle()
+        assertEquals(2, attempts)
+        assertNull(vm.uiState.value.error)
+        assertEquals(1, vm.uiState.value.results.size)
     }
 
     @Test

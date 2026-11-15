@@ -301,6 +301,7 @@ fun SearchScreen(
                     modifier = Modifier.weight(1f),
                     firstItemFocusRequester = firstResultFocus,
                     firstItemUpFocusRequester = searchFocus,
+                    resetKey = state.query,
                 )
             }
         }

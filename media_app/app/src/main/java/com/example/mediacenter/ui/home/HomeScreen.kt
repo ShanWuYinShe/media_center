@@ -229,6 +229,7 @@ fun HomeScreen(
                             firstItemFocusRequester = gridFirstFocus,
                             firstItemUpFocusRequester = selectedTabFocus,
                             progressById = continueProgressById,
+                            resetKey = state.selectedTab,
                         )
                     }
                 }
@@ -253,6 +254,7 @@ fun HomeScreen(
                     modifier = Modifier.fillMaxSize(),
                     firstItemFocusRequester = gridFirstFocus,
                     firstItemUpFocusRequester = selectedTabFocus,
+                    resetKey = state.selectedTab,
                 )
             }
         }

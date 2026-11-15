@@ -57,6 +57,8 @@ class SearchViewModel(
 
     // 翻页请求:新关键词/新搜索开始时取消,避免旧页结果追加到新查询。
     private var loadMoreJob: Job? = null
+    // 同一关键词的显式重跑(错误重试/重复点热词):queryFlow 对相同值不发射,只能直接触发。
+    private var immediateSearchJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -71,6 +73,7 @@ class SearchViewModel(
         // 清空/过短时立即清结果,不等防抖。
         if (query.trim().length < 2) {
             loadMoreJob?.cancel()
+            immediateSearchJob?.cancel()
             _uiState.value = _uiState.value.copy(
                 query = query,
                 results = emptyList(),
@@ -84,10 +87,23 @@ class SearchViewModel(
                 page = 1,
                 completedQuery = null,
             )
-        } else {
-            _uiState.value = _uiState.value.copy(query = query)
+            queryFlow.value = query
+            return
         }
-        queryFlow.value = query
+        val sameQuery = query == _uiState.value.query
+        // 立即进入加载态:600ms 防抖窗口内 UI 不会把旧结果/空结果误判为
+        // "没有找到相关视频"(此前会闪一下错误结论)。
+        _uiState.value = _uiState.value.copy(query = query, isSearching = true, error = null)
+        if (sameQuery) {
+            // StateFlow 对相同值不发射,queryFlow 不会触发防抖搜索:
+            // 显式重跑一次,修复"失败后点重试无反应 / 重复点同一个热词无反应"。
+            immediateSearchJob?.cancel()
+            immediateSearchJob = viewModelScope.launch { performSearch(query) }
+        } else {
+            // 新关键词:取消可能还在跑的"同词重试",避免旧结果覆盖新查询。
+            immediateSearchJob?.cancel()
+            queryFlow.value = query
+        }
     }
 
     private suspend fun performSearch(query: String) {
