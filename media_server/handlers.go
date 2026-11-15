@@ -17,13 +17,23 @@ func (s *mediaServer) handleProviders(w http.ResponseWriter) {
 	// 目录数据变化低频(审核后更新),60s 缓存显著减少 App 启动/回首页的重复拉取;
 	// 凭证等敏感接口不在此列。
 	w.Header().Set("Cache-Control", "public, max-age=60")
+	items, err := s.providersList()
+	if err != nil {
+		s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"})
+		log.Printf("list providers: %v", err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, ProvidersResponse{Items: items})
+}
+
+// providersList 计算 App 可选的视频源列表(不写响应),供 /providers 与
+// /providers/{provider}/bootstrap 聚合端点共用。
+func (s *mediaServer) providersList() ([]ProviderInfo, error) {
 	items := []ProviderInfo{}
 	if s.catalog != nil {
 		providerIDs, err := s.catalog.DistinctProviders()
 		if err != nil {
-			s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"})
-			log.Printf("list providers: %v", err)
-			return
+			return nil, err
 		}
 		for _, id := range providerIDs {
 			items = append(items, ProviderInfo{ID: id, Name: providerDisplayName(id)})
@@ -32,7 +42,7 @@ func (s *mediaServer) handleProviders(w http.ResponseWriter) {
 	if s.config.VODExtractorURL != "" && !slices.ContainsFunc(items, func(p ProviderInfo) bool { return p.ID == "youtube" }) {
 		items = append(items, ProviderInfo{ID: "youtube", Name: providerDisplayName("youtube")})
 	}
-	s.writeJSON(w, http.StatusOK, ProvidersResponse{Items: items})
+	return items, nil
 }
 
 // handleProviderCredentials 返回 admin 配置的 provider 凭证(如 bilibili SESSDATA)。
@@ -141,6 +151,8 @@ func (s *mediaServer) handleProviderRoute(w http.ResponseWriter, r *http.Request
 	}
 	provider := parts[0]
 	switch {
+	case len(parts) == 2 && parts[1] == "bootstrap":
+		s.handleProviderBootstrap(w, r, provider)
 	case len(parts) == 2 && parts[1] == "categories":
 		s.handleProviderCategories(w, r, provider)
 	case len(parts) == 4 && parts[1] == "categories" && parts[3] == "videos":
@@ -189,24 +201,31 @@ func (s *mediaServer) handleVideoCollection(w http.ResponseWriter, r *http.Reque
 // handleProviderCategories 返回某 provider 有 approved 视频的分类列表。
 func (s *mediaServer) handleProviderCategories(w http.ResponseWriter, r *http.Request, provider string) {
 	w.Header().Set("Cache-Control", "public, max-age=60")
-	// YouTube 内容只存在于实时搜索,不在 catalog;分类由服务端内置映射。
-	if provider == "youtube" {
-		items := []PublicCategory{}
-		if s.youtubeRealtimeEnabled() {
-			items = publicYouTubeCategories()
-		}
-		s.writeJSON(w, http.StatusOK, CategoriesResponse{Items: items})
-		return
-	}
-	if s.catalog == nil {
-		s.writeJSON(w, http.StatusOK, CategoriesResponse{Items: []PublicCategory{}})
-		return
-	}
-	categoryIDs, err := s.catalog.CategoriesForProvider(provider)
+	items, err := s.categoriesForProvider(provider)
 	if err != nil {
 		s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"})
 		log.Printf("list categories for provider %s: %v", provider, err)
 		return
+	}
+	s.writeJSON(w, http.StatusOK, CategoriesResponse{Items: items})
+}
+
+// categoriesForProvider 计算某 provider 的分类列表(不写响应),供 /categories
+// 与 /providers/{provider}/bootstrap 聚合端点共用。
+func (s *mediaServer) categoriesForProvider(provider string) ([]PublicCategory, error) {
+	// YouTube 内容只存在于实时搜索,不在 catalog;分类由服务端内置映射。
+	if provider == "youtube" {
+		if s.youtubeRealtimeEnabled() {
+			return publicYouTubeCategories(), nil
+		}
+		return []PublicCategory{}, nil
+	}
+	if s.catalog == nil {
+		return []PublicCategory{}, nil
+	}
+	categoryIDs, err := s.catalog.CategoriesForProvider(provider)
+	if err != nil {
+		return nil, err
 	}
 	// 分类顺序以 contentCategories.json 的编排顺序为准(运营可调),而不是
 	// catalog 里的 category_id 字典序——否则首页分类顺序完全由 id 拼写决定。
@@ -236,7 +255,32 @@ func (s *mediaServer) handleProviderCategories(w http.ResponseWriter, r *http.Re
 		}
 		items = append(items, PublicCategory{ID: id, Title: "未定义分类 " + id})
 	}
-	s.writeJSON(w, http.StatusOK, CategoriesResponse{Items: items})
+	return items, nil
+}
+
+// handleProviderBootstrap 是首页启动聚合端点:一次返回 providers + 当前
+// provider 的分类,替代 App 冷启动串行两次请求(省一个 RTT)。
+// 两个子查询任一失败即整体 500——聚合接口返回半份数据会让 App 状态机
+// 更难判断,不如让它走原有的错误重试路径。
+func (s *mediaServer) handleProviderBootstrap(w http.ResponseWriter, r *http.Request, provider string) {
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	providers, err := s.providersList()
+	if err != nil {
+		s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"})
+		log.Printf("bootstrap providers: %v", err)
+		return
+	}
+	categories, err := s.categoriesForProvider(provider)
+	if err != nil {
+		s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"})
+		log.Printf("bootstrap categories for provider %s: %v", provider, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, BootstrapResponse{
+		Provider:   provider,
+		Providers:  providers,
+		Categories: categories,
+	})
 }
 
 // handleProviderCategoryVideos 返回某 provider 某分类下 approved 视频列表(分页)。

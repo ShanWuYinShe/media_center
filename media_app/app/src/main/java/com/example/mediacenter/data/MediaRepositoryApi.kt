@@ -17,6 +17,14 @@ interface MediaRepositoryApi {
 
     suspend fun categories(): List<ContentCategory>
 
+    /**
+     * 首页启动聚合数据(providers + 当前 provider 的分类)。
+     * 默认实现退化为原有两次请求——单测 fake 不必实现;真实仓库覆盖为一次
+     * bootstrap 请求,把冷启动的串行 RTT 从两次降到一次。
+     */
+    suspend fun bootstrap(): Pair<List<ProviderInfo>, List<ContentCategory>> =
+        providers() to categories()
+
     suspend fun catalogPage(
         categoryId: String,
         page: Int = 1,

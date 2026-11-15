@@ -46,6 +46,7 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 | GET | `/healthz` | 存活探针(独立站约定,无鉴权,nginx /healthz 直达) |
 | GET | `/api/health` | 健康检查公网别名(经 nginx 前缀重写,排障可直接 curl) |
 | GET | `/api/providers` | 有哪些视频源 |
+| GET | `/api/providers/{provider}/bootstrap` | 首页启动聚合(providers + 该源分类，一次 RTT) |
 | GET | `/api/providers/{provider}/categories` | 某源的分类 |
 | GET | `/api/providers/{provider}/categories/{catId}/videos` | 某分类视频列表(分页；可选 `minDurationSeconds`/`maxDurationSeconds` 时长筛选)；youtube 分类映射为实时 ytsearch，需 `X-App-Token`、仅第 1 页 |
 | GET | `/api/providers/{provider}/videos/{id}/collection` | 某视频所在合集的已审核剧集队列(自动连播用) |

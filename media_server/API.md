@@ -78,6 +78,23 @@ type VideoSummary = {
 { "items": [{ "id": "bilibili", "name": "B站" }] }
 ```
 
+### `GET /api/providers/{provider}/bootstrap`
+
+App 首页启动聚合端点：一次返回 providers 与指定 provider 的分类，替代客户端串行请求
+`/providers` + `/providers/{provider}/categories`（省一个 RTT）。响应与两个子端点字段同构，
+任一子查询失败即整体 500（不返回半份数据）。
+
+```json
+{
+  "provider": "bilibili",
+  "providers": [{ "id": "bilibili", "name": "B站" }],
+  "categories": [{ "id": "movies", "title": "电影", "description": "院线电影" }]
+}
+```
+
+`provider` 原样回显请求值；`youtube` 的分类规则与 `/categories` 相同（内置映射，
+未配置 vod_extractor 时为空数组）。`Cache-Control: public, max-age=60`。
+
 ### `GET /api/providers/{provider}/categories`
 
 返回某视频源下有 approved 视频的分类列表。

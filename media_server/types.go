@@ -20,6 +20,14 @@ type ProviderInfo struct {
 	Name string `json:"name"`
 }
 
+// BootstrapResponse 是首页启动聚合响应:providers + 指定 provider 的分类。
+// App 冷启动/回首页时一次请求拿到两份数据,省掉串行两次 RTT。
+type BootstrapResponse struct {
+	Provider   string           `json:"provider"`
+	Providers  []ProviderInfo   `json:"providers"`
+	Categories []PublicCategory `json:"categories"`
+}
+
 // ContentCategory 是 contentCategories.json 里的一条分类配置(仅服务端内部使用,
 // 不直接暴露给 API;API 响应用的是 PublicCategory)。
 type ContentCategory struct {
