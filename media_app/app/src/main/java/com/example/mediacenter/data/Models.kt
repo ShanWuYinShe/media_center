@@ -36,6 +36,15 @@ data class CategoriesResponse(
     val items: List<ContentCategory>? = null,
 )
 
+// /providers/{provider}/bootstrap 的响应:首页启动一次拿到 providers 与当前
+// provider 的分类,省掉冷启动串行两次 RTT。
+@Serializable
+data class ProviderBootstrapResponse(
+    val provider: String? = null,
+    val providers: List<ProviderInfo>? = null,
+    val categories: List<ContentCategory>? = null,
+)
+
 @Serializable
 data class VideoSummary(
     val id: String,

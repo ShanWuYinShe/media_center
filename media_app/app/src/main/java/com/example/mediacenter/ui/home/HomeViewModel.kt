@@ -203,11 +203,11 @@ class HomeViewModel(
                 _uiState.update { it.copy(isLoading = true, error = null) }
             }
             try {
-                val providers = repository.providers()
+                // 一次 bootstrap 聚合请求拿到 providers + 分类(替代串行两次 RTT)。
+                val (providers, categories) = repository.bootstrap()
                 _uiState.update {
                     it.copy(providers = providers, currentProvider = repository.currentProvider)
                 }
-                val categories = repository.categories()
                 val currentTab = _uiState.value.selectedTab
                 val target = when {
                     categories.any { it.id == currentTab } -> currentTab

@@ -24,17 +24,42 @@ class MediaRepository(
 
     override suspend fun providers(): List<ProviderInfo> {
         val items = api.providers().items.orEmpty()
-        if (items.isNotEmpty() && !providerInitialized.getAndSet(true)) {
-            // 仅当没有持久化选择、或持久化的 provider 已从列表下线时才自动选
-            // 第一个:currentProvider 初值已从 prefs 恢复,这里再无条件覆盖会让
-            // 用户每次重启都被拉回默认源(与注释"不回到默认源"相悖)。
-            val restored = providerPrefs?.getString(KEY_CURRENT_PROVIDER, null)
-            if (restored.isNullOrEmpty() || items.none { it.id == restored }) {
-                currentProvider = items.first().id
-                persistProvider()
-            }
-        }
+        applyProviderSelection(items)
         return items
+    }
+
+    override suspend fun bootstrap(): Pair<List<ProviderInfo>, List<ContentCategory>> {
+        val requestedProvider = currentProvider
+        val response = try {
+            api.bootstrap(requestedProvider)
+        } catch (e: ApiException) {
+            // 旧服务端没有聚合端点:退回原有的两次请求(滚动升级期间 App 先上线也安全)。
+            if (e.statusCode == 404) return providers() to categories()
+            throw e
+        }
+        val providers = response.providers.orEmpty()
+        applyProviderSelection(providers)
+        val categories = if (currentProvider == requestedProvider) {
+            response.categories.orEmpty()
+        } else {
+            // 持久化的 provider 已下线、bootstrap 期间自动切到第一个 provider:
+            // 分类要按新 provider 重新取(极少见的冷启动竞态,退回旧接口)。
+            api.categories(currentProvider).items.orEmpty()
+        }
+        return providers to categories
+    }
+
+    /** 首次拿到 providers 时恢复/校正当前 provider(持久化选择优先)。 */
+    private fun applyProviderSelection(items: List<ProviderInfo>) {
+        if (items.isEmpty() || !providerInitialized.compareAndSet(false, true)) return
+        // 仅当没有持久化选择、或持久化的 provider 已从列表下线时才自动选
+        // 第一个:currentProvider 初值已从 prefs 恢复,这里再无条件覆盖会让
+        // 用户每次重启都被拉回默认源(与注释"不回到默认源"相悖)。
+        val restored = providerPrefs?.getString(KEY_CURRENT_PROVIDER, null)
+        if (restored.isNullOrEmpty() || items.none { it.id == restored }) {
+            currentProvider = items.first().id
+            persistProvider()
+        }
     }
 
     /** 用户手动切换视频源。 */

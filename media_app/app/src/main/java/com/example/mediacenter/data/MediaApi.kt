@@ -51,6 +51,10 @@ class MediaApi(
     suspend fun categories(provider: String): CategoriesResponse =
         get(listOf("providers", provider, "categories"))
 
+    // 首页启动聚合:providers + 当前 provider 分类一次返回,省一次 RTT。
+    suspend fun bootstrap(provider: String): ProviderBootstrapResponse =
+        get(listOf("providers", provider, "bootstrap"))
+
     suspend fun categoryVideos(
         provider: String,
         categoryId: String,
