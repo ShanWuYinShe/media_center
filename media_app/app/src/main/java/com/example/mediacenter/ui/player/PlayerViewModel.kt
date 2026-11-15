@@ -61,6 +61,8 @@ class PlayerViewModel(
     // 解析/合集任务:快速连续切集/切清晰度时取消旧的,避免旧响应覆盖新选择
     private var resolveJob: Job? = null
     private var collectionJob: Job? = null
+    // 阶段 0 基线:从 ViewModel 创建到首次解析成功/失败,以及每次解析耗时。
+    private val createdAtMs = System.currentTimeMillis()
 
     init {
         resolvePlayback()
@@ -155,6 +157,7 @@ class PlayerViewModel(
         // 保留旧播放结果:清晰度/分P切换期间播放器不中断,新流就绪后无缝切换
         _uiState.value = _uiState.value.copy(isLoading = true, error = null)
         val requestedVideoId = currentVideoId
+        val startedAtMs = System.currentTimeMillis()
         try {
             // "_pN" 分P后缀是 bilibili catalog 的约定;限定 bilibili 才解析/拼接,
             // YouTube 视频 ID 字符集虽含 "_",但其 11 字符 ID 必须原样透传。
@@ -174,14 +177,28 @@ class PlayerViewModel(
             // 记录服务端实际给出的清晰度(可能因会员/片源自动降级),UI 选中态与
             // 后续"重复点当前档位"判断都以它为准。
             currentQn = result.options.firstOrNull()?.qn ?: qn
+            val firstResolve = resolvedVideoId == null
             resolvedVideoId = requestedVideoId
             _uiState.value = _uiState.value.copy(playbackResult = result, isLoading = false)
+            AppLog.i(
+                "Perf",
+                "resolve $requestedVideoId provider=${repository.currentProvider} " +
+                    "qn=${result.options.firstOrNull()?.qn} in " +
+                    "${System.currentTimeMillis() - startedAtMs}ms " +
+                    "(prefetched=${prefetched != null}, first=$firstResolve, " +
+                    "sinceCreate=${System.currentTimeMillis() - createdAtMs}ms)",
+            )
             updateNext()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             if (requestedVideoId != currentVideoId) return
-            AppLog.e("Player", "resolvePlayback failed: ${e.message}", e)
+            AppLog.e(
+                "Player",
+                "resolvePlayback failed: ${e.message} " +
+                    "(after ${System.currentTimeMillis() - startedAtMs}ms)",
+                e,
+            )
             // B 站/服务端异常的 message 已是面向用户的中文具体原因(风控/无分P/
             // 令牌失效等),透出比固定文案可诊断——TV 上用户报错只有这一行字,
             // "解析失败,请重试"无法区分是网络问题还是内容问题;其余异常

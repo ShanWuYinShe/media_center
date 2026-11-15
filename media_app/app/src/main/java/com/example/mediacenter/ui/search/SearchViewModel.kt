@@ -145,6 +145,7 @@ class SearchViewModel(
             page = 1,
         )
         val provider = repository.currentProvider
+        val startedAtMs = System.currentTimeMillis()
         try {
             if (provider == "youtube") {
                 val response = repository.youtubeSearch(query)
@@ -163,10 +164,21 @@ class SearchViewModel(
                 applyFirstPage(query, repository.search(query, page = 1, pageSize = SEARCH_PAGE_SIZE))
                 recordHistory(query)
             }
+            AppLog.i(
+                "Perf",
+                "search \"$query\" provider=$provider in " +
+                    "${System.currentTimeMillis() - startedAtMs}ms " +
+                    "(count=${_uiState.value.results.size})",
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            AppLog.w("Search", "search failed: ${e.message}", e)
+            AppLog.w(
+                "Search",
+                "search failed: ${e.message} " +
+                    "(after ${System.currentTimeMillis() - startedAtMs}ms)",
+                e,
+            )
             _uiState.value = _uiState.value.copy(
                 isSearching = false,
                 results = emptyList(),
