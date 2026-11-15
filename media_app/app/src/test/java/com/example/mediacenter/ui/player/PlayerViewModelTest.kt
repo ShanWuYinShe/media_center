@@ -6,6 +6,7 @@ import com.example.mediacenter.data.PlaybackOption
 import com.example.mediacenter.data.PlaybackPages
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.ProviderInfo
+import com.example.mediacenter.data.QualityOption
 import com.example.mediacenter.data.SearchResponse
 import com.example.mediacenter.data.VideoCollectionInfo
 import com.example.mediacenter.data.VideoCollectionResponse
@@ -17,6 +18,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -41,6 +43,7 @@ class PlayerViewModelTest {
     ) : MediaRepositoryApi {
         override var currentProvider: String = "bilibili"
         val resolvedIds = mutableListOf<String>()
+        val resolvedQns = mutableListOf<Int?>()
 
         override fun setProvider(provider: String) { currentProvider = provider }
         override suspend fun providers(): List<ProviderInfo> = emptyList()
@@ -60,6 +63,7 @@ class PlayerViewModelTest {
         override suspend fun youtubeSearch(query: String): SearchResponse = SearchResponse()
         override suspend fun resolvePlayback(videoId: String, qn: Int?): PlaybackResult {
             resolvedIds += videoId
+            resolvedQns += qn
             return playback
         }
     }
@@ -69,6 +73,11 @@ class PlayerViewModelTest {
             PlaybackOption(id = "opt", kind = "vod", label = "1080P", url = "https://x/v", qn = 1080),
         ),
         pages = PlaybackPages(currentPage = currentPage, totalPages = totalPages, pageDurations = List(totalPages) { 60 }),
+        availableQualities = listOf(
+            QualityOption(qn = 1080, label = "1080P"),
+            QualityOption(qn = 720, label = "720P"),
+            QualityOption(qn = 480, label = "480P"),
+        ),
     )
 
     private fun collection(vararg ids: String): VideoCollectionResponse = VideoCollectionResponse(
@@ -108,6 +117,38 @@ class PlayerViewModelTest {
         assertEquals(listOf("A", "B"), repo.resolvedIds)
         assertNull("B 已是最后一集", vm.uiState.value.next)
         assertNull(vm.uiState.value.error)
+    }
+
+    @Test
+    fun `连续播放失败时降一档清晰度重试`() = runTest {
+        val repo = FakeRepository(playback(0, 0))
+        val vm = PlayerViewModel("A", repository = repo)
+        advanceUntilIdle()
+
+        assertTrue(vm.fallbackToLowerQuality())
+        advanceUntilIdle()
+
+        assertEquals(listOf("A", "A"), repo.resolvedIds)
+        // 1080P 起播,失败后降一档到 720P 重新解析。
+        assertEquals(listOf(null, 720), repo.resolvedQns)
+    }
+
+    @Test
+    fun `没有更低清晰度时降级返回 false`() = runTest {
+        val repo = FakeRepository(
+            PlaybackResult(
+                options = listOf(
+                    PlaybackOption(id = "q480", kind = "vod", label = "480P", url = "https://x/v", qn = 480),
+                ),
+                availableQualities = listOf(QualityOption(qn = 480, label = "480P")),
+            ),
+        )
+        val vm = PlayerViewModel("A", repository = repo)
+        advanceUntilIdle()
+
+        assertFalse(vm.fallbackToLowerQuality())
+        advanceUntilIdle()
+        assertEquals(listOf("A"), repo.resolvedIds)
     }
 
     @Test

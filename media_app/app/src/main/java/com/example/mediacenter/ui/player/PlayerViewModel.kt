@@ -212,6 +212,25 @@ class PlayerViewModel(
     }
 
     /**
+     * 播放连续失败后的清晰度降级:当前档还有更低档时切过去重试,返回是否已切换。
+     *
+     * 只在"自动重载一次后仍失败"时由 UI 调用(见 PlayerContent.onPlayerError),
+     * 避免网络抖动一次就降清晰度;弱网/高码率导致解码或带宽失败时,降一档通常
+     * 能立即恢复播放。没有更低档时返回 false,由 UI 展示错误层。
+     */
+    fun fallbackToLowerQuality(): Boolean {
+        val result = _uiState.value.playbackResult ?: return false
+        val activeQn = result.options.firstOrNull()?.qn ?: return false
+        // YouTube 全部档位在 options 里;B 站单档流 + availableQualities。两者取并集。
+        val lower = (result.availableQualities.map { it.qn } + result.options.map { it.qn })
+            .filter { it in 1 until activeQn }
+            .maxOrNull() ?: return false
+        AppLog.i("Player", "playback error fallback: qn $activeQn -> $lower")
+        selectQuality(lower)
+        return true
+    }
+
+    /**
      * 片尾到达:有下一步则推进(多P下一页换页;合集下一集在同页内无缝切换)。
      * 返回是否真的还有下一步;UI 只负责把 ENDED 边沿传过来。
      */
