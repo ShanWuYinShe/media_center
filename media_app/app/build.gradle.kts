@@ -7,6 +7,29 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// 发布签名：正式发版由 GitHub Actions(.github/workflows/release-app.yml) 通过
+// ANDROID_SIGNING_* 环境变量注入发布 keystore；未注入时回退 debug 签名，保持本地与 CI
+// 校验构建可直接安装。正式发版必须注入——否则不同构建机生成的 debug 密钥不同，
+// 已安装用户无法原位升级。用 providers.environmentVariable 读取（Gradle 配置缓存可跟踪）。
+val releaseSigningEnv = listOf(
+    "ANDROID_SIGNING_KEYSTORE_PATH",
+    "ANDROID_SIGNING_STORE_PASSWORD",
+    "ANDROID_SIGNING_KEY_ALIAS",
+    "ANDROID_SIGNING_KEY_PASSWORD",
+).associateWith { providers.environmentVariable(it).orNull }
+val releaseKeystorePath = releaseSigningEnv["ANDROID_SIGNING_KEYSTORE_PATH"]
+if (!releaseKeystorePath.isNullOrBlank()) {
+    require(!releaseSigningEnv["ANDROID_SIGNING_STORE_PASSWORD"].isNullOrEmpty()) {
+        "已设置 ANDROID_SIGNING_KEYSTORE_PATH，必须同时设置 ANDROID_SIGNING_STORE_PASSWORD"
+    }
+    require(!releaseSigningEnv["ANDROID_SIGNING_KEY_ALIAS"].isNullOrEmpty()) {
+        "已设置 ANDROID_SIGNING_KEYSTORE_PATH，必须同时设置 ANDROID_SIGNING_KEY_ALIAS"
+    }
+    require(!releaseSigningEnv["ANDROID_SIGNING_KEY_PASSWORD"].isNullOrEmpty()) {
+        "已设置 ANDROID_SIGNING_KEYSTORE_PATH，必须同时设置 ANDROID_SIGNING_KEY_PASSWORD"
+    }
+}
+
 android {
     namespace = "com.example.mediacenter"
     compileSdk = 37
@@ -85,14 +108,27 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
+    signingConfigs {
+        val keystorePath = releaseKeystorePath
+        if (!keystorePath.isNullOrBlank()) {
+            maybeCreate("release").apply {
+                storeFile = file(keystorePath)
+                storePassword = releaseSigningEnv["ANDROID_SIGNING_STORE_PASSWORD"]
+                keyAlias = releaseSigningEnv["ANDROID_SIGNING_KEY_ALIAS"]
+                keyPassword = releaseSigningEnv["ANDROID_SIGNING_KEY_PASSWORD"]
+            }
+        }
+    }
+
     buildTypes {
         // release 开启 R8 minify + 资源压缩,减小发布包体积(debug 29M → release ~11M)。
-        // 自用包用 debug keystore 签名(signingConfig = debug),无需维护正式 keystore,
-        // 同时保证 release APK 可直接安装(unsigned APK 无法安装)。
+        // 正式发版用注入的发布 keystore 签名(见文件顶部 releaseSigningEnv)；
+        // 未注入时回退 debug keystore，保证本地/CI 校验构建可直接安装(unsigned 包无法安装)。
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release")
+                ?: signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

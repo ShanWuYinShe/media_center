@@ -26,15 +26,26 @@ App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部�
 - 本地（提交前，秒级）：
   - Go：`gofmt -l media_server/`（应无输出）+ `cd media_server && go build ./... && go vet ./...`（本机实测约 6s / 2s）。
   - Python：`python3 -m py_compile vod_extractor/server.py`（秒级）；本机未装 ruff 时交 CI（CI 固定 `ruff==0.16.8`）。
-  - Android：日常不跑 Gradle（`assembleDebug`、单测、lint 均由 CI 执行）；APK 发版构建按 skill `media-app-release`。
+  - Android：日常不跑 Gradle（`assembleDebug`/`assembleRelease`、单测、lint 均由 CI 执行）；APK 发版由 CI 在 tag 上构建（见「APK 发版（GitHub Actions）」）。
   - **不跑**：`go test ./...`（全量/含 `-race`）、Gradle 构建与单测、`docker build`。
 - CI 覆盖（`.github/workflows/ci.yml`，`push: main` + `pull_request: main`，共 3 个 job）：
   - `Media Server (Go)`：gofmt、go vet、go build、`go test -race -count=1 ./...`。
   - `VOD Extractor (Python)`：`py_compile`、ruff 0.16.8、unittest。
-  - `Media App (Android)`：`assembleDebug`、`testDebugUnitTest`、`lintDebug`，以及 legacy 变体 `assembleDebug`。
+  - `Media App (Android)`：normal 与 legacy 均编译 `assembleDebug` + `assembleRelease`（R8/资源压缩问题在 PR 阶段暴露）、`testDebugUnitTest`（normal）、`lintDebug`（normal）；release APK 作为 CI artifact 保留 7 天，供 TV 真机走查（未注入令牌、临时 debug 签名，不可发版）。
 - CI 覆盖不到、必须本地/真机验证的：Android TV 真机/模拟器安装与 UI 走查（APK 部署与 TV UI/UX 约定见 `media_app/AGENTS.md` 与 skill `media-app-release`/`media-app-tv-ui`）；youtube 播放解析的真实链路依赖服务器 cookies/PO Token，CI 只跑单测，改动该链路时需在服务器侧实测（见 `vod_extractor/AGENTS.md`）。
 - 镜像构建：本仓 CI 无镜像构建 job；`deploy/` 生产镜像由部署服务器 `make build` 构建（交付链路，不是开发机本地验证），本地不做 `docker build`。
-- 发版/发布门禁不变：media_app APK 发版流程按 skill `media-app-release`；服务端部署按 `deploy/README.md`。
+- 发版/发布门禁：media_app APK 发版由 GitHub Actions 在 tag 上构建发布（见下节）；服务端部署按 `deploy/README.md`。
+
+## APK 发版（GitHub Actions）
+
+`.github/workflows/release-app.yml` 是 APK 发版的权威入口：
+
+- **触发**：push annotated tag `vX.Y.Z`（tag 必须在 main 的合并提交上）→ 构建 normal + legacy release APK、生成两份 `app-update*.json` 与 `SHA256SUMS`、创建/更新 GitHub Release；`workflow_dispatch` 只做构建校验（上传 Actions artifact，不发布、不部署）。
+- **必填 secrets**（tag 发版缺失会直接失败，避免产出 YouTube 401 或签名不稳定的包）：`APP_API_TOKEN`、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_STORE_PASSWORD`、`ANDROID_KEYSTORE_KEY_ALIAS`、`ANDROID_KEYSTORE_KEY_PASSWORD`。一次性写入：`scripts/setup-gh-release-secrets.sh --apply`（不打印密钥；`--debug-defaults` 适用于 Android 标准 debug keystore）。
+- **签名必须稳定**：APK 签名密钥不变才能原位升级；沿用现行发版 keystore（推荐）即可无缝升级，换新密钥后老用户需卸载重装。
+- **可选 variables**：`MEDIA_SERVER_URL`（构建期服务端基址，留空用 Gradle 默认）、`ANDROID_EXPECTED_CERT_SHA256`（签名证书 SHA-256 强校验，配错会让发版失败）、`ENABLE_AUTO_DEPLOY`（`true` 时发版后自动部署）、`DEPLOY_REMOTE_DIR`（默认 `media_center/deploy/data/generated`）。
+- **可选自动部署 secrets**：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`、`DEPLOY_KNOWN_HOSTS`（建议必填，否则回退 ssh-keyscan）；只写 APK + 两份 manifest，media_server 热加载、无需重启，旧 APK 自动保留最近 5 个。
+- **本地构建仍可临时用**：`scripts/release-apk.sh`（不带 `--upload`）仅作调试手段；正式发版以 tag 触发的 Actions 产物为准。
 
 ## media_app（详见 media_app/AGENTS.md 与 skill）
 

@@ -16,6 +16,12 @@
 #        sha256 (64 位 hex) / releaseNotes (可选) / publishedAt (RFC3339 UTC)
 #   4. 可选 --upload 用 scp 上传 APK 与 manifest。
 #
+# GitHub Actions 发版（.github/workflows/release-app.yml）以 `--out build/release-apk` 调用本脚本，
+# 本脚本保持为 APK 构建、命名与 manifest 生成的唯一实现，不要在 workflow 里重复实现。
+# 签名：CI 通过 ANDROID_SIGNING_KEYSTORE_PATH / ANDROID_SIGNING_STORE_PASSWORD /
+# ANDROID_SIGNING_KEY_ALIAS / ANDROID_SIGNING_KEY_PASSWORD 注入发布 keystore（见两个 app 的
+# build.gradle.kts）；未注入时回退 debug 签名，仅用于本地/校验构建。
+#
 # 版本号由 git tag 驱动（构建期 git describe 自动派生，见 media_app build.gradle.kts），
 # 发布前先按发版流程打好 v* tag，脚本按同一算法在 shell 侧复算 versionName/versionCode
 # 用于 manifest（与 Gradle 构建注入值一致）。
