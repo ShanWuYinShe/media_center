@@ -38,6 +38,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.ColorPainter
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -55,6 +57,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.ui.PlayerView
+import coil.compose.AsyncImage
 import com.example.mediacenter.data.PlaybackPositionStore
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.WatchHistory
@@ -63,6 +66,7 @@ import com.example.mediacenter.player.PlaybackMediaSourceFactory
 import com.example.mediacenter.player.PlaybackService
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
+import com.example.mediacenter.ui.theme.BackgroundDark
 import com.example.mediacenter.util.BackgroundWork
 import com.example.mediacenter.util.NetworkRestoreEffect
 import kotlinx.coroutines.Dispatchers
@@ -75,6 +79,9 @@ import kotlinx.coroutines.withContext
 internal fun PlayerContent(
     videoId: String,
     videoTitle: String,
+    // 首帧绘制前的封面:YouTube 冷解析/换源时不再长时间纯黑;
+    // 首帧渲染后(onRenderedFirstFrame)淡出,不遮挡已出画的视频。
+    posterUrl: String?,
     playbackResult: PlaybackResult,
     collection: PlaybackCollection?,
     overlayError: String?,
@@ -111,6 +118,8 @@ internal fun PlayerContent(
     var isPlaying by remember { mutableStateOf(false) }
     // 缓冲中提示：卡顿不再表现为“画面冻住不知道在干嘛”
     var isBuffering by remember { mutableStateOf(false) }
+    // 首帧封面:只在进入播放页的首次加载显示,首帧渲染后淡出。
+    var showPoster by remember { mutableStateOf(posterUrl != null) }
     // 最近一次遥控器按键时间：控制条显示期间有任何操作都重置自动隐藏计时
     var lastInteractionMs by remember { mutableLongStateOf(0L) }
     var positionMs by remember { mutableLongStateOf(0L) }
@@ -156,6 +165,11 @@ internal fun PlayerContent(
         object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
+            }
+
+            // 首帧已出画:封面层淡出(Media3 精确回调,不会盖住已出画的视频)。
+            override fun onRenderedFirstFrame() {
+                showPoster = false
             }
 
             override fun onPlaybackStateChanged(state: Int) {
@@ -603,6 +617,18 @@ internal fun PlayerContent(
             onRelease = { view -> view.player = null },
             modifier = Modifier.fillMaxSize(),
         )
+        // 首帧前的封面层:播放器黑屏期间先显示详情封面,首帧渲染后淡出。
+        // 不参与焦点/按键(上面叠了手势层,这里只做展示)。
+        AnimatedVisibility(visible = showPoster && posterUrl != null, exit = fadeOut()) {
+            AsyncImage(
+                model = posterUrl,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                placeholder = ColorPainter(BackgroundDark),
+                error = ColorPainter(BackgroundDark),
+            )
+        }
         // 触摸：左侧 30% 快退、右侧 30% 快进、中间播放/暂停。
         // 放在控制层下方，点顶部返回/选集胶囊时不会误触。
         Box(

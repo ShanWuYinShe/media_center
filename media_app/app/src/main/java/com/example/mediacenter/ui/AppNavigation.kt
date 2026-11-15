@@ -27,7 +27,7 @@ import kotlinx.serialization.json.Json
 object Routes {
     const val HOME = "home"
     const val DETAIL = "detail/{video}"
-    const val PLAYER = "player/{videoId}?title={title}&page={page}"
+    const val PLAYER = "player/{videoId}?title={title}&page={page}&poster={poster}"
     const val SEARCH = "search"
     const val SETTINGS = "settings"
 
@@ -38,9 +38,13 @@ object Routes {
     fun detail(video: VideoSummary) =
         "detail/${videoSummaryType.serializeAsValue(video)}"
 
-    fun player(videoId: String, title: String, page: Int = 0) =
-        "player/${Uri.encode(videoId, "")}?title=${Uri.encode(title, "")}" +
-            if (page > 0) "&page=$page" else ""
+    fun player(videoId: String, title: String, page: Int = 0, posterUrl: String? = null): String {
+        val base = "player/${Uri.encode(videoId, "")}?title=${Uri.encode(title, "")}"
+        val pagePart = if (page > 0) "&page=$page" else ""
+        val posterPart =
+            if (!posterUrl.isNullOrBlank()) "&poster=${Uri.encode(posterUrl, "")}" else ""
+        return base + pagePart + posterPart
+    }
 }
 
 // 自定义 NavType:把整个 VideoSummary 序列化为 route 参数,随导航保存。
@@ -86,7 +90,14 @@ fun AppNavigation() {
             HomeScreen(
                 onVideoClick = { video -> navController.navigate(Routes.detail(video)) },
                 onPlayVideo = { video, page ->
-                    navController.navigate(Routes.player(video.id, video.title, page))
+                    navController.navigate(
+                        Routes.player(
+                            video.id,
+                            video.title,
+                            page,
+                            video.thumbnailUrlLarge ?: video.thumbnailUrl,
+                        ),
+                    )
                 },
                 onSearchClick = { navController.navigate(Routes.SEARCH) },
                 onSettingsClick = { navController.navigate(Routes.SETTINGS) },
@@ -105,7 +116,16 @@ fun AppNavigation() {
             }
             DetailScreen(
                 video = video,
-                onPlay = { page -> navController.navigate(Routes.player(video.id, video.title, page)) },
+                onPlay = { page ->
+                    navController.navigate(
+                        Routes.player(
+                            video.id,
+                            video.title,
+                            page,
+                            video.thumbnailUrlLarge ?: video.thumbnailUrl,
+                        ),
+                    )
+                },
                 onBack = { navController.popBackStack() },
             )
         }
@@ -121,20 +141,35 @@ fun AppNavigation() {
                     type = NavType.IntType
                     defaultValue = 0
                 },
+                // 播放页首帧前的封面(URL 已由服务端按详情尺寸下发);空值则不显示。
+                navArgument("poster") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
             ),
         ) { backStackEntry ->
             val videoId = backStackEntry.arguments?.getString("videoId") ?: return@composable
             val title = backStackEntry.arguments?.getString("title") ?: ""
             val page = backStackEntry.arguments?.getInt("page") ?: 0
+            val posterUrl = backStackEntry.arguments?.getString("poster").orEmpty()
+                .ifBlank { null }
             PlayerScreen(
                 videoId = videoId,
                 videoTitle = title,
                 initialPage = page,
+                posterUrl = posterUrl,
                 onBack = { navController.popBackStack() },
                 onNextVideo = { next ->
                     // 自动连播替换当前播放页而不是压栈:返回时回到进入播放器
                     // 之前的详情/首页,而不是倒着退回上一集。
-                    navController.navigate(Routes.player(next.id, next.title, 0)) {
+                    navController.navigate(
+                        Routes.player(
+                            next.id,
+                            next.title,
+                            0,
+                            next.thumbnailUrlLarge ?: next.thumbnailUrl,
+                        ),
+                    ) {
                         popUpTo(backStackEntry.destination.id) { inclusive = true }
                     }
                 },

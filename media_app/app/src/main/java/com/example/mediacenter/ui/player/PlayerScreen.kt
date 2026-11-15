@@ -32,6 +32,8 @@ fun PlayerScreen(
     videoId: String,
     videoTitle: String,
     initialPage: Int = 0,
+    // 首帧前的封面(详情尺寸);为空则不显示封面层。
+    posterUrl: String? = null,
     onBack: () -> Unit,
     // 合集自动连播:导航到下一集(替换当前播放页,返回时回到详情/首页)
     onNextVideo: (VideoSummary) -> Unit,
@@ -81,6 +83,7 @@ fun PlayerScreen(
                 PlayerContent(
                     videoId = videoId,
                     videoTitle = videoTitle,
+                    posterUrl = posterUrl,
                     playbackResult = result,
                     collection = state.collection,
                     overlayError = state.error,
