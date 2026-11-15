@@ -90,6 +90,8 @@ internal fun PlayerContent(
     onSelectQuality: (Int) -> Unit,
     onSelectPage: (Int) -> Unit,
     onRetryResolve: () -> Unit,
+    // 连续播放失败时尝试降一档清晰度,返回是否已切换(见 PlayerViewModel)。
+    onQualityFallback: () -> Boolean,
     onBack: () -> Unit,
     // 片尾自动连播:多P下一页优先,其次是合集队列的下一集(由 PlayerScreen 计算)
     hasAutoNext: Boolean,
@@ -151,6 +153,7 @@ internal fun PlayerContent(
     var autoNextTriggered by remember { mutableStateOf(false) }
     val currentHasAutoNext by rememberUpdatedState(hasAutoNext)
     val currentOnAutoNext by rememberUpdatedState(onAutoNext)
+    val currentOnQualityFallback by rememberUpdatedState(onQualityFallback)
     // READY 回调里的断点读取(SP + JSON 解码)经它移到 IO 线程执行
     val scope = rememberCoroutineScope()
 
@@ -212,6 +215,13 @@ internal fun PlayerContent(
                     // 同分P携位续播;playerError 由加载 effect 清空。
                     playerAutoRetries++
                     loadEpoch++
+                    return
+                }
+                // 重载后仍失败:先尝试降一档清晰度(弱网/高码率最常见的恢复手段),
+                // 成功切换则重置重试预算;没有更低档才展示错误层。
+                if (currentOnQualityFallback()) {
+                    playerAutoRetries = 0
+                    playerError = null
                     return
                 }
                 playerError = friendlyPlaybackError(error)

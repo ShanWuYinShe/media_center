@@ -93,6 +93,7 @@ fun PlayerScreen(
                     onSelectQuality = viewModel::selectQuality,
                     onSelectPage = viewModel::selectPage,
                     onRetryResolve = viewModel::resolvePlayback,
+                    onQualityFallback = { viewModel.fallbackToLowerQuality() },
                     onBack = onBack,
                     hasAutoNext = state.next != null,
                     onAutoNext = { viewModel.onPlaybackEnded() },
