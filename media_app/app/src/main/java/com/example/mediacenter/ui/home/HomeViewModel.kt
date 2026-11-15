@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.mediacenter.data.ContentCategory
+import com.example.mediacenter.data.HomeSnapshot
+import com.example.mediacenter.data.HomeSnapshotStore
 import com.example.mediacenter.data.MediaRepositoryApi
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.ProviderInfo
@@ -86,9 +88,69 @@ class HomeViewModel(
     private val categoryCache = java.util.concurrent.ConcurrentHashMap<String, CategoryCacheEntry>()
 
     init {
-        loadHome()
+        restoreSnapshotThenLoad()
         refreshWatchHistory()
         if (autoCheckUpdate) AppUpdateHolder.requestCheck()
+    }
+
+    /**
+     * 首屏 SWR:先渲染 10 分钟内的同 provider 快照(缓存内容秒出),再后台刷新。
+     * 刷新期间保留旧内容;刷新失败只记日志,不用全屏错误盖掉已有内容。
+     * 测试/无 Application context 时直接走网络(行为与旧实现一致)。
+     */
+    private fun restoreSnapshotThenLoad() {
+        val context = MediaRepositoryHolder.applicationContext
+        if (context == null) {
+            loadHome()
+            return
+        }
+        viewModelScope.launch {
+            val snapshot = withContext(Dispatchers.IO) { HomeSnapshotStore.load(context) }
+            val restored = snapshot?.takeIf { it.provider == repository.currentProvider }
+            if (restored != null) {
+                categoryCache[restored.selectedTab] = CategoryCacheEntry(
+                    provider = restored.provider,
+                    items = restored.items,
+                    page = 1,
+                    total = restored.total,
+                    canLoadMore = canLoadMore(restored.total, restored.items.size),
+                    timestamp = System.currentTimeMillis(),
+                )
+                _uiState.update {
+                    it.copy(
+                        categories = restored.categories,
+                        selectedTab = restored.selectedTab,
+                        items = restored.items,
+                        page = 1,
+                        total = restored.total,
+                        canLoadMore = canLoadMore(restored.total, restored.items.size),
+                        isLoading = false,
+                        isLoadingMore = false,
+                        loadMoreError = null,
+                        error = null,
+                        currentProvider = restored.provider,
+                    )
+                }
+            }
+            loadHome(keepContent = restored != null)
+        }
+    }
+
+    /** 首次页加载成功后写快照:只存当前分类第一页,容量与 embed 成本都可控。 */
+    private fun persistSnapshot() {
+        val context = MediaRepositoryHolder.applicationContext ?: return
+        val state = _uiState.value
+        if (state.selectedTab == HomeContinueTabId) return
+        if (state.categories.isEmpty() || state.items.isEmpty()) return
+        val snapshot = HomeSnapshot(
+            provider = repository.currentProvider,
+            categories = state.categories,
+            selectedTab = state.selectedTab,
+            items = state.items.take(HomePageSize),
+            total = state.total,
+            savedAtEpochMs = System.currentTimeMillis(),
+        )
+        viewModelScope.launch(Dispatchers.IO) { HomeSnapshotStore.save(context, snapshot) }
     }
 
     fun refreshWatchHistory() {
@@ -128,13 +190,18 @@ class HomeViewModel(
         }
     }
 
-    fun loadHome() {
+    fun loadHome(keepContent: Boolean = false) {
         viewModelScope.launch { repository.refreshCredentials() }
         loadHomeJob?.cancel()
         contentJob?.cancel()
         loadMoreJob?.cancel()
         loadHomeJob = viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null) }
+            if (keepContent) {
+                // SWR 刷新:保留已渲染快照,不显示骨架/转圈。
+                _uiState.update { it.copy(error = null) }
+            } else {
+                _uiState.update { it.copy(isLoading = true, error = null) }
+            }
             try {
                 val providers = repository.providers()
                 _uiState.update {
@@ -147,15 +214,21 @@ class HomeViewModel(
                     categories.isNotEmpty() -> categories.first().id
                     else -> HomeContinueTabId
                 }
+                val targetChanged = target != currentTab
                 _uiState.update {
                     it.copy(
                         categories = categories,
                         selectedTab = target,
                         isLoading = false,
+                        // 快照的分类已不在服务端目录:旧分类内容不能挂到新分类上。
+                        items = if (targetChanged) emptyList() else it.items,
+                        page = if (targetChanged) 1 else it.page,
+                        total = if (targetChanged) 0 else it.total,
+                        canLoadMore = if (targetChanged) false else it.canLoadMore,
                     )
                 }
                 if (target != HomeContinueTabId) {
-                    loadCategory(target, force = true)
+                    loadCategory(target, force = true, keepContent = keepContent)
                 } else {
                     _uiState.update {
                         it.copy(
@@ -171,11 +244,17 @@ class HomeViewModel(
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 AppLog.e("Home", "loadHome failed: ${e.message}", e)
+                // SWR 刷新失败且已有快照内容:保留内容,不弹全屏错误(用户仍能看/点)。
+                val hasContent = keepContent && _uiState.value.items.isNotEmpty()
                 _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = e.friendlyLoadMessage("首页加载失败，请重试"),
-                    )
+                    if (hasContent) {
+                        it.copy(isLoading = false)
+                    } else {
+                        it.copy(
+                            isLoading = false,
+                            error = e.friendlyLoadMessage("首页加载失败，请重试"),
+                        )
+                    }
                 }
             }
         }
@@ -209,7 +288,7 @@ class HomeViewModel(
         loadCategory(tab, force = false)
     }
 
-    private fun loadCategory(categoryId: String, force: Boolean) {
+    private fun loadCategory(categoryId: String, force: Boolean, keepContent: Boolean = false) {
         val provider = repository.currentProvider
         if (!force) {
             val cached = categoryCache[categoryId]
@@ -236,18 +315,34 @@ class HomeViewModel(
         }
         contentJob?.cancel()
         loadMoreJob?.cancel()
-        _uiState.update {
-            it.copy(
-                selectedTab = categoryId,
-                items = emptyList(),
-                page = 1,
-                total = 0,
-                canLoadMore = false,
-                isLoading = true,
-                isLoadingMore = false,
-                loadMoreError = null,
-                error = null,
-            )
+        // SWR 刷新同一分类:保留已渲染内容,不闪骨架;其它情况(切分类/首次)照常清空。
+        val keepShownItems = keepContent &&
+            _uiState.value.selectedTab == categoryId &&
+            _uiState.value.items.isNotEmpty()
+        if (keepShownItems) {
+            _uiState.update {
+                it.copy(
+                    selectedTab = categoryId,
+                    isLoading = false,
+                    isLoadingMore = false,
+                    loadMoreError = null,
+                    error = null,
+                )
+            }
+        } else {
+            _uiState.update {
+                it.copy(
+                    selectedTab = categoryId,
+                    items = emptyList(),
+                    page = 1,
+                    total = 0,
+                    canLoadMore = false,
+                    isLoading = true,
+                    isLoadingMore = false,
+                    loadMoreError = null,
+                    error = null,
+                )
+            }
         }
         contentJob = viewModelScope.launch {
             try {
@@ -275,16 +370,23 @@ class HomeViewModel(
                         isLoading = false,
                     )
                 }
+                persistSnapshot()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 AppLog.e("Home", "load category $categoryId failed: ${e.message}", e)
                 if (_uiState.value.selectedTab == categoryId) {
+                    // SWR 刷新失败且已有内容:保留快照内容,只记日志。
+                    val hasContent = keepContent && _uiState.value.items.isNotEmpty()
                     _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            error = e.friendlyLoadMessage("分类内容加载失败，请重试"),
-                        )
+                        if (hasContent) {
+                            it.copy(isLoading = false)
+                        } else {
+                            it.copy(
+                                isLoading = false,
+                                error = e.friendlyLoadMessage("分类内容加载失败，请重试"),
+                            )
+                        }
                     }
                 }
             }
@@ -326,6 +428,7 @@ class HomeViewModel(
                     timestamp = System.currentTimeMillis(),
                 )
                 trimCache()
+                persistSnapshot()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
