@@ -2,12 +2,14 @@ package com.example.mediacenter
 
 import android.app.Application
 import android.os.Build
+import coil.Coil
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import com.example.mediacenter.crash.CrashReporter
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.net.AppHttpClient
 import com.example.mediacenter.net.BilibiliImageLoaderFactory
+import com.example.mediacenter.util.StartupTrace
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,6 +31,7 @@ class MediaCenterApp : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
+        StartupTrace.markApplicationCreate()
         AppLog.init(this)
         // 注入全局 repository 的持久化 context(provider 选择重启后恢复)
         com.example.mediacenter.data.MediaRepositoryHolder.init(this)
@@ -50,6 +53,22 @@ class MediaCenterApp : Application(), ImageLoaderFactory {
         AppHttpClient.installConscryptProvider()
         installCrashHandler()
         uploadPendingCrashReport()
+        warmProcessSingletons()
+    }
+
+    /**
+     * 预热进程级单例,避免首次组合在主线程序列化初始化:
+     * - MediaRepositoryHolder.repository:SharedPreferences 首读 + OkHttp 客户端/磁盘缓存构建;
+     * - Coil ImageLoader:磁盘缓存目录与 OkHttp 栈初始化(首个 AsyncImage 才触发的 lazy)。
+     * 低端 TV 盒子这两处可占几十~数百 ms;放 IO 线程后,首帧通常已就绪。
+     */
+    private fun warmProcessSingletons() {
+        appScope.launch {
+            runCatching { com.example.mediacenter.data.MediaRepositoryHolder.repository }
+                .onFailure { AppLog.w("App", "warm repository failed: ${it.message}", it) }
+            runCatching { Coil.imageLoader(this@MediaCenterApp) }
+                .onFailure { AppLog.w("App", "warm image loader failed: ${it.message}", it) }
+        }
     }
 
     private fun installCrashHandler() {
