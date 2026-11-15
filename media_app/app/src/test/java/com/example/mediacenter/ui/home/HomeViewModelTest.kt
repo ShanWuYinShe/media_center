@@ -9,11 +9,14 @@ import com.example.mediacenter.data.VideoCollectionResponse
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.VideosResponse
 import com.example.mediacenter.testutil.MainDispatcherRule
+import java.io.IOException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -86,11 +89,61 @@ class HomeViewModelTest {
         assertTrue(viewModel.uiState.value.items.isEmpty())
         assertEquals(callsBefore, repository.pageRequests.size)
     }
+
+    @Test
+    fun selectTab_expiredCache_showsStaleItemsWhileRefreshing() = runTest {
+        val repository = FakeRepository()
+        val viewModel = HomeViewModel(repository, autoCheckUpdate = false)
+        advanceUntilIdle()
+
+        val stale = List(2) { VideoSummary(id = "stale_$it", title = "旧内容 $it") }
+        viewModel.seedCategoryCacheForTest("tv", stale, ageMs = 11 * 60 * 1000L)
+        repository.gateTvRequest = CompletableDeferred()
+
+        viewModel.selectTab("tv")
+        advanceUntilIdle()
+
+        // 刷新尚未返回:先把过期缓存渲染出来(不闪骨架),并拦住 loadMore 抢跑。
+        assertEquals("tv", viewModel.uiState.value.selectedTab)
+        assertEquals(stale.map { it.id }, viewModel.uiState.value.items.map { it.id })
+        assertTrue(viewModel.uiState.value.isLoading)
+
+        repository.gateTvRequest?.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(3, viewModel.uiState.value.items.size)
+        assertFalse(viewModel.uiState.value.isLoading)
+    }
+
+    @Test
+    fun selectTab_refreshFailure_keepsStaleItems() = runTest {
+        val repository = FakeRepository()
+        val viewModel = HomeViewModel(repository, autoCheckUpdate = false)
+        advanceUntilIdle()
+
+        val stale = List(2) { VideoSummary(id = "stale_$it", title = "旧内容 $it") }
+        viewModel.seedCategoryCacheForTest("tv", stale, ageMs = 11 * 60 * 1000L)
+        repository.gateTvRequest = CompletableDeferred()
+
+        viewModel.selectTab("tv")
+        advanceUntilIdle()
+        assertEquals(stale.map { it.id }, viewModel.uiState.value.items.map { it.id })
+
+        repository.gateTvRequest?.completeExceptionally(IOException("network down"))
+        advanceUntilIdle()
+
+        assertEquals(stale.map { it.id }, viewModel.uiState.value.items.map { it.id })
+        assertFalse(viewModel.uiState.value.isLoading)
+        assertNull(viewModel.uiState.value.error)
+    }
 }
 
 private class FakeRepository : MediaRepositoryApi {
     override var currentProvider: String = "bilibili"
     val pageRequests = mutableListOf<Pair<String, Int>>()
+
+    /** 非空时 tv 分类请求会挂起,模拟"后台刷新在途"以验证 SWR 行为。 */
+    var gateTvRequest: CompletableDeferred<Unit>? = null
 
     override fun setProvider(provider: String) {
         currentProvider = provider
@@ -114,6 +167,7 @@ private class FakeRepository : MediaRepositoryApi {
         maxDurationSeconds: Long?,
     ): VideosResponse {
         pageRequests += categoryId to page
+        if (categoryId == "tv") gateTvRequest?.await()
         val total = if (categoryId == "movies") 25 else 3
         val all = (1..total).map {
             VideoSummary(
