@@ -158,6 +158,7 @@ func (s *mediaServer) cachedYouTubeSearch(ctx context.Context, query string) ([]
 	s.ensureYouTubeCaches()
 	key := normalizeYouTubeCacheKey(query)
 	if items, ok := s.youtubeSearchCache.get(key); ok {
+		s.cacheStats.searchHits.Add(1)
 		return items, nil
 	}
 	return s.youtubeSearchGroup.do(ctx, key, func(ctx context.Context) ([]VideoSummary, error) {
@@ -174,6 +175,7 @@ func (s *mediaServer) cachedYouTubeSearch(ctx context.Context, query string) ([]
 func (s *mediaServer) cachedYouTubeCategory(ctx context.Context, category youtubeCategory) ([]VideoSummary, error) {
 	s.ensureYouTubeCaches()
 	if items, ok := s.youtubeCategoryCache.get(category.ID); ok {
+		s.cacheStats.categoryHits.Add(1)
 		return items, nil
 	}
 	return s.youtubeCategoryGroup.do(ctx, category.ID, func(ctx context.Context) ([]VideoSummary, error) {
@@ -229,6 +231,8 @@ func (s *mediaServer) startYouTubeCacheWarmer() {
 			cancel()
 			if err != nil {
 				log.Printf("youtube cache warm %q: %v", target.displayName(), err)
+			} else {
+				s.cacheStats.warmRuns.Add(1)
 			}
 			time.Sleep(youtubeWarmInterval)
 		}

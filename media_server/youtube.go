@@ -355,6 +355,7 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 	// reason 是否为空:上游 502 未带结构化 reason 时同样是失败,回放零值
 	// 结果会变成一个"成功但没有播放地址"的 200。
 	if result, reason, failure, hit := globalResolveCache.lookup(videoID); hit {
+		s.cacheStats.resolveMemoryHits.Add(1)
 		if failure {
 			log.Printf("youtube resolve %s: cached failure (reason=%s)", videoID, reason)
 			s.writeError(w, &apiError{Status: http.StatusBadGateway, Code: "RESOLVE_FAILED", Message: "播放地址解析失败,该视频可能受限或稍后再试。"})
@@ -367,6 +368,7 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 	// 后续请求连 SQLite 都不用查。
 	if s.resolveDisk != nil {
 		if result, ok := s.resolveDisk.lookup(videoID); ok {
+			s.cacheStats.resolveDiskHits.Add(1)
 			globalResolveCache.store(videoID, resolveCacheEntry{
 				result:    result,
 				expiresAt: time.Now().Add(resolvePositiveCacheTTL),
@@ -384,6 +386,8 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 	)
 	defer cancelFlight()
 	result, err := globalResolveGroup.do(r.Context(), videoID, func() (PlaybackResultResponse, error) {
+		// 只有 leader 真正打上游;等待者复用结果,不计入 upstream。
+		s.cacheStats.resolveUpstreams.Add(1)
 		return s.yt.resolveVideo(flightCtx, videoID)
 	})
 	if err == nil && len(result.Options) == 0 {
