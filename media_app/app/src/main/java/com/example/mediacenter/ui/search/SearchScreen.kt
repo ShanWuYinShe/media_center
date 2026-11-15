@@ -229,6 +229,39 @@ fun SearchScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(vertical = 20.dp),
                 )
+                // 最近搜索:优先展示本地历史,一键重搜(遥控器逐字输入成本高)。
+                val recent = state.history
+                if (recent.isNotEmpty()) {
+                    Text(
+                        "最近搜索",
+                        color = TextTertiary,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(bottom = 12.dp),
+                    )
+                    recent.chunked(6).forEachIndexed { rowIndex, rowWords ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            rowWords.forEachIndexed { index, word ->
+                                TvChip(
+                                    label = word,
+                                    selected = false,
+                                    onClick = {
+                                        keyboardController?.hide()
+                                        focusResultsAfterHotWord = true
+                                        viewModel.search(word)
+                                    },
+                                    modifier = if (rowIndex == 0 && index == 0) {
+                                        Modifier.focusRequester(firstHotFocus)
+                                    } else {
+                                        Modifier
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
                 // 热门搜索词:一键点选,免去方向键逐字输入。
                 Text(
                     "热门搜索 · ${providerDisplayName(provider)}",
@@ -251,7 +284,8 @@ fun SearchScreen(
                                     focusResultsAfterHotWord = true
                                     viewModel.search(word)
                                 },
-                                modifier = if (rowIndex == 0 && index == 0) {
+                                // 有最近搜索时首焦点给最近搜索,热词不再抢焦点。
+                                modifier = if (rowIndex == 0 && index == 0 && state.history.isEmpty()) {
                                     Modifier.focusRequester(firstHotFocus)
                                 } else {
                                     Modifier

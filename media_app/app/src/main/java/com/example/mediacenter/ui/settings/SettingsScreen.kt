@@ -42,6 +42,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.mediacenter.BuildConfig
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.PlaybackPositionStore
+import com.example.mediacenter.data.SearchHistory
 import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.data.providerDisplayName
 import com.example.mediacenter.log.AppLog
@@ -229,6 +230,19 @@ fun SettingsScreen(onBack: () -> Unit) {
                             message = "将清空首页的「继续观看」列表，播放位置记录保留。",
                             onConfirm = {
                                 WatchHistory.clear(context)
+                                feedback = "已清除"
+                            },
+                        )
+                    },
+                )
+                ActionRow(
+                    label = "清除搜索历史",
+                    onClick = {
+                        confirmAction = ConfirmAction(
+                            title = "清除搜索历史",
+                            message = "将清空搜索页的「最近搜索」记录。",
+                            onConfirm = {
+                                SearchHistory.clear(context)
                                 feedback = "已清除"
                             },
                         )
