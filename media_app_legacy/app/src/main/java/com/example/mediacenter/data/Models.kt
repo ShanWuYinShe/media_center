@@ -13,6 +13,15 @@ data class ProvidersResponse(
     val items: List<ProviderInfo>? = null,
 )
 
+// /providers/{provider}/bootstrap 的响应:首页启动一次拿到 providers 与分类,
+// 老盒子网络慢,聚合请求把首屏串行 RTT 从 2 次降到 1 次。
+@Serializable
+data class ProviderBootstrapResponse(
+    val provider: String? = null,
+    val providers: List<ProviderInfo>? = null,
+    val categories: List<ContentCategory>? = null,
+)
+
 @Serializable
 data class ProviderCredential(
     val provider: String,

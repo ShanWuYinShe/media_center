@@ -11,6 +11,14 @@ interface MediaRepositoryApi {
 
     suspend fun providers(): List<ProviderInfo>
 
+    /**
+     * 首页启动聚合数据(providers + 当前 provider 分类)。
+     * 默认实现退化为原有两次请求;真实仓库覆盖为一次 bootstrap 请求,
+     * 老盒子冷启动少一次串行 RTT。
+     */
+    suspend fun bootstrap(): Pair<List<ProviderInfo>, List<ContentCategory>> =
+        providers() to categories()
+
     suspend fun refreshCredentials()
 
     suspend fun categories(): List<ContentCategory>

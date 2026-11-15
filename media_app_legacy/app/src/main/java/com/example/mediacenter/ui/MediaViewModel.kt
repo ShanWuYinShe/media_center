@@ -1115,17 +1115,8 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
     private fun loadCategoriesAndSearch() {
         loadHomeJob?.cancel()
         loadHomeJob = viewModelScope.launch {
-            // 拉取 provider 列表(含实时源 youtube);失败不阻塞分类加载,
-            // 沿用当前 provider(网络错误会在 categories 处统一暴露)。
-            runCatchingCancellable { repository.providers() }
-                .onSuccess { providers ->
-                    mutableState.update {
-                        it.copy(providers = providers, currentProvider = repository.currentProvider)
-                    }
-                }
-                .onFailure { error ->
-                    AppLog.w("Search", "load providers failed: ${error.message}", error)
-                }
+            // 首屏用聚合请求一次拿 providers + 分类(老盒子弱网省一个 RTT);
+            // 聚合失败(旧服务端/网络)退回原有两次请求,行为与之前一致。
             // 分类加载失败自动重试:最多 MAX_HOME_AUTO_RETRIES 次(退避见
             // HOME_AUTO_RETRY_BACKOFF_MS),覆盖老盒子"开机 WiFi 未就绪 /
             // 网络闪断"的场景;重试期间用户切走则放弃,最终失败才落错误态。
@@ -1142,7 +1133,33 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                         it.copy(loading = true, loadMoreError = null, error = null, autoRetrying = false)
                     }
                 }
-                val categoriesResult = runCatchingCancellable { repository.categories() }
+                val categoriesResult = if (attempt == 0) {
+                    // 聚合请求:providers + 分类一次拿到;失败退回两次请求。
+                    runCatchingCancellable { repository.bootstrap() }.fold(
+                        onSuccess = { (providers, categories) ->
+                            mutableState.update {
+                                it.copy(providers = providers, currentProvider = repository.currentProvider)
+                            }
+                            Result.success(categories)
+                        },
+                        onFailure = { error ->
+                            AppLog.w("Search", "load bootstrap failed: ${error.message}", error)
+                            runCatchingCancellable { repository.providers() }
+                                .onSuccess { providers ->
+                                    mutableState.update {
+                                        it.copy(providers = providers, currentProvider = repository.currentProvider)
+                                    }
+                                }
+                                .onFailure { e ->
+                                    AppLog.w("Search", "load providers failed: ${e.message}", e)
+                                }
+                            runCatchingCancellable { repository.categories() }
+                        },
+                    )
+                } else {
+                    // 重试时只重拉分类(providers/凭证已在首轮处理)。
+                    runCatchingCancellable { repository.categories() }
+                }
                 val categories = categoriesResult.getOrNull()
                 if (categories != null) {
                     // categories 拿到了,确定默认选中:

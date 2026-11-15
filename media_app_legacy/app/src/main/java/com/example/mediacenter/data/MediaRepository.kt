@@ -3,6 +3,8 @@ package com.example.mediacenter.data
 import android.content.SharedPreferences
 import com.example.mediacenter.log.AppLog
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 
 class MediaRepository(
     private val api: MediaApi,
@@ -31,14 +33,47 @@ class MediaRepository(
     override suspend fun providers(): List<ProviderInfo> {
         refreshCredentials()
         val items = api.providers().items.orEmpty()
-        if (items.isNotEmpty() && !providerInitialized.getAndSet(true)) {
-            val restored = prefs?.getString(KEY_CURRENT_PROVIDER, null)
-            if (restored.isNullOrEmpty() || items.none { it.id == restored }) {
-                currentProvider = items.first().id
-                persistProvider()
-            }
-        }
+        applyProviderSelection(items)
         return items
+    }
+
+    /**
+     * 首页启动聚合:一次请求拿到 providers + 分类(替代串行的 providers→categories,
+     * 老盒子弱网下省一个 RTT);凭证请求与之并行,凭证失败不影响目录。
+     * 旧服务端没有聚合端点时自动退回原有两次请求。
+     */
+    override suspend fun bootstrap(): Pair<List<ProviderInfo>, List<ContentCategory>> {
+        val requestedProvider = currentProvider
+        return coroutineScope {
+            val credentials = async { refreshCredentials() }
+            val response = try {
+                api.bootstrap(requestedProvider)
+            } catch (e: Exception) {
+                credentials.cancel()
+                AppLog.w("Repo", "bootstrap failed, fallback to providers+categories: ${e.message}", e)
+                return@coroutineScope providers() to categories()
+            }
+            credentials.await()
+            val providers = response.providers.orEmpty()
+            applyProviderSelection(providers)
+            val categories = if (currentProvider == requestedProvider) {
+                response.categories.orEmpty()
+            } else {
+                // 持久化的 provider 已下线、bootstrap 期间切到第一个:分类按新 provider 重取。
+                api.categories(currentProvider).items.orEmpty()
+            }
+            providers to categories
+        }
+    }
+
+    /** 首次拿到 providers 时恢复/校正当前 provider(持久化选择优先)。 */
+    private fun applyProviderSelection(items: List<ProviderInfo>) {
+        if (items.isEmpty() || !providerInitialized.compareAndSet(false, true)) return
+        val restored = prefs?.getString(KEY_CURRENT_PROVIDER, null)
+        if (restored.isNullOrEmpty() || items.none { it.id == restored }) {
+            currentProvider = items.first().id
+            persistProvider()
+        }
     }
 
     /** 用户手动切换视频源,并持久化到 SharedPreferences。 */
