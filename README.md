@@ -36,6 +36,8 @@ ANDROID_HOME="$HOME/Library/Android/sdk" \
 ./gradlew :app:assembleDebug -PMEDIA_SERVER_URL=https://your-domain.example/api/v1
 ```
 
+正式发版不依赖本地构建：push `vX.Y.Z` tag 后由 GitHub Actions（`.github/workflows/release-app.yml`）构建 normal + legacy release APK、生成更新 manifest 并发布 GitHub Release（可选自动部署到服务器）。发版所需的 secrets、固定签名与自动部署配置见仓库根 `AGENTS.md`「APK 发版（GitHub Actions）」。
+
 ## 服务端 media_server
 
 Go 服务，详见 `media_server/README.md`。本地编译检查：

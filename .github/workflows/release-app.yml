@@ -1,0 +1,398 @@
+# Android TV（normal + legacy）发版：tag 驱动构建、GitHub Release 发布、可选服务器自动部署。
+#
+# 触发方式：
+#   - push tag `vX.Y.Z`：正式发版（构建 → 校验 → 发布 GitHub Release → 可选自动部署）
+#   - workflow_dispatch：只在当前分支做构建校验并上传 Actions artifact，不创建 Release、不部署
+#
+# 一次性配置（secrets / variables 名称与用途见仓库根 AGENTS.md「APK 发版（GitHub Actions）」，
+# 可用 scripts/setup-gh-release-secrets.sh 写入）：
+#   tag 发版必填 secrets：APP_API_TOKEN、ANDROID_KEYSTORE_BASE64、
+#     ANDROID_KEYSTORE_STORE_PASSWORD、ANDROID_KEYSTORE_KEY_ALIAS、ANDROID_KEYSTORE_KEY_PASSWORD
+#   可选 variables：MEDIA_SERVER_URL、ANDROID_EXPECTED_CERT_SHA256、ENABLE_AUTO_DEPLOY、DEPLOY_REMOTE_DIR
+#   自动部署（ENABLE_AUTO_DEPLOY=true）另需 secrets：DEPLOY_HOST、DEPLOY_USER、DEPLOY_SSH_KEY、DEPLOY_KNOWN_HOSTS
+#
+# 签名密钥必须稳定：换密钥后老用户无法原位升级（只能卸载重装），所以正式发版缺签名 secret 直接失败，
+# 不会静默回退到每次构建都随机生成的 debug 密钥。
+name: Release App (Android TV)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 发版不能中途取消：tag 推送后必须完整跑完（重复触发同一 tag 时排队执行，publish 步骤幂等更新）。
+concurrency:
+  group: release-app-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  ANDROID_HOME: /usr/local/lib/android/sdk
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+jobs:
+  build:
+    name: Build normal + legacy release APKs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout (full history for git describe)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6.0.1
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Validate release tag
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::发版 tag 必须形如 vX.Y.Z，当前为 ${TAG}"
+            exit 1
+          fi
+          if [ "$(git rev-list -n 1 "refs/tags/${TAG}")" != "$(git rev-parse HEAD)" ]; then
+            echo "::error::tag ${TAG} 不在当前 checkout 的 commit 上"
+            exit 1
+          fi
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "::error::tag ${TAG} 所在 commit 不在 main 上；发版 tag 只能打在 main 的合并提交上"
+            exit 1
+          fi
+          echo "tag ${TAG} 校验通过（main 祖先、HEAD 一致）"
+
+      - name: Collect tag release notes
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          NOTES="$(git tag -l --format='%(contents)' "${TAG}" || true)"
+          # 轻量 tag 或未写注释时，退化为上一个 tag 到本 tag 的提交标题列表。
+          if [ -z "$(printf '%s' "${NOTES}" | tr -d '[:space:]')" ]; then
+            PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+            if [ -n "${PREV}" ]; then
+              NOTES="$(git log --no-merges --pretty='- %s' "${PREV}..${TAG}")"
+            fi
+          fi
+          if [ -z "$(printf '%s' "${NOTES}" | tr -d '[:space:]')" ]; then
+            NOTES="- ${TAG}"
+          fi
+          printf '%s\n' "${NOTES}" > "${RUNNER_TEMP}/tag-notes.txt"
+          # manifest.releaseNotes 只放一行短说明：App 内更新弹窗展示空间有限。
+          printf '%s\n' "${NOTES}" | sed -e '/^$/d' | head -n 1 | cut -c1-200 > "${RUNNER_TEMP}/manifest-notes.txt"
+
+      - name: Prepare signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEYSTORE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，回退 debug 签名（仅可用于非发布校验；不同构建机签名不同）"
+            exit 0
+          fi
+          if [ -z "${STORE_PASSWORD:-}" ] || [ -z "${KEY_ALIAS:-}" ] || [ -z "${KEY_PASSWORD:-}" ]; then
+            echo "::error::已配置 ANDROID_KEYSTORE_BASE64，但缺少 ANDROID_KEYSTORE_STORE_PASSWORD / ANDROID_KEYSTORE_KEY_ALIAS / ANDROID_KEYSTORE_KEY_PASSWORD"
+            exit 1
+          fi
+          KEYSTORE_PATH="${RUNNER_TEMP}/release.keystore"
+          printf '%s' "${KEYSTORE_BASE64}" | base64 --decode > "${KEYSTORE_PATH}"
+          chmod 600 "${KEYSTORE_PATH}"
+          {
+            echo "ANDROID_SIGNING_KEYSTORE_PATH=${KEYSTORE_PATH}"
+            echo "ANDROID_SIGNING_STORE_PASSWORD=${STORE_PASSWORD}"
+            echo "ANDROID_SIGNING_KEY_ALIAS=${KEY_ALIAS}"
+            echo "ANDROID_SIGNING_KEY_PASSWORD=${KEY_PASSWORD}"
+          } >> "${GITHUB_ENV}"
+          echo "签名 keystore 已就绪（${KEYSTORE_PATH}）"
+
+      - name: Require release secrets
+        if: github.event_name == 'push'
+        env:
+          APP_API_TOKEN: ${{ secrets.APP_API_TOKEN }}
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEYSTORE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${APP_API_TOKEN:-}" ] || missing+=("APP_API_TOKEN")
+          [ -n "${KEYSTORE_BASE64:-}" ] || missing+=("ANDROID_KEYSTORE_BASE64")
+          [ -n "${STORE_PASSWORD:-}" ] || missing+=("ANDROID_KEYSTORE_STORE_PASSWORD")
+          [ -n "${KEY_ALIAS:-}" ] || missing+=("ANDROID_KEYSTORE_KEY_ALIAS")
+          [ -n "${KEY_PASSWORD:-}" ] || missing+=("ANDROID_KEYSTORE_KEY_PASSWORD")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::正式发版缺少 GitHub Actions secret：${missing[*]}"
+            echo "::error::配置方法见仓库根 AGENTS.md「APK 发版（GitHub Actions）」；可执行 scripts/setup-gh-release-secrets.sh 一次性写入"
+            exit 1
+          fi
+
+      - name: Build release APKs + update manifests
+        env:
+          APP_API_TOKEN: ${{ secrets.APP_API_TOKEN }}
+          MEDIA_SERVER_URL_OVERRIDE: ${{ vars.MEDIA_SERVER_URL }}
+        run: |
+          set -euo pipefail
+          # 空字符串会让 build.gradle.kts 的 orElse 默认值失效，先清空再按需导出。
+          unset MEDIA_SERVER_URL
+          if [ -n "${MEDIA_SERVER_URL_OVERRIDE:-}" ]; then
+            export MEDIA_SERVER_URL="${MEDIA_SERVER_URL_OVERRIDE}"
+          fi
+          args=(--out build/release-apk)
+          if [ -s "${RUNNER_TEMP}/manifest-notes.txt" ]; then
+            args+=(--release-notes "$(cat "${RUNNER_TEMP}/manifest-notes.txt")")
+          fi
+          bash scripts/release-apk.sh "${args[@]}"
+
+      - name: Verify APKs, manifests and signatures
+        run: |
+          set -euo pipefail
+          # 只有 tag 发版才断言 versionName 与 tag 一致；手动触发是分支构建（版本号带 -dev.N）。
+          EXPECTED_TAG=""
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            EXPECTED_TAG="${GITHUB_REF_NAME#v}"
+          fi
+          EXPECTED_CERT_SHA256="${{ vars.ANDROID_EXPECTED_CERT_SHA256 }}"
+          APKSIGNER="$(find "${ANDROID_HOME}/build-tools" -maxdepth 2 -type f -name apksigner 2>/dev/null | sort -V | tail -n 1 || true)"
+          export EXPECTED_TAG EXPECTED_CERT_SHA256 APKSIGNER
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess, sys
+
+          out = pathlib.Path("build/release-apk")
+          expected_tag = os.environ.get("EXPECTED_TAG", "")
+          expected_cert = os.environ.get("EXPECTED_CERT_SHA256", "").replace(":", "").lower()
+          apksigner = os.environ.get("APKSIGNER", "")
+
+          manifests = {
+              "normal": out / "app-update.json",
+              "legacy": out / "app-update-legacy.json",
+          }
+          problems = []
+          rows = []
+          for variant, path in manifests.items():
+              if not path.is_file():
+                  problems.append(f"{variant}: 缺少 manifest {path}")
+                  continue
+              manifest = json.loads(path.read_text(encoding="utf-8"))
+              apk_name = manifest.get("apkFilename", "")
+              apk = out / apk_name
+              if not apk_name or not apk.is_file():
+                  problems.append(f"{variant}: manifest 引用的 APK 不存在: {apk_name}")
+                  continue
+              actual_sha = hashlib.sha256(apk.read_bytes()).hexdigest()
+              actual_size = apk.stat().st_size
+              if actual_sha != manifest.get("sha256", "").lower():
+                  problems.append(f"{variant}: APK sha256 与 manifest 不一致")
+              if actual_size != manifest.get("sizeBytes"):
+                  problems.append(f"{variant}: APK sizeBytes 与 manifest 不一致")
+              version_name = manifest.get("versionName", "")
+              version_code = manifest.get("versionCode", 0)
+              if expected_tag:
+                  if version_name != expected_tag:
+                      problems.append(f"{variant}: versionName={version_name} 与 tag {expected_tag} 不一致（同一 commit 是否打了多个版本 tag？）")
+                  semver = version_name.split("-")[0].split(".")
+                  if len(semver) == 3 and all(part.isdigit() for part in semver):
+                      major, minor, patch = map(int, semver)
+                      if version_code != major * 100000 + minor * 1000 + patch:
+                          problems.append(f"{variant}: versionCode={version_code} 与 versionName 派生值不一致")
+              rows.append((variant, version_name, str(version_code), apk_name, str(actual_size), actual_sha))
+              if apksigner and expected_cert:
+                  result = subprocess.run([apksigner, "verify", "--print-certs", str(apk)], capture_output=True, text=True)
+                  if result.returncode != 0:
+                      problems.append(f"{variant}: apksigner 校验失败: {result.stdout}{result.stderr}")
+                  else:
+                      cert = ""
+                      for line in result.stdout.splitlines():
+                          if "certificate SHA-256 digest" in line:
+                              cert = line.split(":", 1)[1].strip().replace(":", "").lower()
+                              break
+                      if cert != expected_cert:
+                          problems.append(f"{variant}: 签名证书 SHA-256 与 ANDROID_EXPECTED_CERT_SHA256 不一致（实际 {cert or '未取到'}）")
+
+          (out / "SHA256SUMS").write_text("".join(f"{row[5]}  {row[3]}\n" for row in rows), encoding="utf-8")
+          print("APK/manifest 校验结果：")
+          for row in rows:
+              print("  " + " | ".join(row))
+          if not expected_tag:
+              print("（手动触发：跳过 tag/versionName 一致性断言）")
+          if problems:
+              for problem in problems:
+                  print(f"::error::{problem}")
+              sys.exit(1)
+          print("校验通过")
+          PY
+
+      - name: Generate release notes
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > build/release-apk/release-notes.md
+          import json, os, pathlib
+
+          out = pathlib.Path("build/release-apk")
+          event = os.environ.get("GITHUB_EVENT_NAME", "")
+          ref = os.environ.get("GITHUB_REF_NAME", "")
+          sha = os.environ.get("GITHUB_SHA", "")
+          run_url = f"{os.environ.get('GITHUB_SERVER_URL', '')}/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}"
+          notes_file = pathlib.Path(os.environ.get("RUNNER_TEMP", "")) / "tag-notes.txt"
+          tag_notes = notes_file.read_text(encoding="utf-8").strip() if notes_file.is_file() else ""
+
+          normal = json.loads((out / "app-update.json").read_text(encoding="utf-8"))
+          legacy = json.loads((out / "app-update-legacy.json").read_text(encoding="utf-8"))
+
+          print("# 手动构建校验（未发布）" if event == "workflow_dispatch" else f"# Media Center TV {ref}")
+          print()
+          if event == "workflow_dispatch":
+              print(f"分支：`{ref}` · commit：`{sha}`")
+              print()
+              print("本构建仅用于验证发版链路，不创建 GitHub Release、不部署。")
+          else:
+              print(f"versionName: {normal.get('versionName')} · versionCode: {normal.get('versionCode')}")
+          print()
+          print("## 变更")
+          print()
+          print(tag_notes or f"- {normal.get('versionName')}")
+          print()
+          print("## 产物")
+          print()
+          print("| 变体 | APK | 体积 | SHA-256 |")
+          print("|---|---|---|---|")
+          for variant, manifest in (("normal", normal), ("legacy", legacy)):
+              print(f"| {variant} | `{manifest.get('apkFilename')}` | {manifest.get('sizeBytes')} B | `{manifest.get('sha256')}` |")
+          print()
+          print("## 安装 / 更新")
+          print()
+          print("- App 内更新：把 APK 与对应 manifest 放进服务器 `deploy/data/generated/`（或启用自动部署），App 下次检查更新即生效。")
+          print("- 手动安装：`adb install -r <apk>`；normal 与 legacy 只装其一。")
+          print()
+          print(f"构建与校验：{run_url}")
+          PY
+          cat build/release-apk/release-notes.md >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk-${{ github.run_id }}
+          path: |
+            build/release-apk/*.apk
+            build/release-apk/*.json
+            build/release-apk/SHA256SUMS
+            build/release-apk/release-notes.md
+          retention-days: 14
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-apk-${{ github.run_id }}
+          path: dist
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          assets=(dist/*.apk dist/app-update.json dist/app-update-legacy.json dist/SHA256SUMS)
+          # 同一 tag 重跑时幂等更新，避免 gh release create 因 tag 已存在而失败。
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${assets[@]}" --clobber
+            gh release edit "${TAG}" --notes-file dist/release-notes.md
+            echo "已更新既有 Release：${TAG}"
+          else
+            gh release create "${TAG}" "${assets[@]}" \
+              --title "Media Center TV ${TAG}" \
+              --notes-file dist/release-notes.md
+            echo "已创建 Release：${TAG}"
+          fi
+          {
+            echo "## GitHub Release 已发布"
+            echo
+            echo "- tag：${TAG}"
+            echo "- Release：${{ github.server_url }}/${{ github.repository }}/releases/tag/${TAG}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  deploy:
+    name: Deploy to server (optional)
+    needs: build
+    if: github.event_name == 'push' && vars.ENABLE_AUTO_DEPLOY == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-apk-${{ github.run_id }}
+          path: dist
+
+      - name: Deploy APK + manifests via SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_REMOTE_DIR: ${{ vars.DEPLOY_REMOTE_DIR }}
+        run: |
+          set -euo pipefail
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::ENABLE_AUTO_DEPLOY=true 但缺少 secret ${name}"
+              exit 1
+            fi
+          done
+          REMOTE_DIR="${DEPLOY_REMOTE_DIR:-media_center/deploy/data/generated}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${DEPLOY_SSH_KEY}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "${DEPLOY_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" > ~/.ssh/known_hosts
+          else
+            echo "::warning::未配置 DEPLOY_KNOWN_HOSTS，回退 ssh-keyscan（存在 MITM 风险，建议配置）"
+            ssh-keyscan -H "${DEPLOY_HOST}" > ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+          SSH_OPTS=(-i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
+          # 远端目录经 argv 传入，避免把变量拼进 ssh 命令串（引号/空格更安全）。
+          ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" bash -s -- "${REMOTE_DIR}" <<'REMOTE'
+          set -euo pipefail
+          mkdir -p "$1"
+          REMOTE
+          scp "${SSH_OPTS[@]}" dist/*.apk dist/app-update.json dist/app-update-legacy.json \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/"
+          # media_server 每次请求现读 manifest，文件就位即生效，无需重启；只保留最近 5 个版本化 APK。
+          ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" bash -s -- "${REMOTE_DIR}" <<'REMOTE'
+          set -euo pipefail
+          cd "$1"
+          find . -maxdepth 1 -name 'media-center-app-v*.apk' -printf '%T@ %p\n' \
+            | sort -rn | tail -n +6 | cut -d' ' -f 2- | xargs -r -d '\n' rm -f --
+          REMOTE
+          {
+            echo "## APK 已部署"
+            echo
+            echo "- 目标：${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/"
+            echo "- media_server 热加载 manifest，无需重启"
+          } >> "${GITHUB_STEP_SUMMARY}"

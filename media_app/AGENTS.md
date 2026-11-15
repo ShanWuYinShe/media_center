@@ -10,14 +10,18 @@
 cd media_app
 # JAVA_HOME 见 skill local-environment（Android Studio JBR 路径；以 ls 验证，变动时用 mdfind 定位）
 # --no-daemon 必加（原因见 skill toolchain-setup：Daemon 构建后 idle 数小时不退出，各占 -Xmx2g）
-# release（非 debug）：已配 debug 签名（signingConfig=debug）+ R8 minify，体积减半且可直接安装。
+# release（非 debug）：R8 minify + 资源压缩，体积减半且可直接安装。
+# 正式发版由 GitHub Actions 在 tag 上构建并注入固定发布签名（见根 AGENTS.md）；
+# 本地构建未注入 ANDROID_SIGNING_* 时回退 debug 签名，仅用于调试。
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:assembleRelease --no-daemon
 # 产物: app/build/outputs/apk/release/app-release.apk
 ```
 
-## 版本号与发版、部署 APK（详见 skill media-app-release）
+## 版本号与发版、部署 APK
 
 tag 驱动版本号、双变体 APK 构建与 manifest 部署流程见 skill media-app-release。
+
+正式发版统一由 GitHub Actions 完成：push `vX.Y.Z` tag → `.github/workflows/release-app.yml` 构建 normal + legacy release APK、发布 GitHub Release、可选自动部署到服务器；本地 `assembleRelease` 只用于调试。发版 secrets、签名与自动部署配置见仓库根 AGENTS.md「APK 发版（GitHub Actions）」。
 
 ## TV UI/UX 设计约定（详见 skill media-app-tv-ui）
 

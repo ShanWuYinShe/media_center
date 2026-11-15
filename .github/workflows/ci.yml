@@ -74,12 +74,16 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      # Android SDK 用 ubuntu runner 自带安装（/usr/local/lib/android/sdk），不额外装 action
-      - name: assembleDebug
+      # Android SDK 用 ubuntu runner 自带安装（/usr/local/lib/android/sdk），不额外装 action。
+      #
+      # normal 与 legacy 都编译 debug + release：release 走 R8 + 资源压缩，能把
+      # proguard/keep 规则、资源裁剪这类只在发布构建暴露的问题提前到 PR 阶段；
+      # 任务与 .github/workflows/release-app.yml 一致，避免「CI 绿、发版红」。
+      - name: assembleDebug + assembleRelease (normal)
         working-directory: media_app
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
-        run: ./gradlew :app:assembleDebug --no-daemon
+        run: ./gradlew :app:assembleDebug :app:assembleRelease --no-daemon
 
       - name: unit tests
         working-directory: media_app
@@ -96,10 +100,32 @@ jobs:
           ANDROID_HOME: /usr/local/lib/android/sdk
         run: ./gradlew :app:lintDebug --no-daemon
 
-      # legacy 存档变体此前只在发版脚本（scripts/release-apk.sh）里编译，
-      # 编译破坏要到发版才发现，这里做低成本兜底（debug 变体，无 R8）。
-      - name: legacy assembleDebug
+      # legacy 存档变体：debug + release 都编译。此前只编 debug，R8/keep 规则问题
+      # 要到发版才暴露；release 已配 debug 签名，可直接构建。
+      - name: assembleDebug + assembleRelease (legacy)
         working-directory: media_app_legacy
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
-        run: ./gradlew :app:assembleDebug --no-daemon
+        run: ./gradlew :app:assembleDebug :app:assembleRelease --no-daemon
+
+      # CI 构建的 release APK 仅用于 TV 真机 UI 走查：未注入 APP_API_TOKEN
+      # （YouTube 实时通道不可用），签名也是每次构建随机生成的 debug 密钥。
+      - name: Collect CI APKs for TV walkthrough
+        run: |
+          set -euo pipefail
+          mkdir -p ci-apks
+          cp media_app/app/build/outputs/apk/release/app-release.apk ci-apks/media-app-normal-ci.apk
+          cp media_app_legacy/app/build/outputs/apk/release/app-release.apk ci-apks/media-app-legacy-ci.apk
+          cat > ci-apks/README.txt <<'EOF'
+          仅用于 TV 真机 UI 走查的 CI 构建产物。
+          - 未注入 APP_API_TOKEN（YouTube 实时通道不可用）；
+          - 使用 CI 临时 debug 签名，不可用于发布或应用内升级；
+          - 正式发版由 .github/workflows/release-app.yml 在 tag 上构建。
+          EOF
+
+      - name: Upload CI APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-apks-${{ github.run_id }}
+          path: ci-apks/
+          retention-days: 7
