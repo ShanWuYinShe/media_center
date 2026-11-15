@@ -26,10 +26,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.ui.components.EmptyStateView
 import com.example.mediacenter.ui.components.ErrorView
-import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.components.PagedVideoGrid
 import com.example.mediacenter.ui.components.ProviderSelectDialog
 import com.example.mediacenter.ui.components.TopBar
+import com.example.mediacenter.ui.components.VideoGridSkeleton
 import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.TextSecondary
@@ -193,7 +193,7 @@ fun HomeScreen(
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             when {
                 state.categories.isEmpty() && state.isLoading ->
-                    LoadingIndicator(modifier = Modifier.fillMaxSize())
+                    VideoGridSkeleton(modifier = Modifier.fillMaxSize())
                 state.error != null -> ErrorView(
                     message = state.error!!,
                     onRetry = viewModel::retry,
@@ -234,7 +234,7 @@ fun HomeScreen(
                     }
                 }
                 state.isLoading && state.items.isEmpty() ->
-                    LoadingIndicator(modifier = Modifier.fillMaxSize())
+                    VideoGridSkeleton(modifier = Modifier.fillMaxSize())
                 state.items.isEmpty() -> EmptyStateView(
                     message = "当前分类暂无内容",
                     detail = if (state.currentProvider == "youtube") {

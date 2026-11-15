@@ -46,8 +46,8 @@ import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.providerDisplayName
 import com.example.mediacenter.ui.components.EmptyStateView
 import com.example.mediacenter.ui.components.ErrorView
-import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.components.PagedVideoGrid
+import com.example.mediacenter.ui.components.VideoGridSkeleton
 import com.example.mediacenter.ui.components.TvBackButton
 import com.example.mediacenter.ui.components.TvChip
 import com.example.mediacenter.ui.components.TvIconButton
@@ -215,7 +215,10 @@ fun SearchScreen(
                 .then(if (hotWordPending) Modifier.focusable() else Modifier),
         ) {
         when {
-            state.isSearching || hotWordPending -> LoadingIndicator()
+            // 搜索中:结果为空用骨架屏;已有旧结果时保留结果继续展示,
+            // 避免每次新查询都把列表闪回转圈(弱网下尤其明显)。
+            (state.isSearching && state.results.isEmpty()) || hotWordPending ->
+                VideoGridSkeleton(modifier = Modifier.fillMaxSize())
             state.error != null -> ErrorView(
                 message = state.error!!,
                 modifier = Modifier.fillMaxSize(),
