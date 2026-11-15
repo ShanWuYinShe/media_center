@@ -44,6 +44,7 @@ youtube provider 是受控例外——实时搜索与播放直链解析经内网
 - `MEDIA_SERVER_APP_UPDATE_MANIFEST`：App 更新清单路径，默认 `/config/app-update.json`。
 - `MEDIA_SERVER_APP_UPDATE_APK`：App 更新 APK 路径，默认 `/config/media-center-app.apk`。
 - `MEDIA_SERVER_CRASH_DIR`：App 崩溃上报落盘目录，默认 `data/crash-reports`。
+- `MEDIA_SERVER_RESOLVE_CACHE_DB`：YouTube resolve 成功结果的持久缓存（独立 SQLite 文件），默认 `data/resolve-cache.db`（容器内持久卷 `/app/data`）；设为 `off` 关闭。缓存为可重建数据，`data/catalog.db` 的备份/审核体系不包含它。
 
 ## 合集同步（B 站 ugc_season）
 

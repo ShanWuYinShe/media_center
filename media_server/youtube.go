@@ -362,11 +362,34 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 		s.writeJSON(w, http.StatusOK, result)
 		return
 	}
+	// 进程内未命中再查磁盘持久缓存(跨重启/发布存活);命中后回填内存缓存,
+	// 后续请求连 SQLite 都不用查。
+	if s.resolveDisk != nil {
+		if result, ok := s.resolveDisk.lookup(videoID); ok {
+			globalResolveCache.store(videoID, resolveCacheEntry{
+				result:    result,
+				expiresAt: time.Now().Add(resolvePositiveCacheTTL),
+			})
+			s.writeJSON(w, http.StatusOK, result)
+			return
+		}
+	}
 	// 同 ID 并发请求共享一次 yt-dlp 解析:重试风暴/多端同时打开时不再
 	// 各自拉起进程(vod_extractor 并发上限只有 2,还会消耗 cookies 寿命)。
+	// 上游调用用脱离调用方取消的 ctx:leader 用户退出播放页不应让其它等待者
+	// 一起失败(否则表现为随机 502);仍受 70s+10s 超时保护。
+	flightCtx, cancelFlight := context.WithTimeout(
+		context.WithoutCancel(r.Context()), youtubeResolveTimeout+10*time.Second,
+	)
+	defer cancelFlight()
 	result, err := globalResolveGroup.do(r.Context(), videoID, func() (PlaybackResultResponse, error) {
-		return s.yt.resolveVideo(r.Context(), videoID)
+		return s.yt.resolveVideo(flightCtx, videoID)
 	})
+	if err == nil && len(result.Options) == 0 {
+		// 空结果按真实解析失败处理:否则会返回"成功但没有播放地址"的 200
+		// 并被正缓存,用户只能反复重试。
+		err = &upstreamError{status: http.StatusBadGateway, reason: "no_formats", body: "resolved result has no playable options"}
+	}
 	if err != nil {
 		log.Printf("youtube resolve %s: %v", videoID, err)
 		// 只负缓存真实解析失败(502 带分类/504 超时);extractor 繁忙(503)
@@ -386,5 +409,8 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 		result:    result,
 		expiresAt: time.Now().Add(resolvePositiveCacheTTL),
 	})
+	if s.resolveDisk != nil {
+		s.resolveDisk.store(videoID, result)
+	}
 	s.writeJSON(w, http.StatusOK, result)
 }

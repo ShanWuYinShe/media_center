@@ -24,7 +24,7 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 ## 架构
 
 - `main.go`：启动、服务装配、路由与 JSON 响应包络
-- `youtube.go`：youtube provider 实时通道（客户端/搜索/解析 handler）；`youtube_formats.go`：格式选择；`youtube_cache.go`：resolve 缓存与单飞
+- `youtube.go`：youtube provider 实时通道（客户端/搜索/解析 handler）；`youtube_formats.go`：格式选择；`youtube_cache.go`：resolve 内存缓存与单飞；`resolve_disk_cache.go`：resolve 成功结果持久缓存（独立 SQLite，跨重启/发布存活）
 - `handlers.go`：目录/凭证/搜索/合集等公开 handler，以及分页/时长参数解析
 - `catalog.go`：SQLite 核心（schema/连接/视频元数据/导入），纯 modernc.org/sqlite 无 cgo
 - `catalog_browse.go`：目录浏览与搜索查询；`catalog_review.go`：审校/计数/删除；`catalog_collections.go`：合集；`catalog_consolidate.go`：分P合并

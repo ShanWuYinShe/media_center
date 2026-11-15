@@ -34,6 +34,9 @@ type AppConfig struct {
 	// vod_extractor(yt-dlp HTTP 封装)内网基址,如 http://vod_extractor:8790。
 	// 为空时 youtube 的搜索/解析端点均返回 NOT_CONFIGURED。
 	VODExtractorURL string
+	// YouTube resolve 成功结果的持久缓存(SQLite,独立于 catalog)。默认
+	// data/resolve-cache.db;设为 "off" 关闭。纯可重建数据,关闭不影响功能。
+	ResolveCacheDBPath string
 }
 
 // contentCategories.json 的原始结构。sources 字段保留解析(向后兼容旧配置),
@@ -64,6 +67,12 @@ type contentConfig struct {
 }
 
 func loadAppConfig() (AppConfig, error) {
+	// resolve 持久缓存:默认放在 catalog 同级的 data 目录(容器内 /app/data 持久卷);
+	// "off" 显式关闭(排查缓存相关问题时无需改代码)。
+	resolveCacheDB := getenv("MEDIA_SERVER_RESOLVE_CACHE_DB", "data/resolve-cache.db")
+	if strings.EqualFold(resolveCacheDB, "off") {
+		resolveCacheDB = ""
+	}
 	cfg := AppConfig{
 		Host:                  getenv("HOST", "0.0.0.0"),
 		Port:                  getenv("PORT", "8787"),
@@ -78,6 +87,7 @@ func loadAppConfig() (AppConfig, error) {
 		AppAPIToken:           strings.TrimSpace(os.Getenv("MEDIA_SERVER_APP_API_TOKEN")),
 		AllowedPublicHosts:    splitList(os.Getenv("MEDIA_SERVER_ALLOWED_HOSTS")),
 		VODExtractorURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("MEDIA_SERVER_VOD_EXTRACTOR_URL")), "/"),
+		ResolveCacheDBPath:    resolveCacheDB,
 	}
 	return cfg, nil
 }
