@@ -7,11 +7,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mediacenter.data.MediaRepositoryHolder
+import com.example.mediacenter.data.PlaybackPrefetcher
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.WatchEntry
 import com.example.mediacenter.data.WatchHistory
@@ -19,7 +21,11 @@ import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.theme.BackgroundDark
 import com.example.mediacenter.util.BackgroundWork
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+/** 下一集预取延迟:太早会为"看几秒就退出"的视频浪费解析,15s 后仍在播放说明大概率会看完。 */
+private const val NEXT_PREFETCH_DELAY_MS = 15_000L
 
 @Composable
 fun PlayerScreen(
@@ -38,6 +44,17 @@ fun PlayerScreen(
     val context = LocalContext.current
 
     BackHandler(onBack = onBack)
+
+    // 片尾连播预热:播放页停留 15s 后预取下一集播放地址(见 PlaybackPrefetcher),
+    // 自动/手动切集直接命中,不用再等解析;离开页面或下一集变化时协程自动取消。
+    val nextPrefetchTarget = remember(state.next, videoId) {
+        nextPrefetchTargetId(videoId, MediaRepositoryHolder.repository.currentProvider, state.next)
+    }
+    LaunchedEffect(nextPrefetchTarget) {
+        val targetId = nextPrefetchTarget ?: return@LaunchedEffect
+        delay(NEXT_PREFETCH_DELAY_MS)
+        PlaybackPrefetcher.prefetch(MediaRepositoryHolder.repository, targetId)
+    }
 
     // 合集下一集由 ViewModel 发出事件,UI 只做"登记历史 + 导航"。
     LaunchedEffect(viewModel, context) {
