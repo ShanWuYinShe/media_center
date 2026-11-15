@@ -2,9 +2,12 @@ package com.example.mediacenter.ui
 
 import android.net.Uri
 import android.os.Bundle
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -22,7 +25,21 @@ import com.example.mediacenter.ui.player.PlayerScreen
 import com.example.mediacenter.ui.search.SearchScreen
 import com.example.mediacenter.ui.settings.SettingsScreen
 import com.example.mediacenter.ui.theme.BackgroundDark
+import com.example.mediacenter.util.DevicePerformance
 import kotlinx.serialization.json.Json
+
+// 页面转场:低端盒子直接关掉动画(转场本身就是弱 GPU 的掉帧源);高配机用
+// 短促 fade + 轻微位移,给导航方向感但不拖沓。TV 遥控器操作频繁,时长 ≤200ms。
+private val navEnter: EnterTransition =
+    if (DevicePerformance.isLowEnd) EnterTransition.None else fadeIn(tween(200))
+private val navExit: ExitTransition =
+    if (DevicePerformance.isLowEnd) ExitTransition.None else fadeOut(tween(160))
+private val detailEnter: EnterTransition =
+    if (DevicePerformance.isLowEnd) {
+        EnterTransition.None
+    } else {
+        fadeIn(tween(200)) + slideInVertically(tween(200)) { height -> height / 24 }
+    }
 
 object Routes {
     const val HOME = "home"
@@ -71,9 +88,9 @@ private val videoSummaryType = object : NavType<VideoSummary>(isNullableAllowed 
 @Composable
 fun AppNavigation() {
     val navController = rememberNavController()
-    // 转场:NavHost 默认是 700ms 交叉淡入淡出,10ft 观看距离下偏拖沓,
-    // 换页时上一屏会明显压住下一屏。收敛为短淡入淡出并显式给出
-    // popEnter/popExit,保证进入与返回同节奏,保持 TV 上克制的动效。
+    // 转场:NavHost 默认是较长的交叉淡入淡出,10ft 观看距离下偏拖沓,
+    // 换页时上一屏会明显压住下一屏。统一收敛为短淡入淡出(navEnter/navExit),
+    // 详情页加极轻位移、播放页更快;低端机直接无动画(见文件顶部转场定义)。
     // 底色:交叉淡化中段两屏都半透明,不铺底会透出宿主 Activity 的主题
     // 窗底(Theme.Material 默认深灰,并非设计基线 #111111);各页面根部都
     // 未自绘背景,故在 NavHost 统一铺 BackgroundDark,静置底色一并归位。
@@ -81,10 +98,10 @@ fun AppNavigation() {
         navController = navController,
         startDestination = Routes.HOME,
         modifier = Modifier.fillMaxSize().background(BackgroundDark),
-        enterTransition = { fadeIn(tween(220)) },
-        exitTransition = { fadeOut(tween(180)) },
-        popEnterTransition = { fadeIn(tween(220)) },
-        popExitTransition = { fadeOut(tween(180)) },
+        enterTransition = { navEnter },
+        exitTransition = { navExit },
+        popEnterTransition = { navEnter },
+        popExitTransition = { navExit },
     ) {
         composable(Routes.HOME) {
             HomeScreen(
@@ -106,6 +123,12 @@ fun AppNavigation() {
         composable(
             route = Routes.DETAIL,
             arguments = listOf(navArgument("video") { type = videoSummaryType }),
+            // 详情页从卡片进入:淡入 + 极轻的向上位移(1/24 屏高),比纯 fade 有
+            // 方向感但依然克制;低端机退化为无动画。
+            enterTransition = { detailEnter },
+            exitTransition = { navExit },
+            popEnterTransition = { navEnter },
+            popExitTransition = { navExit },
         ) { backStackEntry ->
             val video = backStackEntry.arguments?.getString("video")?.let { raw ->
                 runCatching { videoJson.decodeFromString(VideoSummary.serializer(), raw) }.getOrNull()
@@ -131,6 +154,11 @@ fun AppNavigation() {
         }
         composable(
             route = Routes.PLAYER,
+            // 播放页进入要更快:fade 160/120ms,减少"按了播放还在过渡"的体感。
+            enterTransition = { if (DevicePerformance.isLowEnd) EnterTransition.None else fadeIn(tween(160)) },
+            exitTransition = { if (DevicePerformance.isLowEnd) ExitTransition.None else fadeOut(tween(120)) },
+            popEnterTransition = { navEnter },
+            popExitTransition = { navExit },
             arguments = listOf(
                 navArgument("videoId") { type = NavType.StringType },
                 navArgument("title") {
