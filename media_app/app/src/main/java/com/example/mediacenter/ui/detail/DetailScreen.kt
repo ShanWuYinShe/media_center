@@ -62,9 +62,11 @@ import com.example.mediacenter.ui.theme.CardShape
 import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.TextSecondary
+import com.example.mediacenter.util.BackgroundWork
 import com.example.mediacenter.util.formatDuration
 import com.example.mediacenter.util.formatSeconds
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
@@ -247,17 +249,17 @@ fun DetailScreen(
                             // 登记观看历史(继续观看行):元数据齐全,保留上次观看页;位置由
                             // 播放器退出时回写。provider 取点击时刻的当前源,首页继续观看行
                             // 按当前源过滤展示。
-                            WatchHistory.upsert(
-                                context,
-                                WatchEntry(
-                                    videoId = video.id,
-                                    provider = MediaRepositoryHolder.repository.currentProvider,
-                                    title = video.title,
-                                    thumbnailUrl = video.thumbnailUrl.orEmpty(),
-                                    durationSeconds = video.durationSeconds ?: 0L,
-                                    page = lastWatchedPage,
-                                ),
+                            // 写盘放应用级 IO 作用域:onClick 在主线程,SP + JSON 编解码不能
+                            // 阻塞首帧;页面随即跳走,不等待写入完成。
+                            val entry = WatchEntry(
+                                videoId = video.id,
+                                provider = MediaRepositoryHolder.repository.currentProvider,
+                                title = video.title,
+                                thumbnailUrl = video.thumbnailUrl.orEmpty(),
+                                durationSeconds = video.durationSeconds ?: 0L,
+                                page = lastWatchedPage,
                             )
+                            BackgroundWork.scope.launch { WatchHistory.upsert(context, entry) }
                             onPlay(lastWatchedPage)
                         },
                         // TV 详情主操作固定宽度:铺满右栏会变成一条横贯屏幕的蓝带,

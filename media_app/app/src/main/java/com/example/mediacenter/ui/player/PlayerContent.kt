@@ -63,6 +63,7 @@ import com.example.mediacenter.player.PlaybackMediaSourceFactory
 import com.example.mediacenter.player.PlaybackService
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
+import com.example.mediacenter.util.BackgroundWork
 import com.example.mediacenter.util.NetworkRestoreEffect
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -77,6 +78,9 @@ internal fun PlayerContent(
     playbackResult: PlaybackResult,
     collection: PlaybackCollection?,
     overlayError: String?,
+    // 切清晰度/换分P 时 ViewModel 会保留旧结果并置 isLoading:播放器不中断,
+    // 但必须给用户"正在切换"的明确反馈,否则会以为遥控器失灵。
+    isLoading: Boolean,
     onSelectQuality: (Int) -> Unit,
     onSelectPage: (Int) -> Unit,
     onRetryResolve: () -> Unit,
@@ -240,18 +244,22 @@ internal fun PlayerContent(
             val posMs = c?.currentPosition?.coerceAtLeast(0L) ?: 0L
             val durMs = c?.duration?.coerceAtLeast(0L) ?: 0L
             val pagesInfo = latestPlaybackResult.pages
-            PlaybackPositionStore.save(context, playbackStorageKey(videoId, pagesInfo.currentPage), posMs)
-            // 回写观看历史(继续观看行):看完(距结尾不足 15s)的条目会被移除;
-            // 多P回写绝对位置(前面各页时长累加)+ 最后观看页,继续观看点击后直达该页
-            val offsetSec = pagesInfo.pageDurations.take(pagesInfo.currentPage).sum()
-            val totalPageSec = pagesInfo.pageDurations.sum()
-            WatchHistory.updatePosition(
-                context,
-                videoId,
-                offsetSec + posMs / 1000,
-                if (totalPageSec > 0) totalPageSec else durMs / 1000,
-                page = pagesInfo.currentPage,
-            )
+            // 退出保存含 SharedPreferences + JSON 编解码,不能在主线程做(低端盒子会掉帧);
+            // 用应用级 IO 作用域:onDispose 处 rememberCoroutineScope 已随页面取消。
+            BackgroundWork.scope.launch {
+                PlaybackPositionStore.save(context, playbackStorageKey(videoId, pagesInfo.currentPage), posMs)
+                // 回写观看历史(继续观看行):看完(距结尾不足 15s)的条目会被移除;
+                // 多P回写绝对位置(前面各页时长累加)+ 最后观看页,继续观看点击后直达该页
+                val offsetSec = pagesInfo.pageDurations.take(pagesInfo.currentPage).sum()
+                val totalPageSec = pagesInfo.pageDurations.sum()
+                WatchHistory.updatePosition(
+                    context,
+                    videoId,
+                    offsetSec + posMs / 1000,
+                    if (totalPageSec > 0) totalPageSec else durMs / 1000,
+                    page = pagesInfo.currentPage,
+                )
+            }
             controllerState.release()
             // 本 App 无后台播放需求:页面退出即停止播放服务
             context.stopService(Intent(context, PlaybackService::class.java))
@@ -369,11 +377,14 @@ internal fun PlayerContent(
             if (isPlaying && tick % 10 == 0) {
                 // 与退出保存/恢复加载同一 key(多P带 #pN 页码):裸 videoId 会把
                 // 当前页位置写进首页 key,不带页码重进时按首页时长错误 seek。
-                PlaybackPositionStore.save(
-                    context,
-                    playbackStorageKey(videoId, playbackResult.pages.currentPage),
-                    pos,
-                )
+                // 写盘移出主线程:轮询在 Main 调度器上,同步 SP 写入会掉帧。
+                withContext(Dispatchers.IO) {
+                    PlaybackPositionStore.save(
+                        context,
+                        playbackStorageKey(videoId, playbackResult.pages.currentPage),
+                        pos,
+                    )
+                }
             }
             // 每 30s 同步一次"继续观看"行:进程被杀时退出回写不会执行,
             // 只靠退出保存会让首页进度长期停在打开播放页之前的状态。
@@ -381,13 +392,15 @@ internal fun PlayerContent(
                 val pages = playbackResult.pages
                 val offsetSec = pages.pageDurations.take(pages.currentPage).sum()
                 val totalSec = pages.pageDurations.sum()
-                WatchHistory.updatePosition(
-                    context,
-                    videoId,
-                    offsetSec + pos / 1000,
-                    if (totalSec > 0) totalSec else (dur / 1000),
-                    page = pages.currentPage,
-                )
+                withContext(Dispatchers.IO) {
+                    WatchHistory.updatePosition(
+                        context,
+                        videoId,
+                        offsetSec + pos / 1000,
+                        if (totalSec > 0) totalSec else (dur / 1000),
+                        page = pages.currentPage,
+                    )
+                }
             }
             delay(500)
         }
@@ -498,6 +511,9 @@ internal fun PlayerContent(
             .focusRequester(playerFocus)
             .focusable()
             .onPreviewKeyEvent { event ->
+                // 错误层显示时把按键让给覆盖层内的"重试"按钮:根节点在隧穿阶段
+                // 无条件消费 OK/方向键会让焦点按钮收不到 OK,用户只能退出重进。
+                if (overlayError != null || playerError != null) return@onPreviewKeyEvent false
                 val down = event.type == KeyEventType.KeyDown
                 val up = event.type == KeyEventType.KeyUp
                 when (event.key) {
@@ -607,6 +623,13 @@ internal fun PlayerContent(
         // 缓冲指示：画面未停但流没跟上时给出“正在加载”反馈
         if (isBuffering) {
             LoadingIndicator(modifier = Modifier.fillMaxSize())
+        }
+        // 切清晰度/换分P 的等待反馈:解析可能需要数秒(YouTube 冷解析更久),
+        // 旧流仍在播放,不给提示用户会以为按键失灵。错误层优先于它。
+        if (isLoading && overlayError == null && playerError == null) {
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.38f))) {
+                LoadingIndicator(message = "正在切换播放源…")
+            }
         }
         // 中央播放状态：暂停时常驻 ▶，恢复播放时短暂显示 ❚❚ 后淡出。
         // 放在缓冲指示之后，暂停/缓冲时三角形不会被转圈盖住。

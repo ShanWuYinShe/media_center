@@ -50,8 +50,17 @@ fun PagedVideoGrid(
     firstItemFocusRequester: FocusRequester? = null,
     firstItemUpFocusRequester: FocusRequester? = null,
     progressById: Map<String, Float> = emptyMap(),
+    // 内容维度变化(分类/关键词)时滚动位置归零:缓存命中或结果替换时 Grid 不会重建,
+    // rememberLazyGridState 会把上一个列表的滚动位置带过来,看起来像"分类内容错乱"。
+    resetKey: Any? = null,
 ) {
     val gridState = rememberLazyGridState()
+
+    LaunchedEffect(resetKey) {
+        if (gridState.firstVisibleItemIndex != 0 || gridState.firstVisibleItemScrollOffset != 0) {
+            gridState.scrollToItem(0)
+        }
+    }
 
     LaunchedEffect(gridState) {
         snapshotFlow {
