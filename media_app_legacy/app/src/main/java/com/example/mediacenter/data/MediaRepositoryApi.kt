@@ -21,6 +21,11 @@ interface MediaRepositoryApi {
 
     suspend fun refreshCredentials()
 
+    /** 首页首屏快照(可丢弃缓存);默认实现不持久化,便于 fake/无 Context 场景。 */
+    fun loadHomeSnapshot(): HomeSnapshot? = null
+
+    fun saveHomeSnapshot(snapshot: HomeSnapshot) = Unit
+
     suspend fun categories(): List<ContentCategory>
 
     suspend fun search(
