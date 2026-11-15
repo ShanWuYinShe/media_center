@@ -5,11 +5,13 @@ import androidx.lifecycle.viewModelScope
 import com.example.mediacenter.data.ApiException
 import com.example.mediacenter.data.MediaRepositoryApi
 import com.example.mediacenter.data.MediaRepositoryHolder
+import com.example.mediacenter.data.SearchHistory
 import com.example.mediacenter.data.SearchResponse
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.friendlyLoadMessage
 import com.example.mediacenter.log.AppLog
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,6 +22,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class SearchUiState(
     val query: String = "",
@@ -36,6 +39,8 @@ data class SearchUiState(
     // 最近一次完成(成功或失败)的关键词;UI 用它区分"仍在防抖/请求"与
     // "已返回但零结果",避免热词加载态无法结束。
     val completedQuery: String? = null,
+    // 本地最近搜索:空态优先展示,一键重搜(遥控器输入成本高)。
+    val history: List<String> = emptyList(),
 )
 
 /**
@@ -61,12 +66,30 @@ class SearchViewModel(
     private var immediateSearchJob: Job? = null
 
     init {
+        // 最近搜索从磁盘读:不能阻塞构造/首帧,放到 IO。
+        viewModelScope.launch { loadHistory() }
         viewModelScope.launch {
             queryFlow
                 .debounce(SEARCH_DEBOUNCE_MS)
                 .distinctUntilChanged()
                 .collectLatest { query -> performSearch(query) }
         }
+    }
+
+    private suspend fun loadHistory() {
+        val context = MediaRepositoryHolder.applicationContext ?: return
+        val entries = withContext(Dispatchers.IO) { SearchHistory.entries(context) }
+        _uiState.update { it.copy(history = entries) }
+    }
+
+    private suspend fun recordHistory(query: String) {
+        if (query.trim().length < 2) return
+        val context = MediaRepositoryHolder.applicationContext ?: return
+        val entries = withContext(Dispatchers.IO) {
+            SearchHistory.record(context, query)
+            SearchHistory.entries(context)
+        }
+        _uiState.update { it.copy(history = entries) }
     }
 
     fun search(query: String) {
@@ -135,8 +158,10 @@ class SearchViewModel(
                     noMore = true,
                     completedQuery = query,
                 )
+                recordHistory(query)
             } else {
                 applyFirstPage(query, repository.search(query, page = 1, pageSize = SEARCH_PAGE_SIZE))
+                recordHistory(query)
             }
         } catch (e: CancellationException) {
             throw e
