@@ -159,20 +159,8 @@ fun AppNavigation() {
                 initialPage = page,
                 posterUrl = posterUrl,
                 onBack = { navController.popBackStack() },
-                onNextVideo = { next ->
-                    // 自动连播替换当前播放页而不是压栈:返回时回到进入播放器
-                    // 之前的详情/首页,而不是倒着退回上一集。
-                    navController.navigate(
-                        Routes.player(
-                            next.id,
-                            next.title,
-                            0,
-                            next.thumbnailUrlLarge ?: next.thumbnailUrl,
-                        ),
-                    ) {
-                        popUpTo(backStackEntry.destination.id) { inclusive = true }
-                    }
-                },
+                // 合集连播现在在播放页内部无缝切集(不重建页面/播放服务),
+                // 不再通过导航替换播放页。
             )
         }
         composable(Routes.SEARCH) {

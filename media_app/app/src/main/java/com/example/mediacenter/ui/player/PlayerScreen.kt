@@ -14,7 +14,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.PlaybackPrefetcher
-import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.WatchEntry
 import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.ui.components.ErrorView
@@ -35,11 +34,9 @@ fun PlayerScreen(
     // 首帧前的封面(详情尺寸);为空则不显示封面层。
     posterUrl: String? = null,
     onBack: () -> Unit,
-    // 合集自动连播:导航到下一集(替换当前播放页,返回时回到详情/首页)
-    onNextVideo: (VideoSummary) -> Unit,
     viewModel: PlayerViewModel = viewModel(
         key = "player_${videoId}_p$initialPage",
-        factory = PlayerViewModelFactory(videoId, initialPage),
+        factory = PlayerViewModelFactory(videoId, initialPage, videoTitle, posterUrl),
     ),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -49,8 +46,13 @@ fun PlayerScreen(
 
     // 片尾连播预热:播放页停留 15s 后预取下一集播放地址(见 PlaybackPrefetcher),
     // 自动/手动切集直接命中,不用再等解析;离开页面或下一集变化时协程自动取消。
-    val nextPrefetchTarget = remember(state.next, videoId) {
-        nextPrefetchTargetId(videoId, MediaRepositoryHolder.repository.currentProvider, state.next)
+    // 用 state.videoId 而非路由参数:合集无缝切集后,预取目标要跟随当前集。
+    val nextPrefetchTarget = remember(state.next, state.videoId) {
+        nextPrefetchTargetId(
+            state.videoId,
+            MediaRepositoryHolder.repository.currentProvider,
+            state.next,
+        )
     }
     LaunchedEffect(nextPrefetchTarget) {
         val targetId = nextPrefetchTarget ?: return@LaunchedEffect
@@ -58,21 +60,20 @@ fun PlayerScreen(
         PlaybackPrefetcher.prefetch(MediaRepositoryHolder.repository, targetId)
     }
 
-    // 合集下一集由 ViewModel 发出事件,UI 只做"登记历史 + 导航"。
-    LaunchedEffect(viewModel, context) {
-        viewModel.episodeEvents.collect { nextEpisode ->
-            val entry = WatchEntry(
-                videoId = nextEpisode.id,
-                provider = MediaRepositoryHolder.repository.currentProvider,
-                title = nextEpisode.title,
-                thumbnailUrl = nextEpisode.thumbnailUrl.orEmpty(),
-                durationSeconds = nextEpisode.durationSeconds ?: 0L,
-                page = 0,
-            )
-            // 登记历史是 SP + JSON 写盘,移出主线程;导航不等待它完成。
-            BackgroundWork.scope.launch { WatchHistory.upsert(context, entry) }
-            onNextVideo(nextEpisode)
-        }
+    // 合集无缝切集:新一集登记观看历史(首页"继续观看"可见),不阻塞切集。
+    // 首集已在详情/首页点击时登记过,这里只处理页内切换后的新集。
+    LaunchedEffect(state.videoId) {
+        if (state.videoId.isBlank() || state.videoId == videoId) return@LaunchedEffect
+        val entry = WatchEntry(
+            videoId = state.videoId,
+            provider = MediaRepositoryHolder.repository.currentProvider,
+            title = state.title,
+            thumbnailUrl = state.posterUrl.orEmpty(),
+            durationSeconds = state.durationSeconds ?: 0L,
+            page = 0,
+        )
+        // 登记历史是 SP + JSON 写盘,移出主线程;切集不等待它完成。
+        BackgroundWork.scope.launch { WatchHistory.upsert(context, entry) }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(BackgroundDark)) {
@@ -81,9 +82,10 @@ fun PlayerScreen(
             val url = result.options.firstOrNull()?.url
             if (url != null) {
                 PlayerContent(
-                    videoId = videoId,
-                    videoTitle = videoTitle,
-                    posterUrl = posterUrl,
+                    // 用 state 中的当前集:合集无缝切集时播放页/服务不重建,只换流。
+                    videoId = state.videoId,
+                    videoTitle = state.title,
+                    posterUrl = state.posterUrl,
                     playbackResult = result,
                     collection = state.collection,
                     overlayError = state.error,
