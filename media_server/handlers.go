@@ -56,6 +56,8 @@ func (s *mediaServer) handleProviderCredentials(w http.ResponseWriter, r *http.R
 	if creds == nil {
 		creds = []ProviderCredential{}
 	}
+	// 凭证是共享账号会话 cookie,禁止任何缓存留存(含轮换后旧值回放)。
+	w.Header().Set("Cache-Control", "no-store")
 	s.writeJSON(w, http.StatusOK, map[string]any{"credentials": creds})
 }
 

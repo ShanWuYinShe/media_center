@@ -331,6 +331,10 @@ func writeErrorEnvelope(w http.ResponseWriter, err error) {
 		log.Printf("unhandled error: %v", err)
 		apiErr = &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"}
 	}
+	// 错误响应一律禁止缓存:成功路径设置的 public/max-age 会被这里覆盖。
+	// 否则一次参数错误/瞬时 DB 故障会在 30-60s 内被客户端或中间缓存持续回放,
+	// 表现为"分类打不开/搜索一直失败",而服务端早已恢复。
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSONStatus(w, apiErr.Status, apiErrorEnvelope{Error: apiErrorBody{Code: apiErr.Code, Message: apiErr.Message}})
 }
 
