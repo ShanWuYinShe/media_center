@@ -16,6 +16,7 @@ import androidx.core.view.isNotEmpty
 import com.google.android.exoplayer2.C
 import com.example.mediacenter.player.PlayerViewHolder
 import com.google.android.exoplayer2.audio.AudioAttributes
+import com.google.android.exoplayer2.DefaultLoadControl
 import com.google.android.exoplayer2.ExoPlayer
 import com.google.android.exoplayer2.MediaItem
 import com.google.android.exoplayer2.PlaybackException
@@ -101,6 +102,13 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
         var builtPlayer: ExoPlayer? = null
         try {
             builtPlayer = ExoPlayer.Builder(this)
+                // 起播缓冲调优:默认 bufferForPlayback=2.5s,老盒子解析完还要再等缓冲;
+                // 降到 1.2s 起播、重缓冲 3s(min/max 仍 15s/50s),优先保证"点了就出画"。
+                .setLoadControl(
+                    DefaultLoadControl.Builder()
+                        .setBufferDurationsMs(15_000, 50_000, 1_200, 3_000)
+                        .build(),
+                )
                 .setMediaSourceFactory(
                     DefaultMediaSourceFactory(dataSourceFactory)
                         .setLoadErrorHandlingPolicy(playbackLoadErrorHandlingPolicy),
