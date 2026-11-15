@@ -76,7 +76,11 @@ type VideoSummary = {
     "resolveUpstreams": 0,
     "searchHits": 0,
     "categoryHits": 0,
-    "warmRuns": 0
+    "warmRuns": 0,
+    "resolveLastMs": 0,
+    "resolveAvgMs": 0,
+    "resolveCount": 0,
+    "searchLastMs": 0
   }
 }
 ```
@@ -85,6 +89,8 @@ type VideoSummary = {
 为 YouTube 播放解析的内存/磁盘缓存命中次数，`resolveUpstreams` 为真实调用 vod_extractor 的次数，
 `searchHits`/`categoryHits` 为 YouTube 实时搜索/分类快照缓存命中，`warmRuns` 为后台预热成功轮数。
 进程重启归零，仅用于验证缓存是否在用户路径生效。
+`resolveLastMs`/`resolveAvgMs`/`resolveCount` 为真实上游解析的最近/平均/累计耗时（毫秒），
+`searchLastMs` 为最近一次上游搜索（含分类预热）耗时——用于判断"慢在解析还是慢在缓存失效"。
 
 `catalog` 取值：`ok`（数据库已打开）、`disabled`（未配置 DB）、`error`（配置了 DB 但打开失败）。`error` 时 HTTP 状态为 **503**，`status` 为 `degraded`——服务仍能响应空目录，但这是必须告警的故障态。
 

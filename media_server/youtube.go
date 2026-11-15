@@ -388,7 +388,10 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 	result, err := globalResolveGroup.do(r.Context(), videoID, func() (PlaybackResultResponse, error) {
 		// 只有 leader 真正打上游;等待者复用结果,不计入 upstream。
 		s.cacheStats.resolveUpstreams.Add(1)
-		return s.yt.resolveVideo(flightCtx, videoID)
+		startedAt := time.Now()
+		result, err := s.yt.resolveVideo(flightCtx, videoID)
+		s.cacheStats.recordResolveUpstream(startedAt)
+		return result, err
 	})
 	if err == nil && len(result.Options) == 0 {
 		// 空结果按真实解析失败处理:否则会返回"成功但没有播放地址"的 200
