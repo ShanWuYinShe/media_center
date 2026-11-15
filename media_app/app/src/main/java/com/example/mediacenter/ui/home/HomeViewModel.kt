@@ -505,6 +505,26 @@ class HomeViewModel(
         }
     }
 
+    /**
+     * 仅测试用:注入一条指定年龄的分类缓存。
+     * 用于验证"过期缓存先展示、后台刷新"的 SWR 行为(真实 TTL 10 分钟无法在单测里等待)。
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun seedCategoryCacheForTest(
+        categoryId: String,
+        items: List<VideoSummary>,
+        ageMs: Long,
+    ) {
+        categoryCache[categoryId] = CategoryCacheEntry(
+            provider = repository.currentProvider,
+            items = items,
+            page = 1,
+            total = items.size,
+            canLoadMore = false,
+            timestamp = System.currentTimeMillis() - ageMs,
+        )
+    }
+
     private fun canLoadMore(total: Int, loaded: Int): Boolean {
         if (repository.currentProvider == "youtube") return false
         if (loaded <= 0) return false
