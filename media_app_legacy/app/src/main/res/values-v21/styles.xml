@@ -5,5 +5,7 @@
         <item name="android:windowActionBar">false</item>
         <item name="android:windowFullscreen">true</item>
         <item name="android:fontFamily">sans</item>
+        <!-- 与 values/styles.xml 同步:冷启动窗口底色 = 设计基线 #111111。 -->
+        <item name="android:windowBackground">#111111</item>
     </style>
 </resources>

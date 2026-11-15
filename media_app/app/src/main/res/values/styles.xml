@@ -4,5 +4,8 @@
         <item name="android:windowActionBar">false</item>
         <item name="android:windowFullscreen">true</item>
         <item name="android:fontFamily">sans</item>
+        <!-- 冷启动窗口底色与 Compose 设计基线(#111111)一致:首帧前不再闪
+             Theme.Material 默认深灰,避免"灰屏一下再变暗"。 -->
+        <item name="android:windowBackground">#111111</item>
     </style>
 </resources>
