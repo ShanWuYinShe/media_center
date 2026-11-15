@@ -48,6 +48,9 @@ func TestHealthExposesCacheStats(t *testing.T) {
 		if body.Cache.ResolveMemoryHits != 1 {
 			t.Fatalf("resolveMemoryHits = %d, want 1", body.Cache.ResolveMemoryHits)
 		}
+		if body.Cache.ResolveCount != 1 {
+			t.Fatalf("resolveCount = %d, want 1", body.Cache.ResolveCount)
+		}
 	})
 
 	t.Run("搜索缓存命中计数", func(t *testing.T) {
@@ -70,6 +73,10 @@ func TestHealthExposesCacheStats(t *testing.T) {
 		getJSON(t, s, "/api/health", &body)
 		if body.Cache.SearchHits != 1 {
 			t.Fatalf("searchHits = %d, want 1", body.Cache.SearchHits)
+		}
+		// 上游搜索只打一次(第二次命中缓存),耗时应被记录(允许 0ms)。
+		if body.Cache.SearchLastMs < 0 {
+			t.Fatalf("searchLastMs = %d, want >= 0", body.Cache.SearchLastMs)
 		}
 	})
 }

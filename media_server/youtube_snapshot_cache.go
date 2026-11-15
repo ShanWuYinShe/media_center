@@ -162,7 +162,9 @@ func (s *mediaServer) cachedYouTubeSearch(ctx context.Context, query string) ([]
 		return items, nil
 	}
 	return s.youtubeSearchGroup.do(ctx, key, func(ctx context.Context) ([]VideoSummary, error) {
+		startedAt := time.Now()
 		items, err := s.yt.searchVideos(ctx, query)
+		s.cacheStats.recordSearchUpstream(startedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -179,7 +181,9 @@ func (s *mediaServer) cachedYouTubeCategory(ctx context.Context, category youtub
 		return items, nil
 	}
 	return s.youtubeCategoryGroup.do(ctx, category.ID, func(ctx context.Context) ([]VideoSummary, error) {
+		startedAt := time.Now()
 		items, err := s.yt.searchVideos(ctx, category.Query)
+		s.cacheStats.recordSearchUpstream(startedAt)
 		if err != nil {
 			return nil, err
 		}
