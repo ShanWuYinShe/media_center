@@ -76,6 +76,8 @@ class HomeViewModel(
     private var loadHomeJob: Job? = null
     private var contentJob: Job? = null
     private var loadMoreJob: Job? = null
+    // 阶段 0 基线:从 ViewModel 创建到首屏内容就绪的耗时(含快照恢复/网络两条路径)。
+    private val createdAtMs = System.currentTimeMillis()
 
     private data class CategoryCacheEntry(
         val provider: String,
@@ -132,6 +134,11 @@ class HomeViewModel(
                         currentProvider = restored.provider,
                     )
                 }
+                AppLog.i(
+                    "Perf",
+                    "home snapshot restored in ${System.currentTimeMillis() - createdAtMs}ms " +
+                        "(tab=${restored.selectedTab}, items=${restored.items.size})",
+                )
             }
             loadHome(keepContent = restored != null)
         }
@@ -312,6 +319,11 @@ class HomeViewModel(
                         error = null,
                     )
                 }
+                AppLog.i(
+                    "Perf",
+                    "home first page ready in ${System.currentTimeMillis() - createdAtMs}ms " +
+                        "(tab=$categoryId, cache=hit)",
+                )
                 return
             }
         }
@@ -372,6 +384,11 @@ class HomeViewModel(
                         isLoading = false,
                     )
                 }
+                AppLog.i(
+                    "Perf",
+                    "home first page ready in ${System.currentTimeMillis() - createdAtMs}ms " +
+                        "(tab=$categoryId, cache=miss)",
+                )
                 persistSnapshot()
             } catch (e: CancellationException) {
                 throw e
