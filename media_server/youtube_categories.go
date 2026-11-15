@@ -82,7 +82,7 @@ func (s *mediaServer) handleYouTubeCategoryVideos(w http.ResponseWriter, r *http
 		})
 		return
 	}
-	items, err := s.yt.searchVideos(r.Context(), category.Query)
+	items, err := s.cachedYouTubeCategory(r.Context(), category)
 	if err != nil {
 		log.Printf("youtube category %s search %q: %v", category.ID, category.Query, err)
 		s.writeError(w, &apiError{Status: http.StatusBadGateway, Code: "UPSTREAM_ERROR", Message: "YouTube 搜索暂不可用,请稍后再试。"})
