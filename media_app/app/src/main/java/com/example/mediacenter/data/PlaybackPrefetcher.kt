@@ -40,13 +40,24 @@ object PlaybackPrefetcher {
             cache[key]?.let(::fresh) == true || inflight.containsKey(key)
         }
         if (alreadyPending) return
+        val startedAtMs = System.currentTimeMillis()
         val job = BackgroundWork.scope.launch {
             try {
                 put(key, repository.resolvePlayback(videoId, qn))
+                AppLog.i(
+                    "Perf",
+                    "prefetch ready $videoId qn=${qn ?: "auto"} " +
+                        "in ${System.currentTimeMillis() - startedAtMs}ms",
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                AppLog.w("Prefetch", "playback prefetch failed: ${e.message}", e)
+                AppLog.w(
+                    "Prefetch",
+                    "playback prefetch failed: ${e.message} " +
+                        "(after ${System.currentTimeMillis() - startedAtMs}ms)",
+                    e,
+                )
             } finally {
                 synchronized(lock) { inflight.remove(key) }
             }
