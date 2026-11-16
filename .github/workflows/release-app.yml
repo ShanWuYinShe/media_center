@@ -305,6 +305,13 @@ jobs:
     permissions:
       contents: write
     steps:
+      # gh release 依赖 git 仓库上下文(gh 内部会执行 git 命令);publish job 没有
+      # checkout 时会在 tag 发版报 "fatal: not a git repository",Release 无法创建。
+      - name: Checkout (git context for gh release)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
