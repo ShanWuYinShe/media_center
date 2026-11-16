@@ -1,0 +1,10 @@
+HSPLcom/example/mediacenter/MediaCenterApp;->onCreate()V
+HSPLcom/example/mediacenter/log/AppLog;->d(Ljava/lang/String;Ljava/lang/String;)V
+HSPLcom/example/mediacenter/log/AppLog;->i(Ljava/lang/String;Ljava/lang/String;)V
+HSPLcom/example/mediacenter/data/HomeSnapshotCodec;->decode(Ljava/lang/String;)Lcom/example/mediacenter/data/HomeSnapshot;
+HSPLcom/example/mediacenter/data/HomeSnapshotCodec;->encode(Lcom/example/mediacenter/data/HomeSnapshot;)Ljava/lang/String;
+HSPLcom/example/mediacenter/data/HomeSnapshotStore;->load(Landroid/content/Context;)Lcom/example/mediacenter/data/HomeSnapshot;
+HSPLcom/example/mediacenter/data/HomeSnapshotStore;->save(Landroid/content/Context;Lcom/example/mediacenter/data/HomeSnapshot;)V
+Lcom/example/mediacenter/data/HomeSnapshotStore;
+Lcom/example/mediacenter/data/HomeSnapshotCodec;
+Lcom/example/mediacenter/log/AppLog;
