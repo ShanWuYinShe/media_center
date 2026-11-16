@@ -38,6 +38,9 @@ import kotlinx.coroutines.flow.distinctUntilChanged
  * 分页触发同时观察 lastVisible 与 totalItemsCount:只观察 lastVisible 时,
  * 新一页恰好填满可视区(索引不变)会卡住不再加载。
  */
+// 距列表末尾还剩 N 张卡时预取下一页(比"最后一行才请求"少一次可见等待)。
+private const val LOAD_MORE_PREFETCH_DISTANCE = 8
+
 @Composable
 fun PagedVideoGrid(
     items: List<VideoSummary>,
@@ -69,7 +72,10 @@ fun PagedVideoGrid(
         }
             .distinctUntilChanged()
             .collect { (lastVisible, total) ->
-                if (lastVisible >= 0 && total > 0 && lastVisible >= total - 4) {
+                // 提前两行左右(≈8 张卡)触发下一页:TV 网格一行 4-5 张,用户从
+                // 倒数第二行开始按 → 时请求已在跑,滚到底不再先看一次 loading;
+                // 短列表(canLoadMore=false)时这次调用是空操作。
+                if (lastVisible >= 0 && total > 0 && lastVisible >= total - LOAD_MORE_PREFETCH_DISTANCE) {
                     onLoadMore()
                 }
             }
