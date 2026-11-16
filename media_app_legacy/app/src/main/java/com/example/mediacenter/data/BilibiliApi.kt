@@ -249,8 +249,13 @@ class BilibiliApi(
         return builder.build().toString()
     }
 
+    /**
+     * 默认清晰度:legacy 只跑在 API19 老盒子上,弱解码/弱网下默认起播最高档
+     * (有凭证时 8K、无凭证 1080P)容易先卡缓冲,默认收敛到 720P/480P;
+     * 用户仍可在播放页清晰度菜单手动切更高档(按新 qn 重新解析)。
+     */
     private fun preferredQuality(): Int =
-        if (cookieFields.isNotEmpty()) PREFERRED_QUALITY_WITH_COOKIE else DEFAULT_QUALITY
+        if (cookieFields.isNotEmpty()) LOW_END_QUALITY_WITH_COOKIE else LOW_END_QUALITY_NO_COOKIE
 
     private fun buildCookieHeader(): String {
         if (cookieFields.isEmpty()) return ""
@@ -327,8 +332,11 @@ class BilibiliApi(
     companion object {
         // 无凭证时默认清晰度:80 = 1080P。
         private const val DEFAULT_QUALITY = 80
-        // 有凭证(如 SESSDATA)时首选清晰度:127 = 4K,B 站自动降级到视频可用的最高质量。
+        // 有凭证(如 SESSDATA)时首选清晰度:127 = 8K,B 站自动降级到视频可用的最高质量。
         private const val PREFERRED_QUALITY_WITH_COOKIE = 127
+        // 低端(legacy 全量)默认清晰度:64 = 720P(有凭证)/ 32 = 480P(无凭证,保底可用)。
+        private const val LOW_END_QUALITY_WITH_COOKIE = 64
+        private const val LOW_END_QUALITY_NO_COOKIE = 32
         private const val WBI_KEY_TTL_MILLIS = 10L * 60 * 1000
         // 瞬时网络错误重试:1 次,800ms 退避(播放解析是用户主动操作,容忍一次重试)。
         private const val MAX_RETRIES = 1
