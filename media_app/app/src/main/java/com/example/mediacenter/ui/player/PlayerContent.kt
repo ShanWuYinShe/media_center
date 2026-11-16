@@ -161,10 +161,12 @@ internal fun PlayerContent(
     // 每换一个流(视频/分P/清晰度/重试)重新计时,只记录一次首帧。
     val streamStartedAtMs = remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
     var firstFrameLogged by remember { mutableStateOf(false) }
+    var streamReadyLogged by remember { mutableStateOf(false) }
     // 换视频/分P/清晰度/重试重载时重置起播计时(stream.url 变化即换流)。
     LaunchedEffect(videoId, playbackResult.pages.currentPage, loadEpoch, stream.url) {
         streamStartedAtMs.longValue = android.os.SystemClock.elapsedRealtime()
         firstFrameLogged = false
+        streamReadyLogged = false
     }
 
     // 与 PlaybackService 里的播放器异步建立 MediaController 连接。
@@ -209,6 +211,15 @@ internal fun PlayerContent(
                     currentOnAutoNext()
                 }
                 if (state == Player.STATE_READY) {
+                    if (!streamReadyLogged) {
+                        streamReadyLogged = true
+                        AppLog.i(
+                            "Perf",
+                            "player stream ready in " +
+                                "${android.os.SystemClock.elapsedRealtime() - streamStartedAtMs.longValue}ms " +
+                                "(videoId=$currentVideoId, page=$currentPlaybackPage, epoch=$currentLoadEpoch)",
+                        )
+                    }
                     // 播放成功:自动重试预算重置
                     playerAutoRetries = 0
                     if (pendingSeekMs > 0L) {
@@ -401,6 +412,12 @@ internal fun PlayerContent(
             .build()
         c.setMediaItem(item)
         c.prepare()
+        AppLog.i(
+            "Perf",
+            "player prepared in " +
+                "${android.os.SystemClock.elapsedRealtime() - streamStartedAtMs.longValue}ms " +
+                "(videoId=$videoId, page=${playbackResult.pages.currentPage}, epoch=$loadEpoch)",
+        )
         c.play()
     }
 
