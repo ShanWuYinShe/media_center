@@ -28,6 +28,9 @@ class MediaRepository(
 
     private companion object {
         const val KEY_CURRENT_PROVIDER = "current_provider"
+        // legacy 只跑在 API19 老盒子上:YouTube 服务端按清晰度降序返回全部档位,
+        // 自动起播收敛到 ≤720P(弱解码/弱网不先卡缓冲);手动切清晰度不受影响。
+        const val MAX_INITIAL_QUALITY_QN = 720
         // 客户端关键词搜索时最多拉取的分类页数(每页 ≤ pageSize 条),用于扩大命中范围。
         // 服务端单分类通常几百条,5 页 × 18 ≈ 90 条已足够覆盖常见搜索词。
         const val SEARCH_MAX_PAGES = 5
@@ -214,8 +217,21 @@ class MediaRepository(
     // 解析播放地址:按 provider 分发。bilibili 走 WBI 签名 + view + playurl;
     // youtube 交给 server 的解析代理(一次返回全部清晰度档,切档由播放层换源)。
     override suspend fun playbackOptions(video: VideoDetails): PlaybackResult = when (currentProvider) {
-        "youtube" -> youtubeApi.resolvePlayback(video.id)
+        "youtube" -> capInitialQuality(youtubeApi.resolvePlayback(video.id))
         else -> bilibiliApi.resolvePlayback(video.id)
+    }
+
+    /** 自动起播档位收敛:把 ≤720P 的最高档提到首位,其余档位保留用于清晰度菜单。 */
+    private fun capInitialQuality(result: PlaybackResult): PlaybackResult {
+        val options = result.options
+        if (options.size < 2) return result
+        val activeQn = options.first().qn ?: return result
+        if (activeQn <= MAX_INITIAL_QUALITY_QN) return result
+        val preferred = options
+            .filter { it.qn != null && it.qn <= MAX_INITIAL_QUALITY_QN }
+            .maxByOrNull { it.qn ?: 0 }
+            ?: return result
+        return result.copy(options = listOf(preferred) + options.filter { it.url != preferred.url })
     }
 
     // 指定清晰度解析播放地址。youtube 端 qn 被忽略(server 忽略该参数,返回全档)。
