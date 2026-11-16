@@ -19,37 +19,47 @@ class PlaybackTuningTest {
     )
 
     @Test
-    fun `非低端机保持原始档位`() {
+    fun `上限为未知时不调整`() {
         val original = result(2160, 1080, 720, 480)
-        assertSame(original, PlaybackTuning.preferSmoothInitialOption(original, lowEnd = false))
+        assertSame(original, PlaybackTuning.preferInitialOption(original, maxQn = 0))
+        assertSame(original, PlaybackTuning.preferInitialOption(original, maxQn = Int.MAX_VALUE))
     }
 
     @Test
-    fun `低端机默认收敛到 720P 且保留其余档位`() {
-        val tuned = PlaybackTuning.preferSmoothInitialOption(result(2160, 1080, 720, 480), lowEnd = true)
+    fun `按屏幕高度收敛到 1080P 且保留其余档位`() {
+        val tuned = PlaybackTuning.preferInitialOption(result(2160, 1080, 720), maxQn = 1080)
+
+        assertEquals(1080, tuned.options.first().qn)
+        assertEquals(3, tuned.options.size)
+        assertEquals(setOf(2160, 1080, 720), tuned.options.mapNotNull { it.qn }.toSet())
+    }
+
+    @Test
+    fun `低端机上限 720P`() {
+        val tuned = PlaybackTuning.preferInitialOption(result(2160, 1080, 720, 480), maxQn = 720)
 
         assertEquals(720, tuned.options.first().qn)
         assertEquals(4, tuned.options.size)
-        assertEquals(setOf(2160, 1080, 720, 480), tuned.options.mapNotNull { it.qn }.toSet())
     }
 
     @Test
-    fun `已经是低清晰度时不做调整`() {
+    fun `已经是上限以内时不做调整`() {
         val original = result(720, 480)
-        assertSame(original, PlaybackTuning.preferSmoothInitialOption(original, lowEnd = true))
+        assertSame(original, PlaybackTuning.preferInitialOption(original, maxQn = 1080))
+        assertSame(original, PlaybackTuning.preferInitialOption(original, maxQn = 720))
     }
 
     @Test
-    fun `没有更低档位时保持原样`() {
-        val original = result(2160, 1080)
-        assertSame(original, PlaybackTuning.preferSmoothInitialOption(original, lowEnd = true))
+    fun `没有上限以内的档位时保持原样`() {
+        val original = result(2160, 1440)
+        assertSame(original, PlaybackTuning.preferInitialOption(original, maxQn = 720))
     }
 
     @Test
     fun `单档位与未知 qn 不做调整`() {
         val single = result(2160)
-        assertSame(single, PlaybackTuning.preferSmoothInitialOption(single, lowEnd = true))
+        assertSame(single, PlaybackTuning.preferInitialOption(single, maxQn = 720))
         val unknown = PlaybackResult(options = listOf(option(0), option(480)))
-        assertSame(unknown, PlaybackTuning.preferSmoothInitialOption(unknown, lowEnd = true))
+        assertSame(unknown, PlaybackTuning.preferInitialOption(unknown, maxQn = 720))
     }
 }
