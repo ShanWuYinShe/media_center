@@ -11,17 +11,22 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.PlaybackPrefetcher
+import com.example.mediacenter.data.PlaybackTuning
 import com.example.mediacenter.data.WatchEntry
 import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.theme.BackgroundDark
 import com.example.mediacenter.util.BackgroundWork
+import com.example.mediacenter.util.DevicePerformance
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -57,11 +62,29 @@ fun PlayerScreen(
     // 首帧前的封面(详情尺寸);为空则不显示封面层。
     posterUrl: String? = null,
     onBack: () -> Unit,
-    viewModel: PlayerViewModel = viewModel(
-        key = "player_${videoId}_p$initialPage",
-        factory = PlayerViewModelFactory(videoId, initialPage, videoTitle, posterUrl),
-    ),
 ) {
+    // 自动选档上限:设备档位与屏幕物理高度取小。1080p 电视不应拉 4K/8K 流
+    // (带宽/解码浪费、起播更慢);低端机再压到 720P。手动切清晰度不受限。
+    val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
+    val maxInitialQualityQn = remember(configuration.screenHeightDp, density.density) {
+        val displayHeightPx = (configuration.screenHeightDp * density.density).roundToInt()
+        if (DevicePerformance.isLowEnd) {
+            minOf(displayHeightPx, PlaybackTuning.LOW_END_MAX_QN)
+        } else {
+            displayHeightPx
+        }
+    }
+    val viewModel: PlayerViewModel = viewModel(
+        key = "player_${videoId}_p$initialPage",
+        factory = PlayerViewModelFactory(
+            videoId,
+            initialPage,
+            videoTitle,
+            posterUrl,
+            maxInitialQualityQn,
+        ),
+    )
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
 

@@ -13,7 +13,6 @@ import com.example.mediacenter.data.PlaybackTuning
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.parsePageId
 import com.example.mediacenter.log.AppLog
-import com.example.mediacenter.util.DevicePerformance
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +42,9 @@ class PlayerViewModel(
     private val initialPage: Int = 0,
     initialTitle: String = "",
     initialPosterUrl: String? = null,
+    // 自动选档的清晰度上限(像素高度):设备档位与屏幕物理高度取小(见 PlayerScreen)。
+    // Int.MAX_VALUE 表示不收敛(单元测试/未知屏幕)。
+    private val maxInitialQualityQn: Int = Int.MAX_VALUE,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(
         PlayerUiState(
@@ -180,7 +182,7 @@ class PlayerViewModel(
             // 是最高档(可达 4K/8K),弱 GPU/弱网直接起播会先卡缓冲。只在自动选档
             // (qn==null)时收敛,手动切清晰度不受影响。
             val tuned = if (qn == null) {
-                PlaybackTuning.preferSmoothInitialOption(result, DevicePerformance.isLowEnd)
+                PlaybackTuning.preferInitialOption(result, maxInitialQualityQn)
             } else {
                 result
             }
@@ -296,6 +298,7 @@ class PlayerViewModelFactory(
     private val initialPage: Int = 0,
     private val initialTitle: String = "",
     private val initialPosterUrl: String? = null,
+    private val maxInitialQualityQn: Int = Int.MAX_VALUE,
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -304,6 +307,7 @@ class PlayerViewModelFactory(
             initialPage = initialPage,
             initialTitle = initialTitle,
             initialPosterUrl = initialPosterUrl,
+            maxInitialQualityQn = maxInitialQualityQn,
         ) as T
     }
 }
