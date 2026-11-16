@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -25,6 +27,27 @@ import kotlinx.coroutines.launch
 
 /** 下一集预取延迟:太早会为"看几秒就退出"的视频浪费解析,15s 后仍在播放说明大概率会看完。 */
 private const val NEXT_PREFETCH_DELAY_MS = 15_000L
+
+/**
+ * 首次解析等待提示:前 3s 只显示状态文案,之后每秒追加已等待秒数。
+ * YouTube 冷解析可达 25-30s,用户需要知道"没卡死,仍在解析"。
+ */
+@Composable
+private fun ResolvingPlaybackIndicator() {
+    var elapsedSeconds by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1_000)
+            elapsedSeconds += 1
+        }
+    }
+    val message = if (elapsedSeconds >= 3) {
+        "正在解析播放地址… 已等待 ${elapsedSeconds}s"
+    } else {
+        "正在解析播放地址…"
+    }
+    LoadingIndicator(message = message)
+}
 
 @Composable
 fun PlayerScreen(
@@ -111,8 +134,9 @@ fun PlayerScreen(
             }
         }
         when {
-            // 首次解析(尤其 YouTube 冷解析)可能持续数秒,给一句明确状态而不是裸转圈。
-            state.isLoading && result == null -> LoadingIndicator(message = "正在解析播放地址…")
+            // 首次解析(尤其 YouTube 冷解析)可能持续数秒到数十秒,给一句明确状态
+            // 而不是裸转圈;等待超过 3s 后追加已等待秒数,避免用户以为卡死。
+            state.isLoading && result == null -> ResolvingPlaybackIndicator()
             state.error != null && result == null -> ErrorView(
                 message = state.error!!, autoFocusRetry = true,
                 onRetry = { viewModel.resolvePlayback() },
