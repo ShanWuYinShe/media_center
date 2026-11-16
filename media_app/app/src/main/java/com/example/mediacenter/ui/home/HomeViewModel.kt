@@ -511,8 +511,13 @@ class HomeViewModel(
                 if (repository.currentProvider != provider) return@launch
                 val job = viewModelScope.launch { prefetchCategory(categoryId, provider) }
                 prefetchInFlight[categoryId] = job
-                job.join()
-                prefetchInFlight.remove(categoryId)
+                try {
+                    job.join()
+                } finally {
+                    // 父任务被取消(切源/再次切类)时也要清理,否则该分类会被
+                    // 永久标记为"预热在途",之后再也预热不到它。
+                    prefetchInFlight.remove(categoryId)
+                }
             }
         }
     }
