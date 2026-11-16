@@ -13,6 +13,7 @@ import com.example.mediacenter.data.PlaybackTuning
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.parsePageId
 import com.example.mediacenter.log.AppLog
+import com.example.mediacenter.player.PlaybackWarmup
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -216,6 +217,9 @@ class PlayerViewModel(
             val firstResolve = resolvedVideoId == null
             resolvedVideoId = requestedVideoId
             _uiState.value = _uiState.value.copy(playbackResult = tuned, isLoading = false)
+            // 非预取路径(直接进播放页/换清晰度/重试)也预热 CDN:与播放器建立
+            // 连接并发进行,弱网下仍能省掉一部分握手等待。
+            PlaybackWarmup.warmup(tuned)
             AppLog.i(
                 "Perf",
                 "resolve $requestedVideoId provider=${repository.currentProvider} " +
