@@ -129,3 +129,13 @@ jobs:
           name: ci-apks-${{ github.run_id }}
           path: ci-apks/
           retention-days: 7
+
+      # baseline profile 规则生成与崩溃栈还原都需要 R8 混淆映射;单独作为小产物,
+      # 不混进 TV 走查 APK(避免下载变慢)。保留 3 天,按 run 取用:
+      #   gh run download <run_id> -n r8-mapping-<run_id>
+      - name: Upload R8 mapping
+        uses: actions/upload-artifact@v4
+        with:
+          name: r8-mapping-${{ github.run_id }}
+          path: media_app/app/build/outputs/mapping/release/mapping.txt
+          retention-days: 3
