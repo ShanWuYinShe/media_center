@@ -569,6 +569,10 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                 playingVideo = null,
             )
         }
+        AppLog.i(
+            "Perf",
+            "legacy home category cache hit: tab=$categoryId (items=${cached.items.size})",
+        )
         prefetchAdjacentCategories()
     }
 
