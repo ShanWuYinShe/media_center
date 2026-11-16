@@ -273,7 +273,13 @@ jobs:
           print("| 变体 | APK | 体积 | SHA-256 |")
           print("|---|---|---|---|")
           for variant, manifest in (("normal", normal), ("legacy", legacy)):
-              print(f"| {variant} | `{manifest.get('apkFilename')}` | {manifest.get('sizeBytes')} B | `{manifest.get('sha256')}` |")
+              # 与 publish job 的 GitHub Release 资产命名保持一致(normal/legacy 前缀);
+              # 服务器更新通道仍使用 manifest 内的 apkFilename。
+              asset_name = (
+                  f"media-center-app-{variant}-v{manifest.get('versionCode')}-"
+                  f"{str(manifest.get('sha256', ''))[:12]}.apk"
+              )
+              print(f"| {variant} | `{asset_name}` | {manifest.get('sizeBytes')} B | `{manifest.get('sha256')}` |")
           print()
           print("## 安装 / 更新")
           print()
@@ -318,13 +324,39 @@ jobs:
           name: release-apk-${{ github.run_id }}
           path: dist
 
+      # GitHub Release 面向手动下载:APK 文件名必须能一眼看出 normal / legacy。
+      # 服务器更新通道的文件名仍以 manifest 内 apkFilename 为准(不带变体前缀),
+      # 因此这里只复制一份带变体前缀的副本用于 Release 资产,不改 manifest/服务器约定。
+      - name: Rename release APKs with variant prefix (GitHub Release only)
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, pathlib, shutil
+
+          dist = pathlib.Path("dist")
+          lines = []
+          for variant, manifest_name in (("normal", "app-update.json"), ("legacy", "app-update-legacy.json")):
+              manifest = json.loads((dist / manifest_name).read_text(encoding="utf-8"))
+              src = dist / manifest["apkFilename"]
+              dst = dist / (
+                  f"media-center-app-{variant}-v{manifest['versionCode']}-"
+                  f"{manifest['sha256'][:12]}.apk"
+              )
+              shutil.copyfile(src, dst)
+              digest = hashlib.sha256(dst.read_bytes()).hexdigest()
+              lines.append(f"{digest}  {dst.name}")
+              print(f"{variant}: {dst.name}")
+          # Release 里的 SHA256SUMS 对应重命名后的资产(服务器 manifest 各自带哈希)。
+          (dist / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          assets=(dist/*.apk dist/app-update.json dist/app-update-legacy.json dist/SHA256SUMS)
+          assets=(dist/media-center-app-normal-*.apk dist/media-center-app-legacy-*.apk dist/app-update.json dist/app-update-legacy.json dist/SHA256SUMS)
           # 同一 tag 重跑时幂等更新，避免 gh release create 因 tag 已存在而失败。
           if gh release view "${TAG}" >/dev/null 2>&1; then
             gh release upload "${TAG}" "${assets[@]}" --clobber
