@@ -126,11 +126,6 @@ internal fun PlayerContent(
     LaunchedEffect(posterUrl) {
         if (posterUrl != null) showPoster = true
     }
-    // 换视频/分P/清晰度/重试重载时重置起播计时(stream.url 变化即换流)。
-    LaunchedEffect(videoId, playbackResult.pages.currentPage, loadEpoch, stream.url) {
-        streamStartedAtMs.longValue = android.os.SystemClock.elapsedRealtime()
-        firstFrameLogged = false
-    }
     // 最近一次遥控器按键时间：控制条显示期间有任何操作都重置自动隐藏计时
     var lastInteractionMs by remember { mutableLongStateOf(0L) }
     var positionMs by remember { mutableLongStateOf(0L) }
@@ -166,6 +161,11 @@ internal fun PlayerContent(
     // 每换一个流(视频/分P/清晰度/重试)重新计时,只记录一次首帧。
     val streamStartedAtMs = remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
     var firstFrameLogged by remember { mutableStateOf(false) }
+    // 换视频/分P/清晰度/重试重载时重置起播计时(stream.url 变化即换流)。
+    LaunchedEffect(videoId, playbackResult.pages.currentPage, loadEpoch, stream.url) {
+        streamStartedAtMs.longValue = android.os.SystemClock.elapsedRealtime()
+        firstFrameLogged = false
+    }
 
     // 与 PlaybackService 里的播放器异步建立 MediaController 连接。
     // 系统媒体栏/通知/媒体键由服务端 MediaSession 承载,页面只负责驱动。
