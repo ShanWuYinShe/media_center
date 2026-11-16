@@ -5,6 +5,7 @@ import coil.ImageLoader
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import com.example.mediacenter.log.AppLog
+import com.example.mediacenter.util.DevicePerformance
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 
@@ -29,12 +30,18 @@ object BilibiliImageLoaderFactory {
         val okHttp: OkHttpClient = AppHttpClient.newBuilder()
             .addInterceptor(BilibiliThumbnailHeaderInterceptor())
             .build()
+        // 低端机:图片交叉淡入本身要逐帧重绘,弱 GPU 上滚动时是额外掉帧源;
+        // 内存缓存占比也从 20% 收到 12%,降低 GC 压力(图片缓存丢了会重解码,但
+        // 低端机内存余量更宝贵,先保证 UI 线程不被 GC 打断)。
+        val lowEnd = DevicePerformance.isLowEnd
         return ImageLoader.Builder(context)
             .okHttpClient { okHttp }
-            .crossfade(true)
+            .crossfade(!lowEnd)
             .respectCacheHeaders(false) // B 站图床无明确 cache-control,以本地策略为准
             .memoryCache {
-                MemoryCache.Builder(context).maxSizePercent(0.20).build()
+                MemoryCache.Builder(context)
+                    .maxSizePercent(if (lowEnd) 0.12 else 0.20)
+                    .build()
             }
             .diskCache {
                 DiskCache.Builder()
