@@ -37,7 +37,41 @@ class HomeViewModelTest {
         assertEquals(18, state.items.size)
         assertEquals(25, state.total)
         assertTrue(state.canLoadMore)
+        // 当前分类 movies 加载完成后会预热相邻分类 tv(后台预热不影响当前页)。
+        assertEquals(listOf("movies", "tv"), repository.pageRequests.map { it.first })
+    }
+
+    @Test
+    fun initialLoad_prefetchNeighbor_thenSwitchHitsCache() = runTest {
+        val repository = FakeRepository()
+        val viewModel = HomeViewModel(repository, autoCheckUpdate = false)
+        advanceUntilIdle()
+
+        // 相邻分类 tv 已预热(只发一次请求)。
+        assertEquals(1, repository.pageRequests.count { it.first == "tv" })
+
+        viewModel.selectTab("tv")
+        advanceUntilIdle()
+
+        assertEquals("tv", viewModel.uiState.value.selectedTab)
+        assertEquals(3, viewModel.uiState.value.items.size)
+        // 切到预热过的分类直接命中缓存,不再发第二次请求。
+        assertEquals(1, repository.pageRequests.count { it.first == "tv" })
+    }
+
+    @Test
+    fun youtubeProvider_skipsAdjacentPrefetch() = runTest {
+        val repository = FakeRepository()
+        repository.currentProvider = "youtube"
+        val viewModel = HomeViewModel(repository, autoCheckUpdate = false)
+        advanceUntilIdle()
+
+        // youtube 分类是实时 ytsearch:不替用户预取相邻分类,只请求当前分类。
         assertEquals(listOf("movies"), repository.pageRequests.map { it.first })
+
+        viewModel.selectTab("tv")
+        advanceUntilIdle()
+        assertEquals(2, repository.pageRequests.size)
     }
 
     @Test

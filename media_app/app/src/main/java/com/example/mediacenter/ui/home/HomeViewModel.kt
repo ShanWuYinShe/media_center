@@ -90,6 +90,12 @@ class HomeViewModel(
 
     private val categoryCache = java.util.concurrent.ConcurrentHashMap<String, CategoryCacheEntry>()
 
+    // 相邻分类预热:用户左右切类时目标分类往往已在后台拉好,切过去直接命中缓存。
+    // 只预热 bilibili 目录(youtube 分类是实时 ytsearch,不能替用户提前消耗配额),
+    // 且每个分类只发一次、失败静默。
+    private var categoryPrefetchJob: Job? = null
+    private val prefetchInFlight = java.util.concurrent.ConcurrentHashMap<String, Job>()
+
     init {
         restoreSnapshotThenLoad()
         refreshWatchHistory()
@@ -324,6 +330,7 @@ class HomeViewModel(
                     "home first page ready in ${System.currentTimeMillis() - createdAtMs}ms " +
                         "(tab=$categoryId, cache=hit)",
                 )
+                prefetchAdjacentCategories()
                 return
             }
         }
@@ -389,6 +396,35 @@ class HomeViewModel(
         }
         contentJob = viewModelScope.launch {
             try {
+                // 相邻分类预热可能已在路上:等它填缓存,命中就省一次完全相同的请求。
+                if (!force) {
+                    prefetchInFlight[categoryId]?.join()
+                    val preloaded = categoryCache[categoryId]?.takeIf {
+                        it.provider == provider &&
+                            System.currentTimeMillis() - it.timestamp < CategoryCacheTtlMs
+                    }
+                    if (preloaded != null &&
+                        _uiState.value.selectedTab == categoryId &&
+                        repository.currentProvider == provider
+                    ) {
+                        _uiState.update {
+                            it.copy(
+                                items = preloaded.items,
+                                page = preloaded.page,
+                                total = preloaded.total,
+                                canLoadMore = preloaded.canLoadMore,
+                                isLoading = false,
+                            )
+                        }
+                        AppLog.i(
+                            "Perf",
+                            "home first page ready in ${System.currentTimeMillis() - createdAtMs}ms " +
+                                "(tab=$categoryId, cache=hit)",
+                        )
+                        prefetchAdjacentCategories()
+                        return@launch
+                    }
+                }
                 val response = repository.catalogPage(categoryId, page = 1, pageSize = HomePageSize)
                 if (_uiState.value.selectedTab != categoryId ||
                     repository.currentProvider != provider
@@ -419,6 +455,7 @@ class HomeViewModel(
                         "(tab=$categoryId, cache=miss)",
                 )
                 persistSnapshot()
+                prefetchAdjacentCategories()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -439,6 +476,71 @@ class HomeViewModel(
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * 相邻分类预热:当前分类加载完成后,顺带把左右相邻分类的第一页拉进缓存。
+     *
+     * TV 遥控器换类是"焦点落到标签即切"的高频操作;提前预热邻居后,左右键切类
+     * 直接命中 10 分钟缓存,不再出现骨架等待。只预热目录型 provider(bilibili),
+     * youtube 分类是实时 ytsearch 不能替用户提前消耗配额;失败静默,不影响首页。
+     */
+    private fun prefetchAdjacentCategories() {
+        if (repository.currentProvider == "youtube") return
+        val state = _uiState.value
+        if (state.categories.isEmpty() || state.isLoading) return
+        val ids = state.categories.map { it.id }
+        val currentIndex = ids.indexOf(state.selectedTab)
+        if (currentIndex < 0) return
+        val candidates = listOfNotNull(
+            ids.getOrNull(currentIndex - 1),
+            ids.getOrNull(currentIndex + 1),
+        ).filter { it != state.selectedTab }
+            .filter { categoryId ->
+                val cached = categoryCache[categoryId]
+                cached == null || cached.provider != repository.currentProvider ||
+                    System.currentTimeMillis() - cached.timestamp >= CategoryCacheTtlMs
+            }
+            .filter { prefetchInFlight[it] == null }
+        if (candidates.isEmpty()) return
+        categoryPrefetchJob?.cancel()
+        categoryPrefetchJob = viewModelScope.launch {
+            val provider = repository.currentProvider
+            for (categoryId in candidates) {
+                if (repository.currentProvider != provider) return@launch
+                val job = viewModelScope.launch { prefetchCategory(categoryId, provider) }
+                prefetchInFlight[categoryId] = job
+                job.join()
+                prefetchInFlight.remove(categoryId)
+            }
+        }
+    }
+
+    private suspend fun prefetchCategory(categoryId: String, provider: String) {
+        val startedAtMs = System.currentTimeMillis()
+        try {
+            val response = repository.catalogPage(categoryId, page = 1, pageSize = HomePageSize)
+            if (repository.currentProvider != provider) return
+            val items = response.items.orEmpty()
+            categoryCache[categoryId] = CategoryCacheEntry(
+                provider = provider,
+                items = items,
+                page = response.page.coerceAtLeast(1),
+                total = response.total,
+                canLoadMore = canLoadMore(response.total, items.size),
+                timestamp = System.currentTimeMillis(),
+            )
+            trimCache()
+            AppLog.i(
+                "Perf",
+                "home category preloaded tab=$categoryId in " +
+                    "${System.currentTimeMillis() - startedAtMs}ms (items=${items.size})",
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLog.w("Home", "prefetch category $categoryId failed: ${e.message}", e)
         }
     }
 
@@ -551,6 +653,8 @@ class HomeViewModel(
     fun selectProvider(provider: String) {
         repository.setProvider(provider)
         categoryCache.clear()
+        categoryPrefetchJob?.cancel()
+        prefetchInFlight.clear()
         contentJob?.cancel()
         loadMoreJob?.cancel()
         _uiState.update {

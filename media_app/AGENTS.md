@@ -48,4 +48,4 @@ TV 交互与视觉约定见 skill media-app-tv-ui。
 - HTTP 调用统一 `data/HttpCall.kt` 的 `Call.await()`；响应体读取必须在 IO 调度器。
 - 通用 TV 控件集中在 `ui/components/`（`TvActionButton`、`TvChip`、`TvDialogButton`、`PagedVideoGrid`、`VideoCard` 等），页面不要重复按钮样式或分页网格。
 - 播放器：`PlayerViewModel` 负责解析/清晰度/分P/合集 next 决策；`PlayerControllerConnection` 负责 MediaController 重连与幂等释放；`PlayerAudioFocus` 负责音频焦点；`PlayerContent` 只编排播放与覆盖层。
-- 首页由 `HomeViewModel` 一次只加载当前分类（10 分钟缓存 + 分页；冷启动先用 `filesDir` 快照 SWR 渲染，缓存过期也先展示旧内容再后台刷新），分类切换由 `HomeCategoryTabs` 焦点触发；「继续观看」读本地 `WatchHistory`。UI 不做磁盘 IO。
+- 首页由 `HomeViewModel` 一次只加载当前分类（10 分钟缓存 + 分页；冷启动先用 `filesDir` 快照 SWR 渲染，缓存过期也先展示旧内容再后台刷新），分类切换由 `HomeCategoryTabs` 焦点触发；当前分类加载完成后会后台预热左右相邻分类的第一页（youtube 实时通道不预热），左右键切类直接命中缓存；「继续观看」读本地 `WatchHistory`。UI 不做磁盘 IO。
