@@ -17,6 +17,14 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 # 产物: app/build/outputs/apk/release/app-release.apk
 ```
 
+## Baseline Profile（启动 AOT）
+
+`app/src/main/baseline-prof.txt` 是 App 自有启动路径的 baseline profile 规则（显式类/方法规则，AGP 构建期用 R8 mapping 映射到混淆名后合并进 APK 的 `assets/dexopt/baseline.prof`；依赖库自带 profile 由 AGP 一并合并）。已内置 `androidx.profileinstaller`（经依赖传递），侧载 TV 安装后由它在启动时把 profile 安装给 ART，后续冷启动走 AOT 代码。
+
+- **生成/更新**：从 CI 下载 `r8-mapping-<run_id>` 产物（`gh run download <run_id> -n r8-mapping-<run_id>`），执行 `python3 scripts/gen-baseline-profile.py <mapping.txt> media_app/app/src/main/baseline-prof.txt`。规则选择启动路径的包前缀，统一 `HSPL`，并加关键类预分配规则。
+- **通配符不生效**：AGP 9.2.1 的 app 模块实测不展开 HRF 通配符，必须显式展开（生成器负责）。
+- **验证**：`unzip -l <apk> | grep baseline.prof` 体积应随之变化；模拟器/真机执行 `adb shell cmd package dump-profiles --dump-classes-and-methods com.example.mediacenter` 后确认安装后的 profile 含新规则。
+
 ## 版本号与发版、部署 APK
 
 tag 驱动版本号、双变体 APK 构建与 manifest 部署流程见 skill media-app-release。
