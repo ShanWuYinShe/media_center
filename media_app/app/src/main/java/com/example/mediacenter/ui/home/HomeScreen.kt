@@ -13,6 +13,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -96,9 +97,15 @@ fun HomeScreen(
     // 左右键即可换类，不需要精确瞄准某个卡片或图标。
     val selectedTabFocus = remember { FocusRequester() }
     val gridFirstFocus = remember { FocusRequester() }
+    // 记住离开首页前停在哪张卡片：从详情/播放/搜索返回时恢复到该卡片，
+    // 不要把焦点丢给顶栏按钮(此前返回后会落在"设置/搜索"上，还要按方向键找回)。
+    var lastFocusedVideoId by rememberSaveable { mutableStateOf<String?>(null) }
     val categoriesReady = state.categories.isNotEmpty()
-    LaunchedEffect(categoriesReady) {
-        if (categoriesReady && viewModel.consumeInitialFocus()) {
+    LaunchedEffect(categoriesReady, lastFocusedVideoId) {
+        if (!categoriesReady) return@LaunchedEffect
+        // 首次进入请求当前分类标签；从其他页面返回且没有可恢复卡片时也回到标签，
+        // 保证焦点永远落在内容区而不是顶栏。
+        if (viewModel.consumeInitialFocus() || lastFocusedVideoId == null) {
             runCatching { selectedTabFocus.requestFocus() }
         }
     }
@@ -230,6 +237,8 @@ fun HomeScreen(
                             firstItemUpFocusRequester = selectedTabFocus,
                             progressById = continueProgressById,
                             resetKey = state.selectedTab,
+                            initialFocusItemId = lastFocusedVideoId,
+                            onItemFocused = { lastFocusedVideoId = it },
                         )
                     }
                 }
@@ -255,6 +264,8 @@ fun HomeScreen(
                     firstItemFocusRequester = gridFirstFocus,
                     firstItemUpFocusRequester = selectedTabFocus,
                     resetKey = state.selectedTab,
+                    initialFocusItemId = lastFocusedVideoId,
+                    onItemFocused = { lastFocusedVideoId = it },
                 )
             }
         }
