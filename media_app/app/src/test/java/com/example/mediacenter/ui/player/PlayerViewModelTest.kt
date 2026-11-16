@@ -80,6 +80,17 @@ class PlayerViewModelTest {
         ),
     )
 
+    /** YouTube 风格的多档结果(服务端按清晰度降序返回,首档是最高档)。 */
+    private fun multiQualityPlayback(): PlaybackResult {
+        val qns = listOf(2160, 1080, 720, 480)
+        return PlaybackResult(
+            options = qns.map { qn ->
+                PlaybackOption(id = "q$qn", kind = "vod", label = "${qn}P", url = "https://x/$qn", qn = qn)
+            },
+            availableQualities = qns.map { QualityOption(qn = it, label = "${it}P") },
+        )
+    }
+
     private fun collection(vararg ids: String): VideoCollectionResponse = VideoCollectionResponse(
         collection = VideoCollectionInfo(id = "season", title = "合集", total = ids.size),
         currentIndex = 0,
@@ -149,6 +160,35 @@ class PlayerViewModelTest {
         assertFalse(vm.fallbackToLowerQuality())
         advanceUntilIdle()
         assertEquals(listOf("A"), repo.resolvedIds)
+    }
+
+    @Test
+    fun `自动选档按上限收敛且手动切档不受限`() = runTest {
+        val repo = FakeRepository(multiQualityPlayback())
+        val vm = PlayerViewModel("A", repository = repo, maxInitialQualityQn = 720)
+        advanceUntilIdle()
+
+        // 自动选档:最高档 2160 被收敛到 720。
+        assertEquals(720, vm.uiState.value.playbackResult?.options?.firstOrNull()?.qn)
+
+        // 手动切档不受上限约束,且全部档位仍在(供菜单继续切换),无需重新解析。
+        vm.selectQuality(2160)
+        advanceUntilIdle()
+        assertEquals(2160, vm.uiState.value.playbackResult?.options?.firstOrNull()?.qn)
+        assertEquals(
+            setOf(2160, 1080, 720, 480),
+            vm.uiState.value.playbackResult?.options?.mapNotNull { it.qn }?.toSet(),
+        )
+        assertEquals(listOf("A"), repo.resolvedIds)
+    }
+
+    @Test
+    fun `未知屏幕高度时不收敛自动选档`() = runTest {
+        val repo = FakeRepository(multiQualityPlayback())
+        val vm = PlayerViewModel("A", repository = repo)
+        advanceUntilIdle()
+
+        assertEquals(2160, vm.uiState.value.playbackResult?.options?.firstOrNull()?.qn)
     }
 
     @Test
