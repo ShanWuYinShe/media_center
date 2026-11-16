@@ -26,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -119,6 +120,9 @@ fun SearchScreen(
         val resultsFocus = remember { FocusRequester() }
         val keyboardController = LocalSoftwareKeyboardController.current
         var focusResultsAfterHotWord by remember { mutableStateOf(false) }
+        // 从详情/播放返回搜索页时恢复焦点到离开前的结果卡,并避免再次弹出键盘。
+        var lastFocusedResultId by rememberSaveable { mutableStateOf<String?>(null) }
+        var inputFocusedOnce by rememberSaveable { mutableStateOf(false) }
         // 已点击热词、但该关键词尚未完成(防抖中或请求中)且没有结果:显示
         // 加载态并让结果区承接焦点,防止键盘抢回焦点。
         val hotWordPending = focusResultsAfterHotWord &&
@@ -148,7 +152,14 @@ fun SearchScreen(
                 }
             }
         }
-        LaunchedEffect(Unit) { searchFocus.requestFocus() }
+        LaunchedEffect(Unit) {
+            // 只在首次进入搜索页时聚焦输入框;从详情返回时交给结果网格恢复焦点,
+            // 否则键盘会重新弹出并遮住用户刚看完的结果列表。
+            if (!inputFocusedOnce) {
+                inputFocusedOnce = true
+                searchFocus.requestFocus()
+            }
+        }
         OutlinedTextField(
             value = state.query,
             onValueChange = {
@@ -339,6 +350,8 @@ fun SearchScreen(
                     firstItemFocusRequester = firstResultFocus,
                     firstItemUpFocusRequester = searchFocus,
                     resetKey = state.query,
+                    initialFocusItemId = lastFocusedResultId,
+                    onItemFocused = { lastFocusedResultId = it },
                 )
             }
         }

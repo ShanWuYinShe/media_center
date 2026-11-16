@@ -14,13 +14,19 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.unit.dp
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.ui.theme.AppleBlue
@@ -56,8 +62,38 @@ fun PagedVideoGrid(
     // 内容维度变化(分类/关键词)时滚动位置归零:缓存命中或结果替换时 Grid 不会重建,
     // rememberLazyGridState 会把上一个列表的滚动位置带过来,看起来像"分类内容错乱"。
     resetKey: Any? = null,
+    // 从详情/播放/搜索返回时,把焦点恢复到离开前停留的卡片(而不是丢给顶栏)。
+    // id 不存在(数据刷新/换分类)时不处理,交由调用方的默认焦点逻辑兜底。
+    initialFocusItemId: String? = null,
+    onItemFocused: ((String) -> Unit)? = null,
 ) {
     val gridState = rememberLazyGridState()
+    val restoreFocusRequester = remember { FocusRequester() }
+    var restoreFocusDone by remember { mutableStateOf(false) }
+    // 只在"刚进入页面"的短窗口内恢复焦点:同一组合内切分类/翻页导致列表变化时
+    // 不能把焦点从分类标签抢到网格里。
+    val restoreWindowEndMs = remember { android.os.SystemClock.uptimeMillis() + 3000 }
+    val restoreIndex = remember(items, initialFocusItemId) {
+        if (initialFocusItemId == null) -1 else items.indexOfFirst { it.id == initialFocusItemId }
+    }
+    LaunchedEffect(restoreIndex, items.size, initialFocusItemId) {
+        // 每次进入该页面(组合重建)只恢复一次;列表追加/刷新不会再次抢焦点。
+        if (restoreFocusDone || restoreIndex < 0 || initialFocusItemId == null ||
+            android.os.SystemClock.uptimeMillis() > restoreWindowEndMs
+        ) {
+            return@LaunchedEffect
+        }
+        val visible = gridState.layoutInfo.visibleItemsInfo.any { it.index == restoreIndex }
+        if (!visible) gridState.scrollToItem(restoreIndex)
+        // 目标项可能还没组合出来:连续等几帧再请求焦点。
+        repeat(6) {
+            withFrameNanos { }
+            if (runCatching { restoreFocusRequester.requestFocus() }.isSuccess) {
+                restoreFocusDone = true
+                return@LaunchedEffect
+            }
+        }
+    }
 
     LaunchedEffect(resetKey) {
         if (gridState.firstVisibleItemIndex != 0 || gridState.firstVisibleItemScrollOffset != 0) {
@@ -113,10 +149,18 @@ fun PagedVideoGrid(
             } else {
                 Modifier
             }
+            val restoreModifier = if (video.id == initialFocusItemId) {
+                Modifier.focusRequester(restoreFocusRequester)
+            } else {
+                Modifier
+            }
+            val focusedModifier = onItemFocused?.let { callback ->
+                Modifier.onFocusChanged { if (it.isFocused) callback(video.id) }
+            } ?: Modifier
             VideoCard(
                 video = video,
                 onClick = { onItemClick(video) },
-                modifier = Modifier.fillMaxWidth().then(firstModifier),
+                modifier = Modifier.fillMaxWidth().then(firstModifier).then(restoreModifier).then(focusedModifier),
                 progress = progressById[video.id],
             )
         }
