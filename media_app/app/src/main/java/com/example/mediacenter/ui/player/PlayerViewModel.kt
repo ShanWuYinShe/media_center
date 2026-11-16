@@ -9,9 +9,11 @@ import com.example.mediacenter.data.MediaRepositoryApi
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.PlaybackPrefetcher
 import com.example.mediacenter.data.PlaybackResult
+import com.example.mediacenter.data.PlaybackTuning
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.parsePageId
 import com.example.mediacenter.log.AppLog
+import com.example.mediacenter.util.DevicePerformance
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -174,16 +176,31 @@ class PlayerViewModel(
             }
             // 解析期间又切了集:丢弃旧响应,避免把上一集播到新集上。
             if (requestedVideoId != currentVideoId) return
+            // 低端机默认清晰度收敛:YouTube 服务端按清晰度降序返回,options.first
+            // 是最高档(可达 4K/8K),弱 GPU/弱网直接起播会先卡缓冲。只在自动选档
+            // (qn==null)时收敛,手动切清晰度不受影响。
+            val tuned = if (qn == null) {
+                PlaybackTuning.preferSmoothInitialOption(result, DevicePerformance.isLowEnd)
+            } else {
+                result
+            }
+            if (tuned !== result) {
+                AppLog.i(
+                    "Player",
+                    "low-end quality cap: ${result.options.firstOrNull()?.qn} -> " +
+                        "${tuned.options.firstOrNull()?.qn}",
+                )
+            }
             // 记录服务端实际给出的清晰度(可能因会员/片源自动降级),UI 选中态与
             // 后续"重复点当前档位"判断都以它为准。
-            currentQn = result.options.firstOrNull()?.qn ?: qn
+            currentQn = tuned.options.firstOrNull()?.qn ?: qn
             val firstResolve = resolvedVideoId == null
             resolvedVideoId = requestedVideoId
-            _uiState.value = _uiState.value.copy(playbackResult = result, isLoading = false)
+            _uiState.value = _uiState.value.copy(playbackResult = tuned, isLoading = false)
             AppLog.i(
                 "Perf",
                 "resolve $requestedVideoId provider=${repository.currentProvider} " +
-                    "qn=${result.options.firstOrNull()?.qn} in " +
+                    "qn=${tuned.options.firstOrNull()?.qn} in " +
                     "${System.currentTimeMillis() - startedAtMs}ms " +
                     "(prefetched=${prefetched != null}, first=$firstResolve, " +
                     "sinceCreate=${System.currentTimeMillis() - createdAtMs}ms)",
