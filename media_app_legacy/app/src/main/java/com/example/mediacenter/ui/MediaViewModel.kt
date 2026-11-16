@@ -259,6 +259,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         // 冷启动快照已渲染时以静默方式刷新:不闪加载态、失败保留快照内容。
         silent: Boolean = false,
     ) {
+        val startedAtMs = System.currentTimeMillis()
         val current = mutableState.value
         val silentRefresh = silent || current.isContentScreen
         if (silentRefresh &&
@@ -359,6 +360,11 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                             )
                             withContext(Dispatchers.IO) { repository.saveHomeSnapshot(snapshot) }
                         }
+                        AppLog.i(
+                            "Perf",
+                            "legacy home first page ready in ${System.currentTimeMillis() - startedAtMs}ms " +
+                                "(tab=${categoryId ?: "-"}, count=${response.items.size}, silent=$isSilent)",
+                        )
                         return@launch
                     }
                     .onFailure { error ->
@@ -1180,6 +1186,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
     private fun loadCategoriesAndSearch(initialSilent: Boolean = false) {
         loadHomeJob?.cancel()
         loadHomeJob = viewModelScope.launch {
+            val startedAtMs = System.currentTimeMillis()
             // 首屏用聚合请求一次拿 providers + 分类(老盒子弱网省一个 RTT);
             // 聚合失败(旧服务端/网络)退回原有两次请求,行为与之前一致。
             // 分类加载失败自动重试:最多 MAX_HOME_AUTO_RETRIES 次(退避见
@@ -1228,6 +1235,11 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                 }
                 val categories = categoriesResult.getOrNull()
                 if (categories != null) {
+                    AppLog.i(
+                        "Perf",
+                        "legacy home categories ready in ${System.currentTimeMillis() - startedAtMs}ms " +
+                            "(categories=${categories.size}, silent=$silentRefresh)",
+                    )
                     // categories 拿到了,确定默认选中:
                     //   - 若之前已选 ID 仍存在,沿用(用户切了 chip 又触发 retry 不会被重置)
                     //   - 否则落到列表首项

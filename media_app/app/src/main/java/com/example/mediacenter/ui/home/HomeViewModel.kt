@@ -450,6 +450,7 @@ class HomeViewModel(
         if (state.isLoading || state.isLoadingMore || state.loadMoreError != null || !state.canLoadMore) return
         val provider = repository.currentProvider
         val nextPage = state.page + 1
+        val startedAtMs = System.currentTimeMillis()
         loadMoreJob = viewModelScope.launch {
             _uiState.update { it.copy(isLoadingMore = true, loadMoreError = null) }
             try {
@@ -478,10 +479,20 @@ class HomeViewModel(
                 )
                 trimCache()
                 persistSnapshot()
+                AppLog.i(
+                    "Perf",
+                    "home load more tab=$categoryId page=${response.page.coerceAtLeast(nextPage)} " +
+                        "in ${System.currentTimeMillis() - startedAtMs}ms (items=${merged.size})",
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                AppLog.w("Home", "load more $categoryId failed: ${e.message}", e)
+                AppLog.w(
+                    "Home",
+                    "load more $categoryId failed: ${e.message} " +
+                        "(after ${System.currentTimeMillis() - startedAtMs}ms)",
+                    e,
+                )
                 if (_uiState.value.selectedTab == categoryId) {
                     _uiState.update {
                         it.copy(isLoadingMore = false, loadMoreError = "加载更多失败，请重试")
