@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
+import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.player.PlaybackService
 
 /**
@@ -51,6 +52,7 @@ internal fun rememberPlaybackController(context: Context): PlaybackControllerSta
     }
 
     LaunchedEffect(attempts) {
+        val connectStartedAtMs = android.os.SystemClock.elapsedRealtime()
         if (attempts > 0) {
             delay(CONTROLLER_RETRY_DELAY_MS)
         }
@@ -86,6 +88,11 @@ internal fun rememberPlaybackController(context: Context): PlaybackControllerSta
             null
         }
         if (connected != null) {
+            AppLog.i(
+                "Perf",
+                "player controller connected in " +
+                    "${android.os.SystemClock.elapsedRealtime() - connectStartedAtMs}ms (attempt=$attempts)",
+            )
             // 新 controller 接管:重新武装释放守卫。
             releaseGuard.set(false)
             controller = connected
