@@ -31,6 +31,7 @@ TV 交互与视觉约定见 skill media-app-tv-ui。
 
 - Compose + TV Material + Media3 ExoPlayer；网络：OkHttp；序列化：kotlinx-serialization；图片：Coil。
 - 播放补充：YouTube 1080P+ 的分离音轨用 `MergingMediaSource` 合流；B 站多段 durl 用 `ConcatenatingMediaSource` 顺序拼接（MediaController 只能传 MediaItem，额外地址经 MediaMetadata extras 传给 PlaybackService 的 `PlaybackMediaSourceFactory`）。
+- 默认清晰度：自动选档按「屏幕物理高度与设备档位取小」收敛（`data/PlaybackTuning`，低端机 ≤720P），手动切清晰度不受限；离开播放页后播放服务保活 20s（`player/PlaybackServiceKeepAlive`），快速回看不重建服务/播放器。
 - 服务端地址：默认 `https://media.chaoset.com/api/v1`；如需覆盖，设置 `MEDIA_SERVER_URL`。
 
 ## 代码结构约定
@@ -39,4 +40,4 @@ TV 交互与视觉约定见 skill media-app-tv-ui。
 - HTTP 调用统一 `data/HttpCall.kt` 的 `Call.await()`；响应体读取必须在 IO 调度器。
 - 通用 TV 控件集中在 `ui/components/`（`TvActionButton`、`TvChip`、`TvDialogButton`、`PagedVideoGrid`、`VideoCard` 等），页面不要重复按钮样式或分页网格。
 - 播放器：`PlayerViewModel` 负责解析/清晰度/分P/合集 next 决策；`PlayerControllerConnection` 负责 MediaController 重连与幂等释放；`PlayerAudioFocus` 负责音频焦点；`PlayerContent` 只编排播放与覆盖层。
-- 首页由 `HomeViewModel` 一次只加载当前分类（10 分钟缓存 + 分页），分类切换由 `HomeCategoryTabs` 焦点触发；「继续观看」读本地 `WatchHistory`。UI 不做磁盘 IO。
+- 首页由 `HomeViewModel` 一次只加载当前分类（10 分钟缓存 + 分页；冷启动先用 `filesDir` 快照 SWR 渲染，缓存过期也先展示旧内容再后台刷新），分类切换由 `HomeCategoryTabs` 焦点触发；「继续观看」读本地 `WatchHistory`。UI 不做磁盘 IO。
