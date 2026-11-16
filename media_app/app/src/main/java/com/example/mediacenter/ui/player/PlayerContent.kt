@@ -58,6 +58,7 @@ import androidx.media3.common.Player
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import com.example.mediacenter.data.PlaybackPositionStore
+import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.data.playbackStorageKey
@@ -125,6 +126,11 @@ internal fun PlayerContent(
     LaunchedEffect(posterUrl) {
         if (posterUrl != null) showPoster = true
     }
+    // 换视频/分P/清晰度/重试重载时重置起播计时(stream.url 变化即换流)。
+    LaunchedEffect(videoId, playbackResult.pages.currentPage, loadEpoch, stream.url) {
+        streamStartedAtMs.longValue = android.os.SystemClock.elapsedRealtime()
+        firstFrameLogged = false
+    }
     // 最近一次遥控器按键时间：控制条显示期间有任何操作都重置自动隐藏计时
     var lastInteractionMs by remember { mutableLongStateOf(0L) }
     var positionMs by remember { mutableLongStateOf(0L) }
@@ -156,6 +162,10 @@ internal fun PlayerContent(
     val currentOnQualityFallback by rememberUpdatedState(onQualityFallback)
     // READY 回调里的断点读取(SP + JSON 解码)经它移到 IO 线程执行
     val scope = rememberCoroutineScope()
+    // 起播耗时埋点(阶段4 优化依据):从进入播放页/切换流到首帧渲染。
+    // 每换一个流(视频/分P/清晰度/重试)重新计时,只记录一次首帧。
+    val streamStartedAtMs = remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
+    var firstFrameLogged by remember { mutableStateOf(false) }
 
     // 与 PlaybackService 里的播放器异步建立 MediaController 连接。
     // 系统媒体栏/通知/媒体键由服务端 MediaSession 承载,页面只负责驱动。
@@ -166,6 +176,10 @@ internal fun PlayerContent(
     // listener 与页面级 onDispose 在 remember/DisposableEffect 中跨组合存活,
     // 直接捕获 controller 会永远拿到首次组合的 null。用 State 读取最新实例。
     val currentController by rememberUpdatedState(controller)
+    // listener 跨组合存活:埋点字段也必须读最新值,否则切集/换源后日志会带上旧视频。
+    val currentVideoId by rememberUpdatedState(videoId)
+    val currentPlaybackPage by rememberUpdatedState(playbackResult.pages.currentPage)
+    val currentLoadEpoch by rememberUpdatedState(loadEpoch)
     // 播放器 listener 必须先于加载流程注册:本地/强缓存流极快 READY 时也不会错过
     // 断点续播 seek。恢复位置在 READY 回调里读取,此时才拿得到真实时长做"已看完"过滤。
     val playerListener = remember {
@@ -177,6 +191,15 @@ internal fun PlayerContent(
             // 首帧已出画:封面层淡出(Media3 精确回调,不会盖住已出画的视频)。
             override fun onRenderedFirstFrame() {
                 showPoster = false
+                if (!firstFrameLogged) {
+                    firstFrameLogged = true
+                    AppLog.i(
+                        "Perf",
+                        "player first frame in " +
+                            "${android.os.SystemClock.elapsedRealtime() - streamStartedAtMs.longValue}ms " +
+                            "(videoId=$currentVideoId, page=$currentPlaybackPage, epoch=$currentLoadEpoch)",
+                    )
+                }
             }
 
             override fun onPlaybackStateChanged(state: Int) {
