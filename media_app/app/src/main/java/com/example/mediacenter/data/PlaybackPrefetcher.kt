@@ -2,6 +2,7 @@ package com.example.mediacenter.data
 
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.player.PlaybackMediaCache
+import com.example.mediacenter.player.PlaybackWarmup
 import com.example.mediacenter.util.BackgroundWork
 import com.example.mediacenter.util.DevicePerformance
 import kotlinx.coroutines.CancellationException
@@ -68,6 +69,11 @@ object PlaybackPrefetcher {
                 MediaRepositoryHolder.applicationContext?.let { context ->
                     PlaybackMediaCache.prefetchInitialBytes(context, tuned)
                 }
+                // 解析完成即预热 CDN 连接(阶段4 起播优化):媒体预取走的是
+                // PlaybackMediaCache 自己的数据源栈,连接池与 Media3 拉流不共享;
+                // 这里用与播放器相同的平台 HttpURLConnection 预热 TLS/DNS,
+                // 详情页停留到点播放之间通常有 1s+,首段请求可复用已建连接。
+                PlaybackWarmup.warmup(tuned)
                 AppLog.i(
                     "Perf",
                     "prefetch ready $videoId qn=${qn ?: "auto"} " +
