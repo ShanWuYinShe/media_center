@@ -147,6 +147,14 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
     }
     private var categoryRefreshJob: Job? = null
 
+    // 相邻分类预热:老盒子切 chip 后也要等目录请求,提前拉好邻居分类第一页,
+    // 切过去直接命中 categoryListCache。只预热目录型 provider(bilibili),
+    // youtube 分类是实时 ytsearch 不预热;每个分类只发一次,失败静默。
+    private var categoryPrefetchJob: Job? = null
+    private val categoryPrefetchInFlight = LinkedHashMap<String, Job>()
+    // 用户最近一次点选的目标分类:join 预热任务后据此判断是否已被新选择替换。
+    private var pendingCategoryId: String? = null
+
     private fun cacheCategoryList(
         categoryId: String,
         items: List<VideoSummary>,
@@ -347,6 +355,8 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                         }
                         // 后台预取列表视频的播放地址,用户点详情时直接可用。
                         prefetchVisiblePlayback(response.items)
+                        // 分类浏览就绪后预热左右相邻分类:切 chip 时直接命中缓存。
+                        if (query.isBlank() && categoryId != null) prefetchAdjacentCategories()
                         // 首屏成功加载后持久化快照(IO 线程),下次冷启动先渲染。
                         if (query.isBlank() && categoryId != null) {
                             val snapshot = HomeSnapshot(
@@ -502,6 +512,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
             AppLog.w("Nav", "ignore selectCategory while content screen is visible")
             return
         }
+        pendingCategoryId = category.id
         val cached = categoryListCache[category.id]
         if (cached != null && cached.items.isNotEmpty()) {
             // 命中缓存:立即展示,不清空、不 loading 转圈。
@@ -511,8 +522,25 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                 refreshCategoryInBackground(category.id)
             }
         } else {
-            // 无缓存(首次进入):正常阻塞加载。
-            search(query = "", categoryId = category.id)
+            // 邻居预热可能正在拉这个分类:等它落地后直接命中缓存,避免重复请求
+            // (重复请求在老盒子弱网下要多等一个完整 RTT)。等不到就走原阻塞加载。
+            val inFlight = categoryPrefetchInFlight[category.id]
+            if (inFlight != null) {
+                viewModelScope.launch {
+                    inFlight.join()
+                    if (pendingCategoryId != category.id) return@launch
+                    val prefetched = categoryListCache[category.id]
+                    if (prefetched != null && prefetched.items.isNotEmpty()) {
+                        applyCachedCategory(category.id, prefetched)
+                        prefetchAdjacentCategories()
+                    } else {
+                        search(query = "", categoryId = category.id)
+                    }
+                }
+            } else {
+                // 无缓存(首次进入):正常阻塞加载。
+                search(query = "", categoryId = category.id)
+            }
         }
     }
 
@@ -524,6 +552,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         searchJob?.cancel()
         categoryRefreshJob?.cancel()
         pendingAutoAdvanceFromId = null
+        pendingCategoryId = categoryId
         mutableState.update {
             it.copy(
                 query = "",
@@ -540,6 +569,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                 playingVideo = null,
             )
         }
+        prefetchAdjacentCategories()
     }
 
     private fun refreshCategoryInBackground(categoryId: String) {
@@ -562,6 +592,68 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                     AppLog.w("Search", "background category refresh failed: ${error.message}", error)
                 }
         }
+    }
+
+    /**
+     * 相邻分类预热:当前分类内容就绪后,后台顺序拉取左右邻居第一页进
+     * categoryListCache。老盒子弱网下切 chip 常要等一次完整目录请求;预取后
+     * 切过去直接命中缓存。youtube 实时通道不预热,失败静默。
+     */
+    private fun prefetchAdjacentCategories() {
+        if (repository.currentProvider == "youtube") return
+        val state = mutableState.value
+        if (state.categories.isEmpty() || state.isContentScreen || state.loading) return
+        val currentId = state.selectedCategoryId ?: return
+        val ids = state.categories.map { it.id }
+        val index = ids.indexOf(currentId)
+        if (index < 0) return
+        val candidates = listOfNotNull(ids.getOrNull(index - 1), ids.getOrNull(index + 1))
+            .filter { it != currentId }
+            .filter { categoryId ->
+                val cached = categoryListCache[categoryId]
+                cached == null || System.currentTimeMillis() - cached.timestamp >= CategoryCacheTtlMs
+            }
+            .filter { categoryPrefetchInFlight[it] == null }
+        if (candidates.isEmpty()) return
+        categoryPrefetchJob?.cancel()
+        categoryPrefetchJob = viewModelScope.launch {
+            for (categoryId in candidates) {
+                if (repository.currentProvider == "youtube") return@launch
+                val job = viewModelScope.launch { prefetchCategory(categoryId) }
+                categoryPrefetchInFlight[categoryId] = job
+                try {
+                    job.join()
+                } finally {
+                    // 父任务被取消(切源/再次切类)时也要清理,否则该分类会被
+                    // 永久标记为"预热在途",之后再也预热不到它。
+                    categoryPrefetchInFlight.remove(categoryId)
+                }
+            }
+        }
+    }
+
+    private suspend fun prefetchCategory(categoryId: String) {
+        val startedAtMs = System.currentTimeMillis()
+        runCatchingCancellable {
+            repository.search("", categoryId, page = 1, pageSize = PageSize)
+        }
+            .onSuccess { response ->
+                cacheCategoryList(
+                    categoryId,
+                    response.items,
+                    page = 1,
+                    canLoadMore = repository.currentProvider != "youtube" &&
+                        response.items.size >= PageSize,
+                )
+                AppLog.i(
+                    "Perf",
+                    "legacy home category preloaded tab=$categoryId in " +
+                        "${System.currentTimeMillis() - startedAtMs}ms (items=${response.items.size})",
+                )
+            }
+            .onFailure { error ->
+                AppLog.w("Search", "prefetch category $categoryId failed: ${error.message}", error)
+            }
     }
 
     fun openDetails(video: VideoSummary, autoPlay: Boolean = false) {
@@ -1106,10 +1198,13 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         recoveryJob?.cancel()
         playbackPrefetchJob?.cancel()
         categoryRefreshJob?.cancel()
+        categoryPrefetchJob?.cancel()
+        categoryPrefetchInFlight.clear()
         categoryListCache.clear()
         playbackCache.clear()
         prefetchedPlaybackIds.clear()
         pendingAutoAdvanceFromId = null
+        pendingCategoryId = null
         mutableState.update {
             MediaUiState(
                 providers = it.providers,

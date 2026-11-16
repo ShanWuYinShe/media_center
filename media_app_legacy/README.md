@@ -32,7 +32,7 @@ B 站单视频（bvid）可能包含多个分 P（如 P1/P2/P3）。App 自动�
 
 `MEDIA_SERVER_URL` 是 App 唯一需要的服务端配置；可以是服务根地址，也可以直接带 API 路径。API 契约由 `../media_server/API.md` 维护。
 
-首页会从服务端读取内容分类，默认展示服务端返回的第一个分类。一级专区以服务端下发为准（见 `../media_server/src/contentCategories.json`）。App 只消费服务端返回的统一 opaque 视频 ID、opaque 播放选项 ID、`videoKind=vod` 和点播播放地址，并原样播放服务端返回的图片/播放 URL；不处理直播、视频来源、网页播放、外部打开或代理 URL 签名。
+首页会从服务端读取内容分类，默认展示服务端返回的第一个分类；当前分类加载完成后会后台预热左右相邻分类第一页（仅目录型 provider，YouTube 实时分类不预热），遥控器切 chip 直接命中 10 分钟分类缓存。一级专区以服务端下发为准（见 `../media_server/src/contentCategories.json`）。App 只消费服务端返回的统一 opaque 视频 ID、opaque 播放选项 ID、`videoKind=vod` 和点播播放地址，并原样播放服务端返回的图片/播放 URL；不处理直播、视频来源、网页播放、外部打开或代理 URL 签名。
 
 播放前调用 BilibiliApi.resolvePlayback 获取最新播放地址，播放器使用 Media3 `DefaultHttpDataSource` 直接流式读取服务端返回的 URL；客户端不使用下载器或落盘媒体缓存。
 
