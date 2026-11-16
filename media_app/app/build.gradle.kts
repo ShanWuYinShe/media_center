@@ -237,6 +237,9 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.13.0")
     // JankStats(帧卡顿观测):阶段 0 建立现场基线,采集开销极低,仅写本地日志。
     implementation("androidx.metrics:metrics-performance:1.0.0")
+    // Baseline Profile 安装器:APK 内置的 baseline.prof 需要它在启动后安装到 ART
+    // (TV 侧载安装无法依赖 Play 商店代装),第二次启动起生效为 AOT 预热。
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("androidx.navigation:navigation-compose:2.9.0")
 
     // Coil
