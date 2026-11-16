@@ -1,6 +1,7 @@
 package com.example.mediacenter.data
 
 import com.example.mediacenter.log.AppLog
+import com.example.mediacenter.player.PlaybackWarmup
 import com.example.mediacenter.util.BackgroundWork
 import com.example.mediacenter.util.DevicePerformance
 import kotlinx.coroutines.CancellationException
@@ -43,7 +44,11 @@ object PlaybackPrefetcher {
         val startedAtMs = System.currentTimeMillis()
         val job = BackgroundWork.scope.launch {
             try {
-                put(key, repository.resolvePlayback(videoId, qn))
+                val result = repository.resolvePlayback(videoId, qn)
+                put(key, result)
+                // 解析完成即预热 CDN 连接:详情页停留到点播放之间通常有 1s+,
+                // 让播放页拉首段时复用已建立的 TLS 连接(阶段4 起播优化)。
+                PlaybackWarmup.warmup(result)
                 AppLog.i(
                     "Perf",
                     "prefetch ready $videoId qn=${qn ?: "auto"} " +

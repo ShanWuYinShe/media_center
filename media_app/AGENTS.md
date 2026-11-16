@@ -49,5 +49,6 @@ TV 交互与视觉约定见 skill media-app-tv-ui。
 - 通用 TV 控件集中在 `ui/components/`（`TvActionButton`、`TvChip`、`TvDialogButton`、`PagedVideoGrid`、`VideoCard` 等），页面不要重复按钮样式或分页网格。
 - 播放器：`PlayerViewModel` 负责解析/清晰度/分P/合集 next 决策；`PlayerControllerConnection` 负责 MediaController 重连与幂等释放；`PlayerAudioFocus` 负责音频焦点；`PlayerContent` 只编排播放与覆盖层。
 - 起播耗时埋点：进入播放页后按链路打 `Perf: player controller connected in Nms` → `player prepared in Nms` → `player stream ready in Nms` → `player first frame in Nms (videoId, page, epoch)`；换视频/分P/清晰度/重试都重新计时，与 `Perf: resolve ...`、`prefetch ready` 串起来可定位"解析→控制器连接→prepare→缓冲就绪→首帧"各段耗时。
+- 起播优化：解析成功后 `PlaybackWarmup` 在后台用平台 `HttpURLConnection` 预热直链 CDN 连接（`Range: bytes=0-1023`，同一路径 60s 一次，失败静默）；播放页拉首段时复用已建立的连接。日志 `Perf: media warmup <host> in Nms (http=code)`。
 - 首页由 `HomeViewModel` 一次只加载当前分类（10 分钟缓存 + 分页；冷启动先用 `filesDir` 快照 SWR 渲染，缓存过期也先展示旧内容再后台刷新），分类切换由 `HomeCategoryTabs` 焦点触发；当前分类加载完成后会后台预热左右相邻分类的第一页（youtube 实时通道不预热），左右键切类直接命中缓存；「继续观看」读本地 `WatchHistory`。UI 不做磁盘 IO。
 - 焦点恢复：首页用 `rememberSaveable` 记录最后聚焦的卡片，经 `PagedVideoGrid(initialFocusItemId/onItemFocused)` 在从详情/播放/搜索返回时恢复到该卡片（无记录则回当前分类标签，焦点不会丢给顶栏）；搜索页同样恢复结果卡，且返回时不再重新弹出输入法。
