@@ -48,6 +48,7 @@ import com.example.mediacenter.data.providerDisplayName
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.update.AppUpdateHolder
 import com.example.mediacenter.update.UpdateCheckResult
+import com.example.mediacenter.player.PlaybackMediaCache
 import com.example.mediacenter.ui.components.TvDialogButton
 import com.example.mediacenter.ui.components.TvBackButton
 import com.example.mediacenter.ui.components.TvScrollableText
@@ -116,6 +117,20 @@ fun SettingsScreen(onBack: () -> Unit) {
                 n
             }
             feedback = if (deleted > 0) "已清除 $deleted 个更新包" else "无更新缓存可清除"
+        }
+    }
+
+    fun clearMediaCache() {
+        // SimpleCache 逐资源移除是磁盘 IO,移出主线程。
+        scope.launch {
+            val removed = withContext(Dispatchers.IO) {
+                PlaybackMediaCache.clearAll(context)
+            }
+            feedback = when {
+                removed < 0 -> "清除播放缓存失败，请重试"
+                removed == 0 -> "播放缓存已是空的"
+                else -> "已清除 $removed 条播放缓存"
+            }
         }
     }
 
@@ -255,6 +270,16 @@ fun SettingsScreen(onBack: () -> Unit) {
                             title = "清除更新缓存",
                             message = "将删除已下载的 App 更新包。",
                             onConfirm = { clearUpdateCache() },
+                        )
+                    },
+                )
+                ActionRow(
+                    label = "清除播放缓存",
+                    onClick = {
+                        confirmAction = ConfirmAction(
+                            title = "清除播放缓存",
+                            message = "将清空已缓存的播放媒体片段（预取与边看边存的部分），下次播放重新从网络加载。",
+                            onConfirm = { clearMediaCache() },
                         )
                     },
                 )
