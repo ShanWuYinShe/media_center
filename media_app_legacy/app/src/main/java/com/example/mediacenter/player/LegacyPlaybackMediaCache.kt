@@ -16,6 +16,7 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -46,6 +47,10 @@ internal object LegacyPlaybackMediaCache {
 
     /** "<url>#<position>" -> 最后一次预取开始时间。 */
     private val prefetchedAt = ConcurrentHashMap<String, Long>()
+
+    /** 进行中的预取任务:开始播放时取消,避免与起播抢带宽。 */
+    // 不用 ConcurrentHashMap.newKeySet():KeySetView#clear 需要 API 24,legacy minSdk 19。
+    private val prefetchJobs = ConcurrentHashMap<Job, Boolean>()
 
     fun cache(context: Context): SimpleCache? {
         cache?.let { return it }
@@ -87,7 +92,7 @@ internal object LegacyPlaybackMediaCache {
     /** 解析成功后预热头部/尾部;失败静默。 */
     fun prefetchInitialBytes(context: Context, videoUrl: String, mimeType: String?, hasAudioTrack: Boolean) {
         val appContext = context.applicationContext
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+        val job = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             val cache = cache(appContext) ?: return@launch
             val totalBytes = if (shouldPrefetchTail(hasAudioTrack)) probeContentLength(videoUrl) else null
             prefetchPlan(videoUrl, mimeType, hasAudioTrack, totalBytes).forEach { span ->
@@ -96,6 +101,14 @@ internal object LegacyPlaybackMediaCache {
                 }
             }
         }
+        prefetchJobs[job] = true
+        job.invokeOnCompletion { prefetchJobs.remove(job) }
+    }
+
+    /** 开始播放时调用:取消仍在进行的预取,避免与起播抢带宽(已落盘的 span 保留)。 */
+    fun cancelPrefetches() {
+        prefetchJobs.keys.forEach { it.cancel() }
+        prefetchJobs.clear()
     }
 
     // ---------- 纯逻辑(JVM 可测) ----------
@@ -195,17 +208,15 @@ internal object LegacyPlaybackMediaCache {
                     "${System.currentTimeMillis() - startedAtMs}ms (pos=$position)",
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
+            // 起播取消预取属正常路径,静默透传(不打失败日志)。
             throw e
         } catch (e: Exception) {
             AppLog.w("Player", "media prefetch $tag failed: ${e.message}")
         } finally {
             runCatching { dataSource.close() }
-            val cachedBytes = runCatching { cache.getCachedBytes(url, position, length) }
-                .getOrDefault(0L)
-            AppLog.i(
-                "Perf",
-                "media prefetch $tag cached=${cachedBytes / 1024}KB (pos=$position)",
-            )
+            if (runCatching { cache.isCached(url, position, 1L) }.getOrDefault(false)) {
+                AppLog.i("Perf", "media prefetch $tag span cached (pos=$position)")
+            }
         }
     }
 
