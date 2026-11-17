@@ -13,8 +13,10 @@ import com.example.mediacenter.data.PlaybackQuality
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.ProviderInfo
 import com.example.mediacenter.data.VideoDetails
+import com.example.mediacenter.MediaCenterApp
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.log.AppLog
+import com.example.mediacenter.player.LegacyPlaybackMediaCache
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -202,6 +204,17 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                                     // 预取 id 集上限:淘汰最早记录,避免无限膨胀
                                     while (prefetchedPlaybackIds.size > MaxPrefetchedIds) {
                                         prefetchedPlaybackIds.remove(prefetchedPlaybackIds.iterator().next())
+                                    }
+                                    // 解析成功顺手预热首段媒体缓存(头部/尾部),
+                                    // 用户点播放时命中磁盘,起播不再等 CDN 握手。
+                                    result.options.firstOrNull()?.let { option ->
+                                        MediaCenterApp.instance?.let { context ->
+                                            LegacyPlaybackMediaCache.prefetchInitialBytes(
+                                                context,
+                                                option.url,
+                                                hasAudioTrack = !option.audioUrl.isNullOrBlank(),
+                                            )
+                                        }
                                     }
                                 }
                         }
@@ -680,6 +693,16 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
             runCatchingCancellable { repository.playbackOptions(details) }
                 .onSuccess { result ->
                     currentPlaybackQn = result.options.firstOrNull()?.qn ?: 0
+                    // 详情页解析成功也补一次首段预热(可见列表预取可能已淘汰该条)。
+                    result.options.firstOrNull()?.let { option ->
+                        MediaCenterApp.instance?.let { context ->
+                            LegacyPlaybackMediaCache.prefetchInitialBytes(
+                                context,
+                                option.url,
+                                hasAudioTrack = !option.audioUrl.isNullOrBlank(),
+                            )
+                        }
+                    }
                     mutableState.update { state ->
                         if (state.selected?.id != details.id) return@update state
                         state.copy(selected = state.selected.copy(playbackOptions = result.options),

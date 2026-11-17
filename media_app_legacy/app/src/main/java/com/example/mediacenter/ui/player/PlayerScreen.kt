@@ -14,6 +14,7 @@ import android.widget.ProgressBar
 import android.widget.LinearLayout
 import androidx.core.view.isNotEmpty
 import com.google.android.exoplayer2.C
+import com.example.mediacenter.player.LegacyPlaybackMediaCache
 import com.example.mediacenter.player.PlayerViewHolder
 import com.google.android.exoplayer2.audio.AudioAttributes
 import com.google.android.exoplayer2.DefaultLoadControl
@@ -110,7 +111,12 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
                         .build(),
                 )
                 .setMediaSourceFactory(
-                    DefaultMediaSourceFactory(dataSourceFactory)
+                    DefaultMediaSourceFactory(
+                        // 播放数据源套媒体磁盘缓存:预取的首段命中读磁盘,首播
+                        // write-through 边播边写,重看/续播直接命中(见
+                        // LegacyPlaybackMediaCache);缓存异常自动回退 dataSourceFactory。
+                        LegacyPlaybackMediaCache.cacheDataSourceFactory(this, dataSourceFactory),
+                    )
                         .setLoadErrorHandlingPolicy(playbackLoadErrorHandlingPolicy),
                 )
                 // 交给 ExoPlayer 管理音频焦点:被系统提示音/其他应用抢占焦点时自动暂停或压低,
