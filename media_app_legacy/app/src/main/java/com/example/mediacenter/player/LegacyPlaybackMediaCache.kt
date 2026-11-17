@@ -73,6 +73,15 @@ internal object LegacyPlaybackMediaCache {
             .setCache(cache)
             .setUpstreamDataSourceFactory(upstream)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+            .setEventListener(object : CacheDataSource.EventListener {
+                override fun onCachedBytesRead(cacheSizeBytes: Long, cachedBytesRead: Long) {
+                    AppLog.i("Perf", "playback cache read ${cachedBytesRead / 1024}KB")
+                }
+
+                override fun onCacheIgnored(reason: Int) {
+                    AppLog.w("Player", "playback cache ignored reason=$reason")
+                }
+            })
     }
 
     /** 解析成功后预热头部/尾部;失败静默。 */
