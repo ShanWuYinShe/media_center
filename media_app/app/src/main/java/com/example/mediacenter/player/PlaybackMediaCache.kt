@@ -21,6 +21,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -115,24 +116,28 @@ internal object PlaybackMediaCache {
         BackgroundWork.scope.launch {
             val cache = cache(appContext) ?: return@launch
             val videoUrl = (option.segments?.takeIf { it.size > 1 }?.first() ?: option.url)
-            if (videoUrl.isNotBlank()) {
-                prefetchSpan(cache, videoUrl, 0L, HEAD_BYTES, "head")
-            }
-            val audioUrl = option.audioUrl
-            if (!audioUrl.isNullOrBlank()) {
-                prefetchSpan(cache, audioUrl, 0L, HEAD_BYTES, "audio")
-            } else if (shouldPrefetchTail(option) && videoUrl.isNotBlank()) {
-                val totalBytes = probeContentLength(videoUrl)
-                if (totalBytes != null) {
-                    val tailBytes = minOf(TAIL_BYTES, totalBytes)
-                    if (totalBytes > tailBytes + HEAD_BYTES) {
-                        prefetchSpan(
-                            cache,
-                            videoUrl,
-                            totalBytes - tailBytes,
-                            tailBytes,
-                            "tail",
-                        )
+            // 头部与尾部分头并行:用户在详情页停留时间有限,串行(head→探测→tail)
+            // 会让尾部元数据在点播放后才就绪,首帧仍要等网络。
+            coroutineScope {
+                if (videoUrl.isNotBlank()) {
+                    launch { prefetchSpan(cache, videoUrl, 0L, HEAD_BYTES, "head") }
+                }
+                val audioUrl = option.audioUrl
+                if (!audioUrl.isNullOrBlank()) {
+                    launch { prefetchSpan(cache, audioUrl, 0L, HEAD_BYTES, "audio") }
+                } else if (shouldPrefetchTail(option) && videoUrl.isNotBlank()) {
+                    launch {
+                        val totalBytes = probeContentLength(videoUrl) ?: return@launch
+                        val tailBytes = minOf(TAIL_BYTES, totalBytes)
+                        if (totalBytes > tailBytes + HEAD_BYTES) {
+                            prefetchSpan(
+                                cache,
+                                videoUrl,
+                                totalBytes - tailBytes,
+                                tailBytes,
+                                "tail",
+                            )
+                        }
                     }
                 }
             }
@@ -217,16 +222,6 @@ internal object PlaybackMediaCache {
         }
     }
 
-    /** 调试:播放前检查缓存命中情况(只看日志,不影响播放)。 */
-    fun logPlaybackLookup(context: Context, url: String) {
-        val cache = cache(context) ?: return
-        val cachedBytes = runCatching { cache.getCachedBytes(url, 0L, HEAD_BYTES) }
-            .getOrDefault(0L)
-        AppLog.i(
-            "Perf",
-            "playback cache lookup ${cachedBytes / 1024}KB (url=${url.take(80)})",
-        )
-    }
 
     private fun prefetchUpstreamFactory(): DefaultHttpDataSource.Factory =
         DefaultHttpDataSource.Factory()
