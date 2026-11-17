@@ -32,7 +32,7 @@ B 站单视频（bvid）可能包含多个分 P（如 P1/P2/P3）：
 
 ## 服务端 URL 覆盖
 
-在 Android Studio 里可以把 `MEDIA_SERVER_URL=https://your-domain.example/api/media` 写入 `media_app/gradle.properties` 或用户级 `~/.gradle/gradle.properties`，然后重新 Sync。`MEDIA_SERVER_URL` 是 App 唯一需要的服务端配置；可以是服务根地址，也可以直接带 API 路径。API 契约由 `../media_server/API.md` 维护。
+在 Android Studio 里可以把 `MEDIA_SERVER_URL=https://your-domain.example/api/v1` 写入 `media_app/gradle.properties` 或用户级 `~/.gradle/gradle.properties`，然后重新 Sync。`MEDIA_SERVER_URL` 是 App 唯一需要的服务端配置；可以是服务根地址，也可以直接带 API 路径。API 契约由 `../media_server/API.md` 维护。
 
 首页从服务端读取 provider 与分类（分类顺序以服务端 `contentCategories.json` 编排为准），App 只消费 providers / categories / videos 三个目录接口。`VideoSummary.id` 是 nativeId：bilibili 由 App 本地解析播放，youtube 调 server 的 `/providers/youtube/resolve`（1080P+ 会返回分离的音轨，由播放服务用 `MergingMediaSource` 合流）。App 不处理直播、网页播放或外部打开。
 

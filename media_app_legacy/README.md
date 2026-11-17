@@ -6,7 +6,7 @@
 
 ## Android Studio 菜单工作流
 
-用 Android Studio 直接打开 `media_app/` 目录，等待 Gradle Sync 完成后即可通过菜单操作，不需要手动调用 `gradlew`。
+用 Android Studio 直接打开 `media_app_legacy/` 目录，等待 Gradle Sync 完成后即可通过菜单操作，不需要手动调用 `gradlew`。
 
 1. 编译：使用 **Build > Make Project**。
 2. 运行：选择工具栏的 `app` 运行配置，然后使用 **Run > Run 'app'**。
@@ -24,16 +24,16 @@ B 站单视频（bvid）可能包含多个分 P（如 P1/P2/P3）。App 自动�
 - **播放页按"下"**：多 P 视频先依次翻页（P1→P2→P3），播完所有 P 后跳转列表下一个视频
 - **单 P 视频**：按"下"直接跳到列表下一个视频
 
-下载器不落盘；每次播放前调用 `BilibiliApi.resolvePlayback` 获取最新直链。
+下载器不落盘；每次播放前调用 `BilibiliApi.resolvePlayback` 获取最新直链（播放媒体的首段磁盘缓存见下文，不影响"直链时效内播放"的语义）。
 
 如需覆盖默认服务端 URL：
 
-在 Android Studio 里可以把 `MEDIA_SERVER_URL=https://your-domain.example/api/media` 写入 `media_app/gradle.properties` 或用户级 `~/.gradle/gradle.properties`，然后重新 Sync。
+在 Android Studio 里可以把 `MEDIA_SERVER_URL=https://your-domain.example/api/v1` 写入 `media_app_legacy/gradle.properties` 或用户级 `~/.gradle/gradle.properties`，然后重新 Sync。
 
 `MEDIA_SERVER_URL` 是 App 唯一需要的服务端配置；可以是服务根地址，也可以直接带 API 路径。API 契约由 `../media_server/API.md` 维护。
 
 首页会从服务端读取内容分类，默认展示服务端返回的第一个分类；当前分类加载完成后会后台预热左右相邻分类第一页（仅目录型 provider，YouTube 实时分类不预热），遥控器切 chip 直接命中 10 分钟分类缓存。一级专区以服务端下发为准（见 `../media_server/src/contentCategories.json`）。App 只消费服务端返回的统一 opaque 视频 ID、opaque 播放选项 ID、`videoKind=vod` 和点播播放地址，并原样播放服务端返回的图片/播放 URL；不处理直播、视频来源、网页播放、外部打开或代理 URL 签名。
 
-播放前调用 BilibiliApi.resolvePlayback 获取最新播放地址，播放器使用 Media3 `DefaultHttpDataSource` 直接流式读取服务端返回的 URL；客户端不使用下载器或落盘媒体缓存。
+播放前调用 BilibiliApi.resolvePlayback 获取最新播放地址，播放器使用 ExoPlayer `DefaultHttpDataSource` 直接流式读取服务端返回的 URL（经 `player/LegacyPlaybackMediaCache` 的 `CacheDataSource` 包装）。客户端不做下载器；但会做**播放媒体磁盘缓存**：解析成功后预取首段头部 768KB + 尾部 2MB（moov 兜底），播放 write-through 边播边写，重看/续播直接命中本地缓存秒开（LRU 128MB，cacheDir 内，异常自动回退网络，日志 `Perf: media prefetch ...` / `playback cache read`）。
 
 启动后 App 会请求 `/api/app/update?versionCode=当前版本&variant=legacy` 检查更新；发现新版本时自动下载 APK、校验 SHA-256，然后拉起系统安装器。普通 Android TV 应用不能绕过系统权限静默安装，首次需要用户允许“安装未知应用”并确认安装。
