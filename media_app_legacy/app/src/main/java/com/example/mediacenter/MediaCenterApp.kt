@@ -4,6 +4,7 @@ import android.os.Build
 import androidx.multidex.MultiDexApplication
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.net.AppHttpClient
+import com.example.mediacenter.player.LegacyPlaybackMediaCache
 
 /**
  * 自定义 Application:尽早初始化文件日志并安装全局未捕获异常处理器,
@@ -11,8 +12,17 @@ import com.example.mediacenter.net.AppHttpClient
  * 这样「播放异常导致进程被杀、重启回首页」这类问题能在重启后从日志文件里查到根因。
  */
 class MediaCenterApp : MultiDexApplication() {
+
+    companion object {
+        /** 进程级 Application 引用:非 UI 组件(如 ViewModel)需要 context 时使用。 */
+        @Volatile
+        var instance: MediaCenterApp? = null
+            private set
+    }
+
     override fun onCreate() {
         super.onCreate()
+        instance = this
         AppLog.init(this)
         // 记录真实系统版本:国产 TV 盒子常在设置里显示 4.4.2 但 Build.VERSION 实际是 21+
         // (魔改以骗过 minSdk 检查)。这条日志用于戳穿"显示版本≠真实内核版本"。
@@ -38,6 +48,9 @@ class MediaCenterApp : MultiDexApplication() {
         AppHttpClient.installHttpsUrlConnectionDefault()
         // 启用 HTTP 磁盘缓存(缩略图复用):必须在任何图片请求前、Application 早期初始化。
         AppHttpClient.initCache(this)
+        // 播放媒体磁盘缓存:SimpleCache 首次构造要打开数据库/扫描目录,提前预热
+        // (老盒子上可占数十~数百 ms,见 LegacyPlaybackMediaCache)。
+        LegacyPlaybackMediaCache.cache(this)
         installCrashHandler()
     }
 
