@@ -37,5 +37,5 @@ APK 有 **normal + legacy 两个变体**：normal 源码即本目录；legacy �
   `media-center-app.apk` 不是上传名）。
 - **manifest**：随 APK 生成 `app-update.json` 与 `app-update-legacy.json` 两份
   （versionCode / versionName / SHA256 / apkFilename）。
-- **自动化（推荐）**：仓库变量 `ENABLE_AUTO_DEPLOY=true` 且配置 deploy secrets 时，发版 workflow 自动把 APK 与两份 manifest 写入该目录（保留最近 5 个版本化 APK；manifest 热加载，无需重启）；手动上传仅作兜底。
+- **自动化（推荐）**：仓库变量 `ENABLE_AUTO_DEPLOY=true` 且配置 deploy secrets 时，发版 workflow 自动把 APK 与两份 manifest 写入该目录（normal 与 legacy 各自保留最近 5 个版本化 APK；manifest 热加载，无需重启）；手动上传仅作兜底。
 - **一键脚本**：`scripts/release-apk.sh` 完成构建 + 命名 + manifest 生成（+ 可选 scp 上传）；GitHub Actions workflow 以 `--out` 调用同一脚本。脚本头部注释是 manifest 字段与完整流程的唯一维护处，本文件不重复。
