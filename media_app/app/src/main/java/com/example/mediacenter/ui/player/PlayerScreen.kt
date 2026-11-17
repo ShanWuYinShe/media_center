@@ -25,7 +25,6 @@ import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.theme.BackgroundDark
 import com.example.mediacenter.util.BackgroundWork
-import com.example.mediacenter.util.DevicePerformance
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -68,12 +67,9 @@ fun PlayerScreen(
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
     val maxInitialQualityQn = remember(configuration.screenHeightDp, density.density) {
-        val displayHeightPx = (configuration.screenHeightDp * density.density).roundToInt()
-        if (DevicePerformance.isLowEnd) {
-            minOf(displayHeightPx, PlaybackTuning.LOW_END_MAX_QN)
-        } else {
-            displayHeightPx
-        }
+        PlaybackTuning.maxInitialQualityQn(
+            (configuration.screenHeightDp * density.density).roundToInt(),
+        )
     }
     val viewModel: PlayerViewModel = viewModel(
         key = "player_${videoId}_p$initialPage",
@@ -103,7 +99,11 @@ fun PlayerScreen(
     LaunchedEffect(nextPrefetchTarget) {
         val targetId = nextPrefetchTarget ?: return@LaunchedEffect
         delay(NEXT_PREFETCH_DELAY_MS)
-        PlaybackPrefetcher.prefetch(MediaRepositoryHolder.repository, targetId)
+        PlaybackPrefetcher.prefetch(
+            MediaRepositoryHolder.repository,
+            targetId,
+            maxInitialQualityQn = maxInitialQualityQn,
+        )
     }
 
     // 合集无缝切集:新一集登记观看历史(首页"继续观看"可见),不阻塞切集。

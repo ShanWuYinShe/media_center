@@ -39,14 +39,18 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.PlaybackPrefetcher
 import com.example.mediacenter.data.PlaybackPositionStore
+import com.example.mediacenter.data.PlaybackTuning
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.playbackStorageKey
 import com.example.mediacenter.data.providerDisplayName
@@ -80,9 +84,21 @@ fun DetailScreen(
     BackHandler(onBack = onBack)
     // 停留 1.2s 才预取播放地址:快速浏览列表不触发,避免把 YouTube 冷解析
     // (占用 extractor 并发)浪费在"只看一眼"的视频上;玩家点"播放"时通常已就绪。
+    // 按播放页同一口径的自动选档上限预取首段媒体,播放页才会命中缓存。
+    val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
+    val prefetchMaxQn = remember(configuration.screenHeightDp, density.density) {
+        PlaybackTuning.maxInitialQualityQn(
+            (configuration.screenHeightDp * density.density).roundToInt(),
+        )
+    }
     LaunchedEffect(video.id) {
         delay(1200)
-        PlaybackPrefetcher.prefetch(MediaRepositoryHolder.repository, video.id)
+        PlaybackPrefetcher.prefetch(
+            MediaRepositoryHolder.repository,
+            video.id,
+            maxInitialQualityQn = prefetchMaxQn,
+        )
     }
     val provider = MediaRepositoryHolder.repository.currentProvider
 

@@ -1,6 +1,7 @@
 package com.example.mediacenter.data
 
 import com.example.mediacenter.log.AppLog
+import com.example.mediacenter.player.PlaybackMediaCache
 import com.example.mediacenter.util.BackgroundWork
 import com.example.mediacenter.util.DevicePerformance
 import kotlinx.coroutines.CancellationException
@@ -33,7 +34,13 @@ object PlaybackPrefetcher {
     private val inflight = HashMap<Key, Job>()
 
     /** 发起预取;已有未过期缓存或在途任务时直接复用。失败只记日志。 */
-    fun prefetch(repository: MediaRepositoryApi, videoId: String, qn: Int? = null) {
+    fun prefetch(
+        repository: MediaRepositoryApi,
+        videoId: String,
+        qn: Int? = null,
+        // 自动选档上限:与播放页同一口径,预取的首段媒体才会被播放页真正命中。
+        maxInitialQualityQn: Int = Int.MAX_VALUE,
+    ) {
         if (videoId.isBlank()) return
         val key = keyOf(repository, videoId, qn)
         val alreadyPending = synchronized(lock) {
@@ -43,7 +50,14 @@ object PlaybackPrefetcher {
         val startedAtMs = System.currentTimeMillis()
         val job = BackgroundWork.scope.launch {
             try {
-                put(key, repository.resolvePlayback(videoId, qn))
+                val result = repository.resolvePlayback(videoId, qn)
+                put(key, result)
+                // 解析结果一到就预取首段媒体(详情页停留通常 >=1s,用户点播放前可完成大部分)。
+                // 按自动选档上限先收敛,预取地址才是播放页实际会播的首档。
+                val tuned = PlaybackTuning.preferInitialOption(result, maxInitialQualityQn)
+                MediaRepositoryHolder.applicationContext?.let { context ->
+                    PlaybackMediaCache.prefetchInitialBytes(context, tuned)
+                }
                 AppLog.i(
                     "Perf",
                     "prefetch ready $videoId qn=${qn ?: "auto"} " +
