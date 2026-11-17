@@ -44,7 +44,7 @@ App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部�
 - **必填 secrets**（tag 发版缺失会直接失败，避免产出 YouTube 401 或签名不稳定的包）：`APP_API_TOKEN`、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_STORE_PASSWORD`、`ANDROID_KEYSTORE_KEY_ALIAS`、`ANDROID_KEYSTORE_KEY_PASSWORD`。一次性写入：`scripts/setup-gh-release-secrets.sh --apply`（不打印密钥；`--debug-defaults` 适用于 Android 标准 debug keystore）。
 - **签名必须稳定**：APK 签名密钥不变才能原位升级；沿用现行发版 keystore（推荐）即可无缝升级，换新密钥后老用户需卸载重装。
 - **可选 variables**：`MEDIA_SERVER_URL`（构建期服务端基址，留空用 Gradle 默认）、`ANDROID_EXPECTED_CERT_SHA256`（签名证书 SHA-256 强校验，配错会让发版失败）、`ENABLE_AUTO_DEPLOY`（`true` 时发版后自动部署）、`DEPLOY_REMOTE_DIR`（默认 `media_center/deploy/data/generated`）。
-- **可选自动部署 secrets**：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`、`DEPLOY_KNOWN_HOSTS`（建议必填，否则回退 ssh-keyscan）；只写 APK + 两份 manifest，media_server 热加载、无需重启，旧 APK 自动保留最近 5 个。
+- **可选自动部署 secrets**：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`、`DEPLOY_KNOWN_HOSTS`（建议必填，否则回退 ssh-keyscan）；只写 APK + 两份 manifest，media_server 热加载、无需重启，旧 APK 按 normal/legacy 各自保留最近 5 个。
 - **本地构建仍可临时用**：`scripts/release-apk.sh`（不带 `--upload`）仅作调试手段；正式发版以 tag 触发的 Actions 产物为准。
 - **GitHub Release 资产命名**：APK 资产带变体前缀便于手动下载区分——`media-center-app-normal-v<versionCode>-<sha12>.apk` / `media-center-app-legacy-v<versionCode>-<sha12>.apk`（由 release workflow 从 manifest 复制重命名；服务器更新通道仍使用 manifest 内不带变体的 `apkFilename`，两者不要混用）。
 

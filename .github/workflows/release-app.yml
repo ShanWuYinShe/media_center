@@ -423,11 +423,16 @@ jobs:
           scp "${SSH_OPTS[@]}" dist/*.apk dist/app-update.json dist/app-update-legacy.json \
             "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/"
           # media_server 每次请求现读 manifest，文件就位即生效，无需重启；只保留最近 5 个版本化 APK。
+          # 两个变体命名都要清:media-center-app-v*.apk(normal 服务器名)与
+          # media-center-app-legacy-v*.apk(legacy 服务器名,#51 引入变体前缀后 legacy
+          # 不再匹配 media-center-app-v* —— 漏清会导致旧 legacy APK 无限积累)。
           ssh "${SSH_OPTS[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" bash -s -- "${REMOTE_DIR}" <<'REMOTE'
           set -euo pipefail
           cd "$1"
-          find . -maxdepth 1 -name 'media-center-app-v*.apk' -printf '%T@ %p\n' \
-            | sort -rn | tail -n +6 | cut -d' ' -f 2- | xargs -r -d '\n' rm -f --
+          for pattern in 'media-center-app-v*.apk' 'media-center-app-legacy-v*.apk'; do
+            find . -maxdepth 1 -name "$pattern" -printf '%T@ %p\n' \
+              | sort -rn | tail -n +6 | cut -d' ' -f 2- | xargs -r -d '\n' rm -f --
+          done
           REMOTE
           {
             echo "## APK 已部署"
