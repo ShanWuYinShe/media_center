@@ -3,6 +3,8 @@ package com.example.mediacenter.player
 import com.example.mediacenter.data.PlaybackOption
 import com.example.mediacenter.data.PlaybackResult
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PlaybackMediaCacheTest {
@@ -88,6 +90,16 @@ class PlaybackMediaCacheTest {
         assertEquals(
             emptyList<String>(),
             PlaybackMediaCache.prefetchTargets(option(url = "https://cdn.example.com/manifest.mpd")),
+        )
+    }
+
+    @Test
+    fun shouldPrefetchTail_onlyForMergedProgressiveStream() {
+        assertTrue(PlaybackMediaCache.shouldPrefetchTail(option()))
+        assertFalse(
+            PlaybackMediaCache.shouldPrefetchTail(
+                option(audioUrl = "https://audio.example.com/track.m4s"),
+            ),
         )
     }
 
