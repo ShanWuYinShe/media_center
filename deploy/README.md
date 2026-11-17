@@ -67,7 +67,7 @@ media_server/Dockerfile 与 `.github/workflows/ci.yml` 的同名字段仍一致
   镜像 tag 为部署时 `git describe`（不可变，回滚 = `IMAGE_TAG=<旧tag> make up <svc...>`）。
 - **分类/凭证/App 发版**：编辑 `data/generated/` 下对应文件后
   `make restart media_server`（凭证与 manifest 热加载，APK 换文件即可）。
-- **App APK 自动化发布**：push `vX.Y.Z` tag 后由 GitHub Actions 构建并发布 GitHub Release；配置仓库变量 `ENABLE_AUTO_DEPLOY=true` 与部署 secrets（`DEPLOY_HOST` / `DEPLOY_USER` / `DEPLOY_SSH_KEY` / `DEPLOY_KNOWN_HOSTS`）后会自动把 APK 与两份 manifest 写入 `data/generated/`（只保留最近 5 个版本化 APK，无需重启）。配置见仓库根 AGENTS.md「APK 发版（GitHub Actions）」。
+- **App APK 自动化发布**：push `vX.Y.Z` tag 后由 GitHub Actions 构建并发布 GitHub Release；配置仓库变量 `ENABLE_AUTO_DEPLOY=true` 与部署 secrets（`DEPLOY_HOST` / `DEPLOY_USER` / `DEPLOY_SSH_KEY` / `DEPLOY_KNOWN_HOSTS`）后会自动把 APK 与两份 manifest 写入 `data/generated/`（normal 与 legacy 各自只保留最近 5 个版本化 APK，无需重启）。配置见仓库根 AGENTS.md「APK 发版（GitHub Actions）」。
 - **catalog 审校/导入**：`/internal/*` 不经公网（nginx 404），经宿主机调用：
   `docker exec media_center-media_server-1 wget -qO- --header "X-Internal-Token: $TOKEN" http://127.0.0.1:8787/internal/catalog/overview`。
 - **过渡期别名**：`/api/*`（无 v1）仅供 workwork nginx 过渡反代与存量 App，
