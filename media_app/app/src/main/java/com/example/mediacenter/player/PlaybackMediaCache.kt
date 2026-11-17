@@ -50,7 +50,9 @@ internal object PlaybackMediaCache {
     private const val MAX_BYTES = 256L * 1024 * 1024
     private const val LOW_END_MAX_BYTES = 128L * 1024 * 1024
     private const val HEAD_BYTES = 768L * 1024
-    private const val TAIL_BYTES = 512L * 1024
+    // B 站 durl 的 moov 在文件末尾,长视频可达 1~2MB;512KB 可能盖不住 moov 起点,
+    // 播放器仍要回源取尾部元数据(实测 512KB 时冷启动仍慢),取 2MB 覆盖典型大小。
+    private const val TAIL_BYTES = 2L * 1024 * 1024
     // CacheDataSink 建议 fragment >= 2MB;预取 span 本身不大,2MB 让每个 DataSpec 一个 span。
     private const val FRAGMENT_BYTES = 2L * 1024 * 1024
     private const val PREFETCH_TTL_MS = 5 * 60 * 1000L
