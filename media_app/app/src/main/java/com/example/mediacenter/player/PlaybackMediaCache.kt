@@ -69,7 +69,8 @@ internal object PlaybackMediaCache {
     private val prefetchedAt = ConcurrentHashMap<String, Long>()
 
     /** 进行中的预取任务:开始播放时取消,避免与起播抢带宽。 */
-    private val prefetchJobs = ConcurrentHashMap.newKeySet<Job>()
+    // 不用 ConcurrentHashMap.newKeySet():KeySetView#clear 需要 API 24,本机 minSdk 23。
+    private val prefetchJobs = ConcurrentHashMap<Job, Boolean>()
 
     /** 进程启动后台预热缓存单例(SimpleCache 首次构造要打开 DB/扫描目录)。 */
     fun warmUp(context: Context) {
@@ -149,13 +150,13 @@ internal object PlaybackMediaCache {
                 }
             }
         }
-        prefetchJobs.add(job)
+        prefetchJobs[job] = true
         job.invokeOnCompletion { prefetchJobs.remove(job) }
     }
 
     /** 开始播放时调用:取消仍在进行的预取,避免和起播抢带宽(已落盘的 span 保留)。 */
     fun cancelPrefetches() {
-        prefetchJobs.forEach { it.cancel() }
+        prefetchJobs.keys.forEach { it.cancel() }
         prefetchJobs.clear()
     }
 
