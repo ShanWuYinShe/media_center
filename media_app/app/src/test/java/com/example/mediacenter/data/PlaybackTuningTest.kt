@@ -62,4 +62,10 @@ class PlaybackTuningTest {
         val unknown = PlaybackResult(options = listOf(option(0), option(480)))
         assertSame(unknown, PlaybackTuning.preferInitialOption(unknown, maxQn = 720))
     }
+
+    @Test
+    fun `自动选档上限在非低端设备取屏幕高度`() {
+        // JVM 单测不会调用 DevicePerformance.init,默认非低端。
+        assertEquals(1080, PlaybackTuning.maxInitialQualityQn(1080))
+    }
 }

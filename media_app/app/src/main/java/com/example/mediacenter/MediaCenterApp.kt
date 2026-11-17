@@ -71,6 +71,12 @@ class MediaCenterApp : Application(), ImageLoaderFactory {
                 .onFailure { AppLog.w("App", "warm repository failed: ${it.message}", it) }
             runCatching { Coil.imageLoader(this@MediaCenterApp) }
                 .onFailure { AppLog.w("App", "warm image loader failed: ${it.message}", it) }
+            // 播放首段缓存:SimpleCache 首次构造要打开数据库/扫描目录,提前到进程启动预热。
+            runCatching {
+                com.example.mediacenter.player.PlaybackMediaCache.warmUp(this@MediaCenterApp)
+            }.onFailure {
+                AppLog.w("App", "warm playback cache failed: ${it.message}", it)
+            }
         }
     }
 

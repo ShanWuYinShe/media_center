@@ -1,5 +1,7 @@
 package com.example.mediacenter.data
 
+import com.example.mediacenter.util.DevicePerformance
+
 /**
  * 播放清晰度默认策略(纯逻辑,可 JVM 单测)。
  *
@@ -14,6 +16,18 @@ package com.example.mediacenter.data
 object PlaybackTuning {
     /** 低端机默认清晰度上限(YouTube qn=height)。 */
     internal const val LOW_END_MAX_QN = 720
+
+    /**
+     * 自动选档上限(纯逻辑):设备档位与屏幕物理高度取小;低端机再压到 720P。
+     * 播放页与详情页预取用同一口径,保证预取的媒体地址与播放页实际首档一致
+     * (否则预取缓存命中不了)。
+     */
+    fun maxInitialQualityQn(displayHeightPx: Int): Int =
+        if (DevicePerformance.isLowEnd) {
+            minOf(displayHeightPx, LOW_END_MAX_QN)
+        } else {
+            displayHeightPx
+        }
 
     /**
      * 自动选档收敛:当前最高档高于 [maxQn] 时,把 ≤[maxQn] 的最高档提到首位。
