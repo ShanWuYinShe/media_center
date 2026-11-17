@@ -27,8 +27,8 @@ import kotlinx.coroutines.withContext
  *
  * - 解析成功后预取头部 768KB(老版音视频合一,moov 可能还在文件末尾,同样补尾部
  *   2MB,由 Range 探测总长决定);
- * - 播放数据源套 CacheDataSource:命中读磁盘,未命中/损坏自动回退网络;默认
- *   write-through,首播边播边写缓存,重看/续播直接命中;
+ * - 播放数据源套 CacheDataSource:命中读磁盘,未命中/损坏自动回退网络;
+ *   write-through 显式声明,首播边播边写缓存,重看/续播直接命中;
  * - LRU 128MB,放 cacheDir;任何异常静默,不影响播放。
  */
 internal object LegacyPlaybackMediaCache {
@@ -71,12 +71,21 @@ internal object LegacyPlaybackMediaCache {
         }
     }
 
-    /** 播放用 DataSource:优先读缓存,未命中回退 [upstream];缓存异常时忽略缓存。 */
+    /**
+     * 播放用 DataSource:优先读缓存,未命中回退 [upstream];缓存异常时忽略缓存。
+     *
+     * write-through 是刻意行为(与新版 PlaybackMediaCache 口径一致):播放器边播
+     * 边把读到的数据写进缓存,首播填充缓存,重看/续播直接命中。显式声明而非
+     * 依赖 Factory 默认,防止后人误改成只读(新版 #54 同款修正)。
+     */
     fun cacheDataSourceFactory(context: Context, upstream: DataSource.Factory): DataSource.Factory {
         val cache = cache(context) ?: return upstream
         return CacheDataSource.Factory()
             .setCache(cache)
             .setUpstreamDataSourceFactory(upstream)
+            .setCacheWriteDataSinkFactory(
+                CacheDataSink.Factory().setCache(cache).setFragmentSize(FRAGMENT_BYTES),
+            )
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
             .setEventListener(object : CacheDataSource.EventListener {
                 override fun onCachedBytesRead(cacheSizeBytes: Long, cachedBytesRead: Long) {
