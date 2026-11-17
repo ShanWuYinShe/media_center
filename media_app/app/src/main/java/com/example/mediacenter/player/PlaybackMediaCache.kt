@@ -42,7 +42,10 @@ import kotlinx.coroutines.withContext
  *   音视频分离(YouTube DASH)的 moov 在头部,不需要尾部。
  *
  * 设计取舍:
- * - 缓存只读用于播放(不额外写盘,低端盒子避免播放时 IO),写入只发生在预取;
+ * - 播放侧 write-through(见 [cacheDataSourceFactory]):首播边播边写缓存,重看/续播
+ *   直接命中;写入在 Loader 线程顺序进行,LRU 封顶,不占主线程、不影响帧率;
+ * - 预取在起播前填充头部/尾部,让首播也能命中(YouTube 解析耗时 20-30s,用户常
+ *   在解析完成瞬间点播,预取会被起播取消——此时靠首播 write-through 兜底重看);
  * - HLS/DASH 清单与 data: URL 不预取(清单小、分段未知);多段 durl 取第一段;
  * - 同 URL+位置 5 分钟内只预取一次,最多保留 [MAX_PREFETCH_KEYS] 个记录;
  * - 失败静默:预取只是加速,任何异常都不能影响正常播放。
@@ -98,12 +101,22 @@ internal object PlaybackMediaCache {
         }
     }
 
-    /** 播放用 DataSource:优先读缓存,未命中回退 [upstream];缓存异常时忽略缓存。 */
+    /**
+     * 播放用 DataSource:优先读缓存,未命中回退 [upstream];缓存异常时忽略缓存。
+     *
+     * write-through 是刻意行为(不是 Factory 隐式默认):播放器边播边把读到的数据写进
+     * 缓存(Loader 线程顺序写,LRU 封顶,不占主线程),首次观看即填充缓存——这对
+     * YouTube 这类"解析耗时长、预取常被起播取消"的源尤其重要:首播写缓存,重看
+     * 直接命中(实测重看首帧 7.7s → 0.7s)。显式声明而非依赖默认,防止后人误改。
+     */
     fun cacheDataSourceFactory(context: Context, upstream: DataSource.Factory): DataSource.Factory {
         val cache = cache(context) ?: return upstream
         return CacheDataSource.Factory()
             .setCache(cache)
             .setUpstreamDataSourceFactory(upstream)
+            .setCacheWriteDataSinkFactory(
+                CacheDataSink.Factory().setCache(cache).setFragmentSize(FRAGMENT_BYTES),
+            )
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
             .setEventListener(object : CacheDataSource.EventListener {
                 override fun onCachedBytesRead(cacheSizeBytes: Long, cachedBytesRead: Long) {

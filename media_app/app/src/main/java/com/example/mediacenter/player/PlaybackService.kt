@@ -33,9 +33,10 @@ class PlaybackService : MediaSessionService() {
             .setDefaultRequestProperties(BILI_CDN_HEADERS - "User-Agent")
             // B 站 CDN 个别直链会 http↔https 302,默认不跟随跨协议重定向会直接加载失败
             .setAllowCrossProtocolRedirects(true)
-        // 播放数据源再套一层 Media3 SimpleCache:解析后预取的首段媒体命中后
-        // 直接读磁盘,不再等 CDN 握手/首字节(预取与缓存实现见 PlaybackMediaCache)。
-        // 缓存不可用/未命中/损坏时自动回退 httpFactory,播放行为不变。
+        // 播放数据源再套一层 Media3 SimpleCache:预取的首段命中后直接读磁盘,不再等
+        // CDN 握手/首字节;同时 write-through 边播边写缓存,重看/续播直接命中
+        // (预取与缓存实现见 PlaybackMediaCache)。缓存不可用/未命中/损坏时自动回退
+        // httpFactory,播放行为不变。
         val cacheFactory = PlaybackMediaCache.cacheDataSourceFactory(this, httpFactory)
         // 视频轨 + 独立音轨(YouTube 1080P+ 的 DASH 形态)在服务端本地合流;
         // MediaController 只能传 MediaItem,合流决策因此放在 MediaSource 层。
