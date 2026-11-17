@@ -62,6 +62,7 @@ import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.data.playbackStorageKey
+import com.example.mediacenter.player.PlaybackMediaCache
 import com.example.mediacenter.player.PlaybackMediaSourceFactory
 import com.example.mediacenter.player.PlaybackServiceKeepAlive
 import com.example.mediacenter.ui.components.ErrorView
@@ -384,6 +385,8 @@ internal fun PlayerContent(
         shouldResume = canResume && pendingSeekMs <= 0L
         c.stop()
         c.clearMediaItems()
+        // 起播优化验证:播放前缓存命中情况(仅日志,不影响播放)。
+        PlaybackMediaCache.logPlaybackLookup(context, stream.url)
         val item = MediaItem.Builder()
             .setUri(stream.url)
             .apply { stream.mimeType?.let { setMimeType(it) } }

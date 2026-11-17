@@ -116,18 +116,17 @@ internal object PlaybackMediaCache {
             val cache = cache(appContext) ?: return@launch
             val videoUrl = (option.segments?.takeIf { it.size > 1 }?.first() ?: option.url)
             if (videoUrl.isNotBlank()) {
-                prefetchSpan(appContext, cache, videoUrl, 0L, HEAD_BYTES, "head")
+                prefetchSpan(cache, videoUrl, 0L, HEAD_BYTES, "head")
             }
             val audioUrl = option.audioUrl
             if (!audioUrl.isNullOrBlank()) {
-                prefetchSpan(appContext, cache, audioUrl, 0L, HEAD_BYTES, "audio")
+                prefetchSpan(cache, audioUrl, 0L, HEAD_BYTES, "audio")
             } else if (shouldPrefetchTail(option) && videoUrl.isNotBlank()) {
                 val totalBytes = probeContentLength(videoUrl)
                 if (totalBytes != null) {
                     val tailBytes = minOf(TAIL_BYTES, totalBytes)
                     if (totalBytes > tailBytes + HEAD_BYTES) {
                         prefetchSpan(
-                            appContext,
                             cache,
                             videoUrl,
                             totalBytes - tailBytes,
@@ -169,7 +168,6 @@ internal object PlaybackMediaCache {
     }
 
     private suspend fun prefetchSpan(
-        context: Context,
         cache: SimpleCache,
         url: String,
         position: Long,
@@ -210,7 +208,24 @@ internal object PlaybackMediaCache {
             AppLog.w("Player", "media prefetch $tag failed: ${e.message}")
         } finally {
             runCatching { dataSource.close() }
+            val cachedBytes = runCatching { cache.getCachedBytes(url, position, length) }
+                .getOrDefault(0L)
+            AppLog.i(
+                "Perf",
+                "media prefetch $tag cached=${cachedBytes / 1024}KB (pos=$position)",
+            )
         }
+    }
+
+    /** 调试:播放前检查缓存命中情况(只看日志,不影响播放)。 */
+    fun logPlaybackLookup(context: Context, url: String) {
+        val cache = cache(context) ?: return
+        val cachedBytes = runCatching { cache.getCachedBytes(url, 0L, HEAD_BYTES) }
+            .getOrDefault(0L)
+        AppLog.i(
+            "Perf",
+            "playback cache lookup ${cachedBytes / 1024}KB (url=${url.take(80)})",
+        )
     }
 
     private fun prefetchUpstreamFactory(): DefaultHttpDataSource.Factory =
