@@ -173,6 +173,25 @@ internal object PlaybackMediaCache {
         prefetchJobs.clear()
     }
 
+    /**
+     * 清空全部媒体缓存(设置页「清除播放媒体缓存」入口,用户主动自救用)。
+     * 预取去重记录一并清空(下次解析会重新预取);返回清除的资源数。
+     * SimpleCache 无整体 clear,逐 key removeResource;失败返回 -1 由 UI 提示重试。
+     */
+    fun clearAll(context: Context): Int {
+        val cache = cache(context) ?: return -1
+        return runCatching {
+            var removed = 0
+            cache.getKeys().toList().forEach { key ->
+                runCatching { cache.removeResource(key) }
+                    .onSuccess { removed++ }
+            }
+            prefetchedAt.clear()
+            AppLog.i("Player", "playback cache cleared: $removed resources")
+            removed
+        }.getOrDefault(-1)
+    }
+
     /** 该 URL+位置 是否需要预取:近期已预取过或已缓存则跳过。 */
     private fun markPrefetch(cache: SimpleCache, url: String, position: Long, length: Long): Boolean {
         val key = "$url#$position"
