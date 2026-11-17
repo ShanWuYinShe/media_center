@@ -226,4 +226,7 @@ dependencies {
     // Java 8+ 核心 API 脱糖:为 API 19 提供 java.time 等缺失 API 的实现。
     // 2.1.5 支持 minSdk 19(media_app 同版本)。
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+
+    // JVM 单测(与 media_app 同版本):纯逻辑(缓存预取计划等)本地可测。
+    testImplementation("junit:junit:4.13.2")
 }

@@ -85,21 +85,58 @@ internal object LegacyPlaybackMediaCache {
     }
 
     /** 解析成功后预热头部/尾部;失败静默。 */
-    fun prefetchInitialBytes(context: Context, videoUrl: String, hasAudioTrack: Boolean) {
+    fun prefetchInitialBytes(context: Context, videoUrl: String, mimeType: String?, hasAudioTrack: Boolean) {
         val appContext = context.applicationContext
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             val cache = cache(appContext) ?: return@launch
-            if (markPrefetch(cache, videoUrl, 0L, HEAD_BYTES)) {
-                prefetchSpan(cache, videoUrl, 0L, HEAD_BYTES, "head")
-            }
-            if (hasAudioTrack) return@launch
-            val totalBytes = probeContentLength(videoUrl) ?: return@launch
-            val tailBytes = minOf(TAIL_BYTES, totalBytes)
-            if (totalBytes > tailBytes + HEAD_BYTES &&
-                markPrefetch(cache, videoUrl, totalBytes - tailBytes, tailBytes)) {
-                prefetchSpan(cache, videoUrl, totalBytes - tailBytes, tailBytes, "tail")
+            val totalBytes = if (shouldPrefetchTail(hasAudioTrack)) probeContentLength(videoUrl) else null
+            prefetchPlan(videoUrl, mimeType, hasAudioTrack, totalBytes).forEach { span ->
+                if (markPrefetch(cache, span.url, span.position, span.length)) {
+                    prefetchSpan(cache, span.url, span.position, span.length, span.tag)
+                }
             }
         }
+    }
+
+    // ---------- 纯逻辑(JVM 可测) ----------
+
+    /** 一个待预取区间:tag 用于日志区分 head/tail。 */
+    internal data class PrefetchSpan(val tag: String, val url: String, val position: Long, val length: Long)
+
+    /**
+     * 待预取区间计划(纯逻辑):头部 [HEAD_BYTES] 必取;音视频合一的 progressive 流
+     * (无独立音轨,moov 可能仍在文件末尾)再补尾部 [TAIL_BYTES]——总长不足
+     * 头+尾时不重复取;HLS/DASH 清单与 data:/blob: 不预取(中间件/分段未知)。
+     * [totalBytes] 为运行期 Range 探测结果,纯函数调用方可传 null 只取头部意图。
+     */
+    internal fun prefetchPlan(
+        videoUrl: String,
+        mimeType: String? = null,
+        hasAudioTrack: Boolean = false,
+        totalBytes: Long? = null,
+    ): List<PrefetchSpan> {
+        if (!isStreamCacheable(videoUrl, mimeType)) return emptyList()
+        if (videoUrl.isBlank()) return emptyList()
+        val spans = mutableListOf(PrefetchSpan("head", videoUrl, 0L, HEAD_BYTES))
+        if (hasAudioTrack) return spans
+        val total = totalBytes ?: return spans
+        val tailBytes = minOf(TAIL_BYTES, total)
+        if (total > tailBytes + HEAD_BYTES) {
+            spans.add(PrefetchSpan("tail", videoUrl, total - tailBytes, tailBytes))
+        }
+        return spans
+    }
+
+    /** 尾部预取条件(纯逻辑):仅音视频合一(无独立音轨)的流需要尾部 moov 兜底。 */
+    internal fun shouldPrefetchTail(hasAudioTrack: Boolean): Boolean = !hasAudioTrack
+
+    /** URL 是否可缓存(纯逻辑):清单类型与 data:/blob: 一律不预取。 */
+    internal fun isStreamCacheable(url: String, mimeType: String? = null): Boolean {
+        val lower = url.lowercase()
+        if (lower.startsWith("data:") || lower.startsWith("blob:")) return false
+        if (lower.contains(".m3u8") || lower.contains(".mpd")) return false
+        val mime = mimeType.orEmpty().lowercase()
+        return !mime.contains("mpegurl") && !mime.contains("dash")
     }
 
     private fun markPrefetch(cache: SimpleCache, url: String, position: Long, length: Long): Boolean {

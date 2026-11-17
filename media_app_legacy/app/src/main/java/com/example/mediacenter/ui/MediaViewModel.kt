@@ -212,6 +212,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                                             LegacyPlaybackMediaCache.prefetchInitialBytes(
                                                 context,
                                                 option.url,
+                                                option.mimeType,
                                                 hasAudioTrack = !option.audioUrl.isNullOrBlank(),
                                             )
                                         }
@@ -699,6 +700,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                             LegacyPlaybackMediaCache.prefetchInitialBytes(
                                 context,
                                 option.url,
+                                option.mimeType,
                                 hasAudioTrack = !option.audioUrl.isNullOrBlank(),
                             )
                         }
