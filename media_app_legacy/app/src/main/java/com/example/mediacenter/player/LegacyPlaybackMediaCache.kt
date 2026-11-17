@@ -163,6 +163,12 @@ internal object LegacyPlaybackMediaCache {
             AppLog.w("Player", "media prefetch $tag failed: ${e.message}")
         } finally {
             runCatching { dataSource.close() }
+            val cachedBytes = runCatching { cache.getCachedBytes(url, position, length) }
+                .getOrDefault(0L)
+            AppLog.i(
+                "Perf",
+                "media prefetch $tag cached=${cachedBytes / 1024}KB (pos=$position)",
+            )
         }
     }
 
