@@ -62,6 +62,7 @@ import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.data.playbackStorageKey
+import com.example.mediacenter.player.PlaybackMediaCache
 import com.example.mediacenter.player.PlaybackMediaSourceFactory
 import com.example.mediacenter.player.PlaybackServiceKeepAlive
 import com.example.mediacenter.ui.components.ErrorView
@@ -340,6 +341,8 @@ internal fun PlayerContent(
     // stream 变化(切清晰度/分P)或重试时加载流;controller 连接成功后才会真正执行
     LaunchedEffect(controller, stream, loadEpoch) {
         val c = controller ?: return@LaunchedEffect
+        // 起播优先:取消仍在进行的首段预取,避免与播放器抢带宽(已落盘的缓存保留)。
+        PlaybackMediaCache.cancelPrefetches()
         playerError = null
         // 换源保进度:同分P重载前捕获精确位置;stop 后位置归零,捕获值经
         // pendingSeekMs 传递到 READY 回调。首次加载时 controller 位置为 0,

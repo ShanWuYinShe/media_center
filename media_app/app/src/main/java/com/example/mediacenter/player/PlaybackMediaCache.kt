@@ -20,7 +20,9 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -65,6 +67,9 @@ internal object PlaybackMediaCache {
 
     /** "<url>#<position>" -> 最后一次预取开始时间。 */
     private val prefetchedAt = ConcurrentHashMap<String, Long>()
+
+    /** 进行中的预取任务:开始播放时取消,避免与起播抢带宽。 */
+    private val prefetchJobs = ConcurrentHashMap.newKeySet<Job>()
 
     /** 进程启动后台预热缓存单例(SimpleCache 首次构造要打开 DB/扫描目录)。 */
     fun warmUp(context: Context) {
@@ -115,7 +120,7 @@ internal object PlaybackMediaCache {
         val option = result.options.firstOrNull() ?: return
         if (!isStreamCacheable(option)) return
         val appContext = context.applicationContext
-        BackgroundWork.scope.launch {
+        val job = BackgroundWork.scope.launch {
             val cache = cache(appContext) ?: return@launch
             val videoUrl = (option.segments?.takeIf { it.size > 1 }?.first() ?: option.url)
             // 头部与尾部分头并行:用户在详情页停留时间有限,串行(head→探测→tail)
@@ -144,6 +149,14 @@ internal object PlaybackMediaCache {
                 }
             }
         }
+        prefetchJobs.add(job)
+        job.invokeOnCompletion { prefetchJobs.remove(job) }
+    }
+
+    /** 开始播放时调用:取消仍在进行的预取,避免和起播抢带宽(已落盘的 span 保留)。 */
+    fun cancelPrefetches() {
+        prefetchJobs.forEach { it.cancel() }
+        prefetchJobs.clear()
     }
 
     /** 该 URL+位置 是否需要预取:近期已预取过或已缓存则跳过。 */
@@ -211,6 +224,8 @@ internal object PlaybackMediaCache {
                 "media prefetch $tag ${readBytes / 1024}KB in " +
                     "${System.currentTimeMillis() - startedAtMs}ms (pos=$position)",
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             AppLog.w("Player", "media prefetch $tag failed: ${e.message}")
         } finally {
