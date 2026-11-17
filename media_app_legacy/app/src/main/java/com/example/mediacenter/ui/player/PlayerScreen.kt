@@ -91,6 +91,9 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
             dataSourceFactory.setUserAgent(PlaybackUserAgent)
         }
 
+        // 起播优先:取消仍在进行的首段预取,避免与播放器抢带宽
+        // (已落盘的缓存 span 保留并继续被播放命中)。
+        LegacyPlaybackMediaCache.cancelPrefetches()
         // 先释放旧播放器，此时 currentPlayerOptionId 仍是旧值，
         // releasePlayer 会用旧 id 正确保存当前进度。
         releasePlayer()
