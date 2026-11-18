@@ -19,7 +19,11 @@ HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8790"))
 EXTRACTOR_BIN = os.environ.get("VOD_EXTRACTOR_BIN", "yt-dlp")
 TIMEOUT_SECONDS = max(1, int(os.environ.get("VOD_EXTRACTOR_TIMEOUT_MS", "30000")) // 1000)
-MAX_OUTPUT_BYTES = int(os.environ.get("VOD_EXTRACTOR_MAX_OUTPUT_BYTES", str(20 * 1024 * 1024)))
+# yt-dlp stdout 保留上限:正常格式列表 JSON 只有几十 KB(格式很多的长视频也就
+# 1~2MB)。20MB 旧值在 768M 的 extractor 容器里问题不大,但 media_server 只有
+# 64M,需要把单请求最坏分配压下来;两边同步收紧到 8MB,保持"extractor 超限先
+# 失败"的契约(否则 server 侧会读到被截断的响应)。
+MAX_OUTPUT_BYTES = int(os.environ.get("VOD_EXTRACTOR_MAX_OUTPUT_BYTES", str(8 * 1024 * 1024)))
 MAX_REQUEST_BYTES = 16 * 1024
 MAX_ERROR_BYTES = 64 * 1024
 MAX_CONCURRENT = max(1, int(os.environ.get("VOD_EXTRACTOR_MAX_CONCURRENT", "2")))
