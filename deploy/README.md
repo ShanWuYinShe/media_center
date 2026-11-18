@@ -60,8 +60,8 @@ media_server/Dockerfile 与 `.github/workflows/ci.yml` 的同名字段仍一致
   `bot_check`）。cookies 缺失/过期或 age 异常增大意味着 **YouTube 解析**已经瘫痪
   （`/extract` 返回 502 `bot_check`）；**搜索不受影响**——`/search` 走
   ytsearch flat 列表页，无 cookies 仍然可用（2026-10-12 线上实测）。
-  告警口径：看 `failures.counts.bot_check` 是否持续增长，而非看搜索成功率。
-  可由外部监控定时打内网 /health，或在 media_server 侧观察 resolve 的 502 率。
+  告警口径：看 **`failures_window.counts`（近 5 分钟）** 的 `bot_check` 是否为非零/持续增长——累计 `failures.total` 只增不减，无法区分"仍在失败"与"已恢复"；`active`(in_flight/waiting) 可区分"槽位排队"与视频问题，`successes.last_at` 可确认恢复时间。
+  可由外部监控定时打内网 /health，或在 media_server 侧观察 resolve 的 503 `RESOLVE_UNAVAILABLE` 率（基础设施类失败）与 `/healthz` 的 `youtube.circuit`。
 
 ## 边缘缓存（可选）
 

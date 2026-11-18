@@ -1,3 +1,4 @@
+import collections
 import ipaddress
 import json
 import os
@@ -133,6 +134,17 @@ class ExtractorFailedError(RuntimeError):
 # 用锁保证计数的读改写原子;快照给 /health 时在锁内复制。
 FAILURE_LOCK = threading.Lock()
 FAILURE_STATS = {"total": 0, "last_reason": None, "last_at": None, "counts": {}}
+# 失败滚动窗口(默认 5 分钟):进程累计计数无法判断"现在是否还在失败",
+# 排障/告警需要近期速率(例如 cookies 刚失效后 bot_check 是否仍在增长)。
+FAILURE_WINDOW_SECONDS = 300
+FAILURE_EVENTS = collections.deque()  # (monotonic_ts, reason)
+
+# 实时并发/成功信号:旧 /health 只有静态配置与累计失败数,无法回答
+# "槽位现在是否被占满/上游是否刚恢复";这两组计数补上。
+ACTIVE_LOCK = threading.Lock()
+ACTIVE_STATS = {"in_flight": 0, "waiting": 0}
+SUCCESS_LOCK = threading.Lock()
+SUCCESS_STATS = {"total": 0, "last_at": None}
 
 
 def record_failure(reason):
@@ -141,6 +153,35 @@ def record_failure(reason):
         FAILURE_STATS["last_reason"] = reason
         FAILURE_STATS["last_at"] = datetime.now(timezone.utc).isoformat()
         FAILURE_STATS["counts"][reason] = FAILURE_STATS["counts"].get(reason, 0) + 1
+        FAILURE_EVENTS.append((time.monotonic(), reason))
+
+
+def record_success():
+    """记录一次成功解析/搜索:配合 last_success_at 判断"上游是否已恢复"。"""
+    with SUCCESS_LOCK:
+        SUCCESS_STATS["total"] += 1
+        SUCCESS_STATS["last_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def success_snapshot():
+    with SUCCESS_LOCK:
+        return dict(SUCCESS_STATS)
+
+
+def active_snapshot():
+    with ACTIVE_LOCK:
+        return dict(ACTIVE_STATS)
+
+
+def failure_window_snapshot(window_seconds=FAILURE_WINDOW_SECONDS):
+    cutoff = time.monotonic() - window_seconds
+    with FAILURE_LOCK:
+        while FAILURE_EVENTS and FAILURE_EVENTS[0][0] < cutoff:
+            FAILURE_EVENTS.popleft()
+        counts = {}
+        for _, reason in FAILURE_EVENTS:
+            counts[reason] = counts.get(reason, 0) + 1
+    return {"window_seconds": window_seconds, "total": sum(counts.values()), "counts": counts}
 
 
 def failure_snapshot():
@@ -220,6 +261,13 @@ class Handler(BaseHTTPRequestHandler):
                     # 失败计数(按分类累计):bot_check 持续增长 = cookies 失效/风控
                     # 拦截,外部监控据此告警(见 README 监控章节),不必等用户报障。
                     "failures": failure_snapshot(),
+                    # 近 5 分钟失败速率:进程累计计数看不出"现在是否还在失败"
+                    # (cookies 刚修好后 bot_check 是否停止增长)。
+                    "failures_window": failure_window_snapshot(),
+                    # 实时并发:waiting>0 说明槽位满在排队,in_flight 显示当前占用。
+                    "active": active_snapshot(),
+                    # 成功信号:last_at 可用于判断上游是否刚恢复(cookies/PO Token)。
+                    "successes": success_snapshot(),
                     # 并发/超时配置:排查"第三台电视 503"时先看这里——
                     # 槽位满 + 排队超时才是 busy,不是视频问题。
                     "concurrency": {
@@ -291,6 +339,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(500, {"error": "internal error"})
             return
 
+        record_success()
         self.send_json(200, extracted)
 
     def read_json_body(self):
@@ -431,13 +480,33 @@ def is_allowed_extract_host(host):
 
 
 def acquire_extractor_slot():
-    """获取一个 yt-dlp 并发槽:满槽时先排队 QUEUE_TIMEOUT_SECONDS,超时才 busy。"""
-    if QUEUE_TIMEOUT_SECONDS > 0:
-        acquired = EXTRACTOR_SEMAPHORE.acquire(timeout=QUEUE_TIMEOUT_SECONDS)
-    else:
-        acquired = EXTRACTOR_SEMAPHORE.acquire(blocking=False)
+    """获取一个 yt-dlp 并发槽:满槽时先排队 QUEUE_TIMEOUT_SECONDS,超时才 busy。
+
+    同步维护 /health 的 active 计数(waiting=排队中,in_flight=已占槽),
+    排障时能直接区分"第三台电视 503 是槽位满还是排队超时"。
+    """
+    with ACTIVE_LOCK:
+        ACTIVE_STATS["waiting"] += 1
+    try:
+        if QUEUE_TIMEOUT_SECONDS > 0:
+            acquired = EXTRACTOR_SEMAPHORE.acquire(timeout=QUEUE_TIMEOUT_SECONDS)
+        else:
+            acquired = EXTRACTOR_SEMAPHORE.acquire(blocking=False)
+    finally:
+        with ACTIVE_LOCK:
+            if ACTIVE_STATS["waiting"] > 0:
+                ACTIVE_STATS["waiting"] -= 1
     if not acquired:
         raise ExtractorBusyError("extractor is busy")
+    with ACTIVE_LOCK:
+        ACTIVE_STATS["in_flight"] += 1
+
+
+def release_extractor_slot():
+    with ACTIVE_LOCK:
+        if ACTIVE_STATS["in_flight"] > 0:
+            ACTIVE_STATS["in_flight"] -= 1
+    EXTRACTOR_SEMAPHORE.release()
 
 
 def extract_vod(url):
@@ -445,7 +514,7 @@ def extract_vod(url):
     try:
         return run_extractor(url, single_video=True)
     finally:
-        EXTRACTOR_SEMAPHORE.release()
+        release_extractor_slot()
 
 
 def parse_search_payload(payload):
@@ -473,7 +542,7 @@ def search_youtube(query, limit):
             timeout_seconds=SEARCH_TIMEOUT_SECONDS,
         )
     finally:
-        EXTRACTOR_SEMAPHORE.release()
+        release_extractor_slot()
 
 
 def run_extractor(url, single_video=True, timeout_seconds=None):

@@ -14,7 +14,7 @@ YouTube 对数据中心 IP 的**播放解析**触发 "Sign in to confirm you're 
 - **解析依赖链**：除 cookies 外还需要 ① Deno + `yt-dlp-ejs` 求解签名/n challenge（镜像已内置）；② `bgutil-ytdlp-pot-provider` + 独立 `bgutil_pot` 容器提供 PO Token（compose 已内置，`VOD_EXTRACTOR_EXTRACTOR_ARGS` 必须含 `youtubepot-bgutilhttp:base_url=http://bgutil_pot:4416` 且该键必须排在 `youtube:` 之前（顺序反了插件会退回 127.0.0.1，格式列表只剩 360P））；③ 768M 内存（256M 会被 Deno 求解 OOM kill）。三者缺一都会出现“无格式/ page needs to be reloaded”。cookies 只读挂载，extractor 每次执行复制到容器内可写临时文件供 yt-dlp 回写。
 - **搜索（`POST /search`）**：走 yt-dlp 的 `ytsearch` flat 列表页，**不触发该风控**，无 cookies 时仍可用（复核：无 cookies 时 `POST /search` 返回 200；`GET /health` 的 `failures.counts` 中 `bot_check` 不增长）。注意这只代表搜索可用，不代表解析可用。
 
-优先通过 `VOD_EXTRACTOR_EXTRACTOR_ARGS`（如 `youtube:player_client=tv`）与 cookies 双管齐下；cookies 过期后需重新导出。`GET /health` 返回 `cookies` 字段（present/readable/age_seconds）供外部监控告警，`failures.counts` 按分类累计——cookies 缺失时 `bot_check` 会持续增长（分类匹配已兼容 yt-dlp 输出的 Unicode 撇号 U+2019）。
+优先通过 `VOD_EXTRACTOR_EXTRACTOR_ARGS`（如 `youtube:player_client=tv`）与 cookies 双管齐下；cookies 过期后需重新导出。`GET /health` 返回 `cookies` 字段（present/readable/age_seconds）供外部监控告警，`failures.counts` 按分类累计（cookies 缺失时 `bot_check` 会持续增长，分类匹配已兼容 yt-dlp 输出的 Unicode 撇号 U+2019）；另有近 5 分钟窗口 `failures_window`、实时并发 `active`(in_flight/waiting) 与成功信号 `successes`(total/last_at) —— 告警应看窗口值（累计总量无法区分"仍在失败"与"已恢复"）。
 
 ## 约束
 
