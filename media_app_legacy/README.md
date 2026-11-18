@@ -24,6 +24,8 @@ B 站单视频（bvid）可能包含多个分 P（如 P1/P2/P3）。App 自动�
 - **播放页按"下"**：多 P 视频先依次翻页（P1→P2→P3），播完所有 P 后跳转列表下一个视频
 - **单 P 视频**：按"下"直接跳到列表下一个视频
 
+播放页的「正在重试…」遮罩只在**播放失败自动恢复**（短期直链失效/瞬时 5xx 时按 1.5s/3s/4.5s 退避重新解析）期间显示；切分 P、切清晰度、跳下一个视频等正常切换只置 loading，不再复用该文案，避免用户误以为播放失败在重试。详情页背景图使用卡片尺寸缩略图放大模糊后铺底，前景大图只在信息区渲染，避免同一张大图下载/解码两份。
+
 下载器不落盘；每次播放前调用 `BilibiliApi.resolvePlayback` 获取最新直链（播放媒体的首段磁盘缓存见下文，不影响"直链时效内播放"的语义）。
 
 如需覆盖默认服务端 URL：
@@ -33,6 +35,8 @@ B 站单视频（bvid）可能包含多个分 P（如 P1/P2/P3）。App 自动�
 `MEDIA_SERVER_URL` 是 App 唯一需要的服务端配置；可以是服务根地址，也可以直接带 API 路径。API 契约由 `../media_server/API.md` 维护。
 
 首页会从服务端读取内容分类，默认展示服务端返回的第一个分类；当前分类加载完成后会后台预热左右相邻分类第一页（仅目录型 provider，YouTube 实时分类不预热），遥控器切 chip 直接命中 10 分钟分类缓存。一级专区以服务端下发为准（见 `../media_server/src/contentCategories.json`）。App 只消费服务端返回的统一 opaque 视频 ID、opaque 播放选项 ID、`videoKind=vod` 和点播播放地址，并原样播放服务端返回的图片/播放 URL；不处理直播、视频来源、网页播放、外部打开或代理 URL 签名。
+
+弱网/服务端不可达时，首页最多等待约 20s 就落错误态并停止自动重试（此前最多 3 轮 × 单请求重试，可能让用户盯着“自动重试中”好几分钟）；网络恢复后由网络回调自动重试。
 
 播放前调用 BilibiliApi.resolvePlayback 获取最新播放地址，播放器使用 ExoPlayer `DefaultHttpDataSource` 直接流式读取服务端返回的 URL（经 `player/LegacyPlaybackMediaCache` 的 `CacheDataSource` 包装）。客户端不做下载器；但会做**播放媒体磁盘缓存**：解析成功后预取首段头部 768KB + 尾部 2MB（moov 兜底），播放 write-through 边播边写，重看/续播直接命中本地缓存秒开（LRU 128MB，cacheDir 内，异常自动回退网络，日志 `Perf: media prefetch ...` / `playback cache read`）。
 

@@ -275,7 +275,11 @@ class MainActivity : ComponentActivity() {
                 clearHomeVideoList()
                 resetHomeDetailsPrefetch()
                 renderPlayer(state)
-                updatePlayerRetryOverlay(state.loading && state.error == null)
+                // 只有播放失败自动恢复(recoveringPlayback)才显示"正在重试…";
+                // 切集/切清晰度/切分页也是 loading,但那是正常切换,文案不应误导。
+                updatePlayerRetryOverlay(
+                    state.recoveringPlayback && state.loading && state.error == null,
+                )
                 updatePlayerErrorOverlay(state.error)
             }
             state.selected != null -> {

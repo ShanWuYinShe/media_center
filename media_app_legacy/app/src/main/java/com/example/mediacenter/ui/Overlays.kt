@@ -30,7 +30,8 @@ internal fun MainActivity.setContent(view: View) {
         root.addView(view, frameMatch())
     }
 
-    // 自动恢复进行中(loading 且仍在播放页)时,在播放画面上盖一层“正在重试…”提示;
+    // 播放失败自动恢复(recoveringPlayback,仍为 loading)时,在播放画面上盖一层
+    // “正在重试…”提示;切集/切清晰度/切分页的 loading 不经过这里(它们不是重试)。
     // 恢复结束(重建播放器或退出播放页)后移除。setContent 会清空 root,因此一并清引用。
 internal fun MainActivity.updatePlayerRetryOverlay(show: Boolean) {
         if (show) {

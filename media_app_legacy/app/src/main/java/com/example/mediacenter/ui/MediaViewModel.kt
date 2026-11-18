@@ -31,6 +31,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class MediaUiState(
     val query: String = "",
@@ -45,6 +46,10 @@ data class MediaUiState(
     val selected: VideoDetails? = null,
     val playing: PlaybackOption? = null,
     val loading: Boolean = false,
+    // 只有"播放失败自动恢复(recoverPlayback)"为 true:UI 据此只在恢复流程显示
+    // "正在重试…"遮罩。切集/切清晰度/切页也是 loading,但文案应是"正在加载/切换",
+    // 旧实现把两者混在一起,用户误以为播放失败在重试。
+    val recoveringPlayback: Boolean = false,
     val loadingMore: Boolean = false,
     val loadMoreError: String? = null,
     val canLoadMore: Boolean = false,
@@ -850,7 +855,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         detailsJob?.cancel()
         recoveryJob?.cancel()
         detailsJob = viewModelScope.launch {
-            mutableState.update { it.copy(loading = true, error = null) }
+            mutableState.update { it.copy(loading = true, error = null, recoveringPlayback = false) }
             runCatchingCancellable { repository.playbackOptions(selected) }
                 .onSuccess { result ->
                     val options = result.options
@@ -897,7 +902,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         detailsJob?.cancel()
         recoveryJob?.cancel()
         detailsJob = viewModelScope.launch {
-            mutableState.update { it.copy(loading = true, error = null) }
+            mutableState.update { it.copy(loading = true, error = null, recoveringPlayback = false) }
             runCatchingCancellable { repository.playbackOptions(selected, stream.qn) }
                 .onSuccess { result ->
                     currentPlaybackQn = stream.qn
@@ -1024,7 +1029,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         val attempt = playbackRecoveryAttempts
         recoveryJob?.cancel()
         recoveryJob = viewModelScope.launch {
-            mutableState.update { it.copy(loading = true, error = null) }
+            mutableState.update { it.copy(loading = true, error = null, recoveringPlayback = true) }
             delay(attempt.coerceIn(1, MaxPlaybackRecoveryAttempts) * PlaybackRecoveryBackoffStepMs)
             val afterDelay = mutableState.value
             // 退避期间用户离开播放页或切换了清晰度 → 放弃恢复
@@ -1033,11 +1038,14 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                 afterDelay.playing?.id != failedOption.id
             ) {
                 AppLog.d("Playback", "recover attempt $attempt aborted: user left or switched stream")
-                mutableState.update { it.copy(loading = false) }
+                mutableState.update { it.copy(loading = false, recoveringPlayback = false) }
                 return@launch
             }
             val currentSelected = afterDelay.selected
-                ?: return@launch
+            if (currentSelected == null) {
+                mutableState.update { it.copy(loading = false, recoveringPlayback = false) }
+                return@launch
+            }
             val qn = currentPlaybackQn
             runCatchingCancellable {
                 if (qn > 0) repository.playbackOptions(currentSelected, qn)
@@ -1064,16 +1072,18 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                             state.selected?.id != videoId ||
                             state.playing?.id != failedOption.id
                         ) {
-                            state.copy(loading = false)
+                            state.copy(loading = false, recoveringPlayback = false)
                         } else if (candidate == null) {
                             state.copy(
                                 loading = false,
+                                recoveringPlayback = false,
                                 playing = null,
                                 error = fallbackMessage,
                             )
                         } else {
                             state.copy(
                                 loading = false,
+                                recoveringPlayback = false,
                                 selected = state.selected.copy(playbackOptions = options),
                                 playing = candidate,
                             )
@@ -1087,10 +1097,11 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                             state.selected?.id != videoId ||
                             state.playing?.id != failedOption.id
                         ) {
-                            state.copy(loading = false)
+                            state.copy(loading = false, recoveringPlayback = false)
                         } else {
                             state.copy(
                                 loading = false,
+                                recoveringPlayback = false,
                                 playing = null,
                                 error = error.message ?: fallbackMessage,
                             )
@@ -1105,7 +1116,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         detailsJob?.cancel()
         recoveryJob?.cancel()
         detailsJob = viewModelScope.launch {
-            mutableState.update { it.copy(loading = true, error = null) }
+            mutableState.update { it.copy(loading = true, error = null, recoveringPlayback = false) }
             runCatchingCancellable { repository.playbackOptions(selected) }
                 .onSuccess { result ->
                     val options = result.options
@@ -1207,7 +1218,9 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         detailsJob?.cancel()
         recoveryJob?.cancel()
         detailsJob = viewModelScope.launch {
-            mutableState.update { it.copy(loading = true, error = null, currentPages = updatedPages) }
+            mutableState.update {
+                it.copy(loading = true, error = null, currentPages = updatedPages, recoveringPlayback = false)
+            }
             runCatchingCancellable { repository.resolvePagePlayback(bvid, pageIndex) }
                 .onSuccess { options ->
                     val option = options.firstOrNull()
@@ -1250,7 +1263,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         detailsJob?.cancel()
         recoveryJob?.cancel()
         detailsJob = viewModelScope.launch {
-            mutableState.update { it.copy(loading = true, error = null) }
+            mutableState.update { it.copy(loading = true, error = null, recoveringPlayback = false) }
             runCatchingCancellable {
                 val details = repository.details(nextVideo)
                 val result = repository.playbackOptions(details)
@@ -1375,8 +1388,8 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
             // recoverPlayback 的退避 delay 中被取消)。BACK 已无在途加载需要等待,
             // 这里顺手把 loading 复位,避免返回详情/首页后卡在"正在加载/重试"提示上。
             when {
-                it.playing != null -> it.copy(playing = null, loading = false)
-                it.selected != null -> it.copy(selected = null, loading = false)
+                it.playing != null -> it.copy(playing = null, loading = false, recoveringPlayback = false)
+                it.selected != null -> it.copy(selected = null, loading = false, recoveringPlayback = false)
                 else -> it
             }
         }
@@ -1395,6 +1408,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         loadHomeJob?.cancel()
         loadHomeJob = viewModelScope.launch {
             val startedAtMs = System.currentTimeMillis()
+            val deadlineAtMs = startedAtMs + HOME_FIRST_SCREEN_DEADLINE_MS
             // 首屏用聚合请求一次拿 providers + 分类(老盒子弱网省一个 RTT);
             // 聚合失败(旧服务端/网络)退回原有两次请求,行为与之前一致。
             // 分类加载失败自动重试:最多 MAX_HOME_AUTO_RETRIES 次(退避见
@@ -1407,6 +1421,20 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                 // 用户陷入"重试 → 失败 → 重试"的死循环。
                 // 冷启动快照已在屏上时静默刷新:不闪加载态、失败保留快照。
                 val silentRefresh = initialSilent || mutableState.value.isContentScreen
+                val remainingMs = deadlineAtMs - System.currentTimeMillis()
+                if (remainingMs <= 0) {
+                    // 首屏预算耗尽:停手落错误态,留给网络恢复回调重试。
+                    if (!silentRefresh) {
+                        mutableState.update {
+                            it.copy(
+                                loading = false,
+                                autoRetrying = false,
+                                error = "加载超时，请检查网络后重试",
+                            )
+                        }
+                    }
+                    return@launch
+                }
                 mutableState.update {
                     if (silentRefresh) {
                         it.copy(loadMoreError = null)
@@ -1414,7 +1442,8 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                         it.copy(loading = true, loadMoreError = null, error = null, autoRetrying = false)
                     }
                 }
-                val categoriesResult = if (attempt == 0) {
+                val categoriesResult = withTimeoutOrNull(remainingMs) {
+                    if (attempt == 0) {
                     // 聚合请求:providers + 分类一次拿到;失败退回两次请求。
                     runCatchingCancellable { repository.bootstrap() }.fold(
                         onSuccess = { (providers, categories) ->
@@ -1437,9 +1466,28 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                             runCatchingCancellable { repository.categories() }
                         },
                     )
-                } else {
-                    // 重试时只重拉分类(providers/凭证已在首轮处理)。
-                    runCatchingCancellable { repository.categories() }
+                    } else {
+                        // 重试时只重拉分类(providers/凭证已在首轮处理)。
+                        runCatchingCancellable { repository.categories() }
+                    }
+                }
+                if (categoriesResult == null) {
+                    // 首屏预算耗尽:在飞请求已被 withTimeoutOrNull 取消
+                    //(MediaApi invokeOnCancellation → OkHttp call.cancel())。
+                    AppLog.w(
+                        "Search",
+                        "home first screen deadline hit after " +
+                            (System.currentTimeMillis() - startedAtMs) + "ms",
+                    )
+                    if (silentRefresh) return@launch
+                    mutableState.update {
+                        it.copy(
+                            loading = false,
+                            autoRetrying = false,
+                            error = "加载超时，请检查网络后重试",
+                        )
+                    }
+                    return@launch
                 }
                 val categories = categoriesResult.getOrNull()
                 if (categories != null) {
@@ -1482,6 +1530,18 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                             loading = false,
                             autoRetrying = false,
                             error = error?.message ?: "加载分类失败",
+                        )
+                    }
+                    return@launch
+                }
+                if (System.currentTimeMillis() >= deadlineAtMs) {
+                    // 还没到重试次数上限,但首屏预算已耗尽:停止重试,给用户确定结论。
+                    AppLog.w("Search", "home first screen deadline reached, stop auto retry (attempt=$attempt)")
+                    mutableState.update {
+                        it.copy(
+                            loading = false,
+                            autoRetrying = false,
+                            error = "加载超时，请检查网络后重试",
                         )
                     }
                     return@launch
@@ -1544,6 +1604,13 @@ private const val MaxPrefetchedIds = 128
 // 弹错误卡住首页体验差;重试期 UI 显示"自动重试中",耗尽后才落手动重试。
 private const val MAX_HOME_AUTO_RETRIES = 3
 private val HOME_AUTO_RETRY_BACKOFF_MS = longArrayOf(2_000L, 4_000L, 8_000L)
+
+// 首屏总预算:MediaApi 单请求自带 2 次重试(15s 超时,最坏 ~47s),再叠加
+// bootstrap 回退链(providers/categories 多次请求)与首页 3 轮自动重试,
+// 服务端不可达时用户可能盯着"自动重试中"好几分钟(审计实测上限可达数分钟)。
+// 这里给首屏一个硬上限:超出立即落错误态并停手,之后靠网络恢复回调
+// (MainActivity.registerNetworkRestore)自动重试,不让用户干等。
+private const val HOME_FIRST_SCREEN_DEADLINE_MS = 20_000L
 
 // 分类切换 / 关键词搜索失败自动重试:2 次,退避 2s/4s(比首页少,
 // 因为切分类是用户主动操作,等待感知更强)。
