@@ -14,6 +14,7 @@ import android.widget.ProgressBar
 import android.widget.LinearLayout
 import androidx.core.view.isNotEmpty
 import com.google.android.exoplayer2.C
+import com.example.mediacenter.net.AppHttpClient
 import com.example.mediacenter.player.LegacyPlaybackMediaCache
 import com.example.mediacenter.player.PlayerViewHolder
 import com.google.android.exoplayer2.audio.AudioAttributes
@@ -87,6 +88,10 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
             "prepare stream=${stream.id} kind=${stream.kind} mime=${stream.mimeType} " +
                 "url=${AppLog.redactUrl(playbackUrl)}",
         )
+        // HttpsURLConnection 的 Conscrypt 默认值由后台初始化安装(见
+        // MediaCenterApp);冷启动后立刻进播放页时这里等它就绪(通常≈0),
+        // 避免 4.4.2 老盒子用平台 TLS 握手失败。
+        AppHttpClient.awaitInit()
         val dataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(8_000)

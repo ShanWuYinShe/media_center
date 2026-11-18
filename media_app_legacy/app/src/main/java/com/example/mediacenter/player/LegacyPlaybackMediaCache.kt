@@ -45,12 +45,27 @@ internal object LegacyPlaybackMediaCache {
     @Volatile
     private var cache: SimpleCache? = null
 
+    @Volatile
+    private var prewarmStarted = false
+
     /** "<url>#<position>" -> 最后一次预取开始时间。 */
     private val prefetchedAt = ConcurrentHashMap<String, Long>()
 
     /** 进行中的预取任务:开始播放时取消,避免与起播抢带宽。 */
     // 不用 ConcurrentHashMap.newKeySet():KeySetView#clear 需要 API 24,legacy minSdk 19。
     private val prefetchJobs = ConcurrentHashMap<Job, Boolean>()
+
+    /**
+     * Application 启动时后台预热 SimpleCache(打开数据库/扫描目录在旧盒子上可达
+     * 数十~数百 ms)。播放真正用到时 [cache] 会走同一把锁等待,不会重复构造。
+     */
+    fun prewarmAsync(context: Context) {
+        synchronized(this) {
+            if (prewarmStarted) return
+            prewarmStarted = true
+        }
+        Thread({ cache(context.applicationContext) }, "playback-cache-init").start()
+    }
 
     fun cache(context: Context): SimpleCache? {
         cache?.let { return it }

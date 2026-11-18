@@ -12,6 +12,8 @@ import java.security.Security
 import java.security.cert.CertificateException
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
@@ -58,6 +60,12 @@ object AppHttpClient {
 
     @Volatile private var httpsDefaultInstalled = false
 
+    // 后台初始化(见 initAsync):TLS 构建(Conscrypt/AndroidCAStore/TrustManager)
+    // 与磁盘缓存初始化在旧盒子上可达数十~数百 ms,不再占用 Application 冷启动主线程。
+    // 首个 newBuilder()/awaitInit() 会等待它完成(通常已就绪,等待≈0)。
+    @Volatile private var asyncInitStarted = false
+    private val asyncInitLatch = CountDownLatch(1)
+
     // ── 诊断状态(供关于/诊断弹窗展示,排查老盒子连接问题)──
     /** 当前生效的 TLS 引擎路径:Conscrypt / 平台回退 / 默认。 */
     @Volatile var tlsPathLabel: String = "未初始化"
@@ -75,6 +83,46 @@ object AppHttpClient {
         appContext = context
         buildTls()
     }
+
+    /**
+     * Application 启动入口:把 TLS/磁盘缓存初始化放到后台线程,避免计入冷启动首帧
+     * (Conscrypt 原生库加载 + AndroidCAStore 遍历 + 内置根解析 + OkHttp Cache 打开)。
+     * 首个网络客户端创建/首次播放会经 [awaitInit] 同步等待(见 [newBuilder])。
+     */
+    fun initAsync(context: Context) {
+        synchronized(this) {
+            if (asyncInitStarted) return
+            asyncInitStarted = true
+        }
+        Thread({
+            try {
+                init(context.applicationContext)
+                installHttpsUrlConnectionDefault()
+                initCache(context.applicationContext)
+            } catch (error: Throwable) {
+                AppLog.w("Http", "background TLS/cache init failed: ${error.message}", error)
+            } finally {
+                asyncInitLatch.countDown()
+            }
+        }, "app-http-init").start()
+    }
+
+    /**
+     * 等待后台初始化完成(仅 initAsync 启动过时生效)。调用点都在网络/播放线程,
+     * 正常情况下立即返回;超时兜底 10s,避免极端情况下永久阻塞。
+     */
+    fun awaitInit() {
+        if (!asyncInitStarted) return
+        try {
+            if (!asyncInitLatch.await(INIT_WAIT_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                AppLog.w("Http", "background init wait timed out (${INIT_WAIT_TIMEOUT_MS}ms)")
+            }
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+    }
+
+    private const val INIT_WAIT_TIMEOUT_MS = 10_000L
 
     /** 共享的基础客户端(OkHttp 默认超时),用于无特殊超时需求的场景。 */
     val shared: OkHttpClient by lazy { newBuilder().build() }
@@ -105,6 +153,8 @@ object AppHttpClient {
 
     /** 返回已套用 TLS 配置的 Builder。未显式 init 时也会按需构建(无内置根时仅系统信任库)。 */
     fun newBuilder(): OkHttpClient.Builder {
+        // TLS 默认值/信任库由后台线程初始化;此刻未就绪则等待(正常≈0)。
+        awaitInit()
         buildTls()
         val builder = OkHttpClient.Builder()
         tls?.let { t ->
