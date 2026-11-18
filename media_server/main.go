@@ -58,6 +58,12 @@ type mediaServer struct {
 	youtubeCategoryCache *youtubeResultCache
 	youtubeCategoryGroup *youtubeFlightGroup
 
+	// YouTube 基础设施失败的进程级熔断(cookies 失效/风控/extractor 挂掉):
+	// 连续失败后快失败,避免所有电视换视频重试把 extractor 槽位打满(见
+	// youtube_failure.go)。懒初始化,youtubeBreakerOnce 保护构造。
+	youtubeBreakerOnce sync.Once
+	youtubeBreaker     *youtubeCircuitBreaker
+
 	// 缓存命中/上游调用计数(见 cache_stats.go);/healthz 的 cache 字段读取。
 	cacheStats cacheStats
 
@@ -297,6 +303,11 @@ func (s *mediaServer) serveAPI(w http.ResponseWriter, r *http.Request) {
 			"version": version,
 			// 缓存命中/上游调用计数:部署后验证缓存是否真正命中(见 cache_stats.go)。
 			"cache": s.cacheStats.snapshot(),
+		}
+		// YouTube 实时通道的熔断状态:上游(cookies 过期/风控/extractor 挂掉)
+		// 故障时这里会变成 open,可直接从探针/监控看出"是全站故障而非视频问题"。
+		if s.yt != nil && s.yt.vodExtractorURL != "" {
+			payload["youtube"] = s.youtubeCircuit().snapshot(time.Now())
 		}
 		switch {
 		case s.catalogErr != nil:

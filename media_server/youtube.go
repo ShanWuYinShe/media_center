@@ -311,7 +311,13 @@ func (c *ytClient) resolveVideo(ctx context.Context, videoID string) (PlaybackRe
 	}
 	result := buildYouTubePlayback(info)
 	if len(result.Options) == 0 {
-		return PlaybackResultResponse{}, fmt.Errorf("no playable formats (video may require cookies or is restricted)")
+		// 上游 200 但没有任何可播格式:按内容类失败处理(reason=no_formats,
+		// 502 → 可负缓存),不要被归入基础设施故障触发熔断/长重试。
+		return PlaybackResultResponse{}, &upstreamError{
+			status: http.StatusBadGateway,
+			reason: "no_formats",
+			body:   "resolved result has no playable options",
+		}
 	}
 	return result, nil
 }
@@ -395,6 +401,12 @@ func (s *mediaServer) handleYouTubeSearch(w http.ResponseWriter, r *http.Request
 		})
 		return
 	}
+	// 熔断打开时快速失败(不消耗 per-IP 配额):cookies 失效/风控/extractor
+	// 挂掉时,所有电视的每次搜索都去拉起 yt-dlp 只会把 2 个并发槽打满。
+	if ok, retryAfter := s.youtubeCircuit().allow(time.Now()); !ok {
+		s.writeYouTubeCircuitOpen(w, retryAfter, "UPSTREAM_UNAVAILABLE", "YouTube 服务暂不可用，请稍后重试。")
+		return
+	}
 	if !s.youtubeSearchLimiter.allow(clientIPFromRequest(r)) {
 		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "搜索过于频繁,请稍后再试。"})
 		return
@@ -406,9 +418,23 @@ func (s *mediaServer) handleYouTubeSearch(w http.ResponseWriter, r *http.Request
 			s.writeYouTubeBusy(w)
 			return
 		}
+		// 请求方自己断开(切页/退出)不是上游故障:不写响应、不记熔断,
+		// 否则用户中途离开就会把全站熔断打开。搜索预算耗尽(DeadlineExceeded)
+		// 才计入上游超时。
+		if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
+			return
+		}
+		// 搜索失败基本都是基础设施类(extractor 连不上/超时/风控/配置错误),
+		// 只有旧版 extractor 的裸 502 才落到旧文案(内容类兼容路径)。
+		if classifyYouTubeFailure(err) == youtubeFailureInfra {
+			s.youtubeCircuit().recordInfraFailure(youtubeFailureLabel(err), time.Now())
+			s.writeYouTubeUnavailable(w, "UPSTREAM_UNAVAILABLE", "YouTube 服务暂不可用，请稍后重试。")
+			return
+		}
 		s.writeError(w, &apiError{Status: http.StatusBadGateway, Code: "UPSTREAM_ERROR", Message: "YouTube 搜索暂不可用,请稍后再试。"})
 		return
 	}
+	s.youtubeCircuit().recordSuccess()
 	s.writeJSON(w, http.StatusOK, SearchResponse{
 		Query: query,
 		Total: int64(len(items)),
@@ -423,10 +449,6 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Cache-Control", "no-store")
 	// 鉴权先于限流（同 handleYouTubeSearch）。
 	if !s.requireAppToken(w, r) {
-		return
-	}
-	if !s.youtubeResolveLimiter.allow(clientIPFromRequest(r)) {
-		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "解析请求过于频繁,请稍后再试。"})
 		return
 	}
 	if s.yt == nil || s.yt.vodExtractorURL == "" {
@@ -446,6 +468,12 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 		s.cacheStats.resolveMemoryHits.Add(1)
 		if failure {
 			log.Printf("youtube resolve %s: cached failure (reason=%s)", videoID, reason)
+			// 负缓存旧条目可能来自修复前的实现(把 cookies/风控等基础设施失败
+			// 也写了进去):命中时按故障语义返回,避免继续误导用户以为视频受限。
+			if classifyYouTubeFailureReason(reason) == youtubeFailureInfra {
+				s.writeYouTubeUnavailable(w, "RESOLVE_UNAVAILABLE", "解析服务暂不可用，请稍后重试。")
+				return
+			}
 			s.writeError(w, &apiError{Status: http.StatusBadGateway, Code: "RESOLVE_FAILED", Message: "播放地址解析失败,该视频可能受限或稍后再试。"})
 			return
 		}
@@ -464,6 +492,17 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 			s.writeJSON(w, http.StatusOK, result)
 			return
 		}
+	}
+	// 缓存(内存+磁盘)未命中才消耗 per-IP 配额:重复进出播放页/家庭多端共享
+	// 出口 IP 时,纯缓存命中不应收到 429(与搜索/分类口径一致)。熔断检查在
+	// 限流之前:上游已确认故障时直接快失败,不消耗配额。
+	if ok, retryAfter := s.youtubeCircuit().allow(time.Now()); !ok {
+		s.writeYouTubeCircuitOpen(w, retryAfter, "RESOLVE_UNAVAILABLE", "解析服务暂不可用，请稍后重试。")
+		return
+	}
+	if !s.youtubeResolveLimiter.allow(clientIPFromRequest(r)) {
+		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "解析请求过于频繁,请稍后再试。"})
+		return
 	}
 	// 同 ID 并发请求共享一次 yt-dlp 解析:重试风暴/多端同时打开时不再
 	// 各自拉起进程(vod_extractor 并发上限只有 2,还会消耗 cookies 寿命)。
@@ -488,8 +527,26 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 	}
 	if err != nil {
 		log.Printf("youtube resolve %s: %v", videoID, err)
-		// 只负缓存真实解析失败(502 带分类/504 超时);extractor 繁忙(503)
-		// 是瞬时的,缓存会把可用窗口错锁成失败。
+		// 请求方自己断开(退出播放页/切视频)不是上游故障:不写响应、不记熔断。
+		if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
+			return
+		}
+		// 容量繁忙 ≠ 视频受限:返回 503 + Retry-After,让 App 提示"服务繁忙"
+		// 而不是误导用户以为该视频不可播。
+		if isExtractorBusy(err) {
+			s.writeYouTubeBusy(w)
+			return
+		}
+		// 基础设施类失败(cookies 过期/风控/extractor 挂掉/超时/配置错误):
+		// 503 + Retry-After,不按视频负缓存(否则全站故障会被错锁 5 分钟),
+		// 并计入进程级熔断,避免用户换视频反复触发长解析占满 extractor 槽。
+		if classifyYouTubeFailure(err) == youtubeFailureInfra {
+			s.youtubeCircuit().recordInfraFailure(youtubeFailureLabel(err), time.Now())
+			s.writeYouTubeUnavailable(w, "RESOLVE_UNAVAILABLE", "解析服务暂不可用，请稍后重试。")
+			return
+		}
+		// 只负缓存内容类失败(视频受限/无格式等);extractor 繁忙是瞬时的,
+		// 缓存会把可用窗口错锁成失败。
 		var ue *upstreamError
 		if errors.As(err, &ue) && (ue.status == http.StatusBadGateway || ue.status == http.StatusGatewayTimeout) {
 			globalResolveCache.store(videoID, resolveCacheEntry{
@@ -498,15 +555,10 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 				expiresAt: time.Now().Add(resolveNegativeCacheTTL),
 			})
 		}
-		// 容量繁忙 ≠ 视频受限:返回 503 + Retry-After,让 App 提示"服务繁忙"
-		// 而不是误导用户以为该视频不可播。
-		if isExtractorBusy(err) {
-			s.writeYouTubeBusy(w)
-			return
-		}
 		s.writeError(w, &apiError{Status: http.StatusBadGateway, Code: "RESOLVE_FAILED", Message: "播放地址解析失败,该视频可能受限或稍后再试。"})
 		return
 	}
+	s.youtubeCircuit().recordSuccess()
 	globalResolveCache.store(videoID, resolveCacheEntry{
 		result:    result,
 		expiresAt: time.Now().Add(resolvePositiveCacheTTL),

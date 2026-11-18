@@ -144,23 +144,41 @@ func (g *youtubeFlightGroup) do(ctx context.Context, key string, fn func(context
 	upstreamCtx, cancelUpstream := context.WithTimeout(
 		context.WithoutCancel(ctx), youtubeFlightTimeout,
 	)
-	defer cancelUpstream()
+	// 注意:cancelUpstream 由后台 goroutine 在调用结束时调用;leader 提前返回
+	// (预算耗尽/客户端断开)不能取消上游,否则同 key 的等待者会一起失败。
 
-	// 命名返回值 + defer 兜底:fn panic 时 leader 也必须拿到 error。
-	// 旧实现只在 defer 里设置 flight.err 却先 return 了零值 (nil,nil),
-	// 调用方会把"空结果"当成成功返回 200。
-	defer func() {
-		if r := recover(); r != nil {
-			flight.items, flight.err = nil, fmt.Errorf("youtube cache flight panic: %v", r)
-		}
-		g.mu.Lock()
-		delete(g.calls, key)
-		g.mu.Unlock()
-		close(flight.done)
-		items, err = flight.items, flight.err
+	// 上游调用放后台 goroutine:leader 也必须按自己的请求 ctx/预算放弃等待
+	// (典型:YouTube 分类端点只给 12s 预算,而 ytsearch 冷启动可能数十秒)。
+	// leader 提前返回时取消的只是「等待」,后台调用继续跑完并回填缓存,
+	// 供等待者/后续请求复用;上游 ctx 仍由 youtubeFlightTimeout 兜底。
+	workerDone := make(chan struct{})
+	go func() {
+		var items []VideoSummary
+		var err error
+		// 命名返回值 + defer 兜底:fn panic 时 leader/等待者也必须拿到 error。
+		// 旧实现只在 defer 里设置 flight.err 却先 return 了零值 (nil,nil),
+		// 调用方会把"空结果"当成成功返回 200。
+		defer func() {
+			if r := recover(); r != nil {
+				items, err = nil, fmt.Errorf("youtube cache flight panic: %v", r)
+			}
+			cancelUpstream()
+			g.mu.Lock()
+			flight.items, flight.err = items, err
+			delete(g.calls, key)
+			g.mu.Unlock()
+			close(flight.done)
+			close(workerDone)
+		}()
+		items, err = fn(upstreamCtx)
 	}()
-	flight.items, flight.err = fn(upstreamCtx)
-	return flight.items, flight.err
+
+	select {
+	case <-workerDone:
+		return flight.items, flight.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // ---- mediaServer 上的缓存入口 ----
