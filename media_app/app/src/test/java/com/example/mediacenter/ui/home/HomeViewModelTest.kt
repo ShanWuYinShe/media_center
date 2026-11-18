@@ -147,6 +147,7 @@ class HomeViewModelTest {
 
         assertEquals(3, viewModel.uiState.value.items.size)
         assertFalse(viewModel.uiState.value.isLoading)
+        assertFalse("刷新成功不应留下失败标记", viewModel.uiState.value.staleRefreshFailed)
     }
 
     @Test
@@ -169,6 +170,16 @@ class HomeViewModelTest {
         assertEquals(stale.map { it.id }, viewModel.uiState.value.items.map { it.id })
         assertFalse(viewModel.uiState.value.isLoading)
         assertNull(viewModel.uiState.value.error)
+        // 后台刷新失败要留标记:网络恢复时 HomeScreen 据此自动重试,
+        // 旧实现只记日志,用户会长时间无感地看过期内容。
+        assertTrue("已有内容时刷新失败应标记 staleRefreshFailed", viewModel.uiState.value.staleRefreshFailed)
+
+        // 网络恢复/手动 retry 成功后标记清空。
+        repository.gateTvRequest = null
+        viewModel.retry()
+        advanceUntilIdle()
+        assertEquals(3, viewModel.uiState.value.items.size)
+        assertFalse("重试成功后标记应清空", viewModel.uiState.value.staleRefreshFailed)
     }
 }
 

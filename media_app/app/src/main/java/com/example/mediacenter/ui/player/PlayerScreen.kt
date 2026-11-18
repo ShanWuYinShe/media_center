@@ -116,12 +116,16 @@ fun PlayerScreen(
             state.next,
         )
     }
-    LaunchedEffect(nextPrefetchTarget) {
+    // 当前播放档位:多P 下一集预取要按同一档位解析,播放页切页(selectPage 传
+    // currentQn)时才能按 qn 精确命中;只按 qn=null 预取与切页查询的 key 不一致。
+    val currentPlaybackQn = state.playbackResult?.options?.firstOrNull()?.qn
+    LaunchedEffect(nextPrefetchTarget, currentPlaybackQn) {
         val targetId = nextPrefetchTarget ?: return@LaunchedEffect
         delay(NEXT_PREFETCH_DELAY_MS)
         PlaybackPrefetcher.prefetch(
             MediaRepositoryHolder.repository,
             targetId,
+            qn = currentPlaybackQn,
             maxInitialQualityQn = maxInitialQualityQn,
         )
     }

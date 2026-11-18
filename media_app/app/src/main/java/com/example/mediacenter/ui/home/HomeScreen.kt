@@ -90,7 +90,9 @@ fun HomeScreen(
     }
 
     NetworkRestoreEffect(onRestored = {
-        if (state.error != null) viewModel.retry()
+        // 全屏错误自动重试;SWR 后台刷新失败(旧内容仍在屏上)同样重试一次,
+        // 否则用户会一直看到过期内容且没有任何提示/恢复入口。
+        if (state.error != null || state.staleRefreshFailed) viewModel.retry()
     })
 
     // 首屏焦点落在当前分类标签：老人打开电视先看到"我在哪一类"，

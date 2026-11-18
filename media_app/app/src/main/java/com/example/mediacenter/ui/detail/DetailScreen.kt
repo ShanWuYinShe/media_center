@@ -45,6 +45,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import com.example.mediacenter.data.MediaRepositoryHolder
@@ -107,8 +108,18 @@ fun DetailScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         // 详情页用服务端下发的大图(卡片缩略图只有 ~640px,铺满全屏会糊)。
         val posterUrl = video.thumbnailUrlLarge ?: video.thumbnailUrl
+        // 背景只做压暗氛围层:显式限制解码尺寸(约 1/3 屏),避免与前景大图
+        // 各自按全屏尺寸再解码一份(~8MB 位图);老盒子/模拟器上内存与解码耗时
+        // 都明显下降。磁盘缓存仍共用同一 URL,不会多一次网络请求。
+        val context = LocalContext.current
+        val backdropModel = remember(posterUrl, context) {
+            ImageRequest.Builder(context)
+                .data(posterUrl)
+                .size(640, 360)
+                .build()
+        }
         AsyncImage(
-            model = posterUrl,
+            model = backdropModel,
             contentDescription = null,
             modifier = Modifier.fillMaxSize().alpha(0.32f),
             contentScale = ContentScale.Crop,

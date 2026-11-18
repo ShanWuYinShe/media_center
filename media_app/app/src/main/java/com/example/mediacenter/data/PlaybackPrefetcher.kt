@@ -53,8 +53,17 @@ object PlaybackPrefetcher {
                 val result = repository.resolvePlayback(videoId, qn)
                 put(key, result)
                 // 解析结果一到就预取首段媒体(详情页停留通常 >=1s,用户点播放前可完成大部分)。
-                // 按自动选档上限先收敛,预取地址才是播放页实际会播的首档。
-                val tuned = PlaybackTuning.preferInitialOption(result, maxInitialQualityQn)
+                // 手动选档(qn!=null)要按该档重排,否则预取的媒体不是播放页实际会播的流。
+                val tuned = if (qn == null) {
+                    PlaybackTuning.preferInitialOption(result, maxInitialQualityQn)
+                } else {
+                    PlaybackTuning.preferOption(result, qn)
+                }
+                // 再按「实际会播的档位」额外缓存一份:播放页切分P/重试时按 qn 精确
+                // 查询,只缓存 qn=null 的键永远命中不了——多P「下一集」预取此前因此白做。
+                tuned.options.firstOrNull()?.qn?.let { playedQn ->
+                    put(keyOf(repository, videoId, playedQn), tuned)
+                }
                 MediaRepositoryHolder.applicationContext?.let { context ->
                     PlaybackMediaCache.prefetchInitialBytes(context, tuned)
                 }
@@ -86,9 +95,49 @@ object PlaybackPrefetcher {
     suspend fun resolve(repository: MediaRepositoryApi, videoId: String, qn: Int?): PlaybackResult? {
         val key = keyOf(repository, videoId, qn)
         get(key)?.let { return it }
-        val job = synchronized(lock) { inflight[key] } ?: return null
+        // 带 qn 的查询(多P切页/切档重试/播放页重试)若未精确命中,退回同视频的
+        // 兼容结果:预取可能按 qn=null(自动档)或另一档写入,但结果里包含该档;
+        // 没有这层兜底,多P「下一集」的预取永远命中不了,切页仍要重新解析。
+        if (qn != null) compatible(repository, videoId, qn)?.let { return it }
+        val job = synchronized(lock) { inflight[key] }
+        if (job == null) {
+            // 精确 key 没有在途任务时,等同视频任意在途预取落地后再试一次兼容查找。
+            if (qn != null) {
+                val provider = repository.currentProvider
+                val anyJob = synchronized(lock) {
+                    inflight.entries.firstOrNull {
+                        it.key.provider == provider && it.key.videoId == videoId
+                    }?.value
+                }
+                if (anyJob != null) {
+                    anyJob.join()
+                    compatible(repository, videoId, qn)?.let { return it }
+                }
+            }
+            return null
+        }
         job.join()
-        return get(key)
+        get(key)?.let { return it }
+        return if (qn != null) compatible(repository, videoId, qn) else null
+    }
+
+    /**
+     * 在缓存中找同一视频、且能提供 [qn] 档位的结果:
+     * 结果首档就是该档(直接可播),或者结果里存在该档(重排后返回)。找不到返回 null。
+     */
+    private fun compatible(repository: MediaRepositoryApi, videoId: String, qn: Int): PlaybackResult? {
+        val provider = repository.currentProvider
+        synchronized(lock) {
+            for ((entryKey, entry) in cache) {
+                if (entryKey.provider != provider || entryKey.videoId != videoId) continue
+                if (!fresh(entry)) continue
+                val result = entry.result
+                if (result.options.firstOrNull()?.qn == qn) return result
+                val tuned = PlaybackTuning.preferOption(result, qn)
+                if (tuned.options.firstOrNull()?.qn == qn) return tuned
+            }
+        }
+        return null
     }
 
     /** 仅测试用:清空缓存与在途任务(JVM 测试进程内所有用例共享这个单例)。 */

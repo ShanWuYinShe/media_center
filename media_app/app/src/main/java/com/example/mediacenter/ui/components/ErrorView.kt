@@ -6,9 +6,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -29,12 +28,16 @@ fun ErrorView(
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            // 错误文案可滚动，避免超长消息被截断（之前的 maxLines=5 会藏住关键信息）。
-            modifier = Modifier.verticalScroll(rememberScrollState()).padding(24.dp),
+            // 错误文案用遥控器可滚动文本:普通 verticalScroll 对 D-pad 无效,
+            // TV 上超出一屏的长错误信息等于不可读(方向键只会移到重试按钮)。
+            modifier = Modifier.padding(24.dp),
         ) {
-            Text(
+            TvScrollableText(
                 text = message,
                 color = ErrorRed,
+                style = MaterialTheme.typography.bodyMedium,
+                maxHeight = 280.dp,
+                modifier = Modifier.fillMaxWidth(0.8f),
             )
             if (onRetry != null) {
                 Spacer(Modifier.height(16.dp))
