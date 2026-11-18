@@ -436,13 +436,22 @@ internal fun PlayerContent(
     }
 
     // 进度轮询;播放中每 5 秒持久化一次,崩溃/杀进程也能恢复。
-    // 暂停且控制条隐藏时才完全停止轮询;暂停但控制条可见时继续刷新——
-    // 否则遥控器按键 seek 后进度条/时间纹丝不动,用户得不到任何反馈。
+    // 暂停且控制条隐藏时完全停止轮询;暂停但控制条可见时只在最后交互后的
+    // 短窗口内继续刷新——否则遥控器按键 seek 后进度条/时间纹丝不动,用户
+    // 得不到反馈。窗口结束后停止:暂停时位置只在 seek 时变化,而 seek 会
+    // 刷新 lastInteractionMs 并重启本 effect,所以不会漏掉任何一次变化,
+    // 也不会让"暂停后走开"的电视以 2Hz 无限重组。
     // 覆盖层隐藏且播放中时跳过 positionMs/durationMs 写入:这两个状态只被覆盖层消费,
     // 隐藏时无读者,写了也是无效开销(持久化照常,崩溃恢复不依赖 UI 可见)。
     // 换分P必须重启轮询:playbackResult 捕获进协程,不重启则换页后仍按旧页
     // 持久化(key 带旧 #pN),恢复位置错乱。
-    LaunchedEffect(isPlaying, showControls, playbackResult.pages.currentPage, controller) {
+    LaunchedEffect(
+        isPlaying,
+        showControls,
+        playbackResult.pages.currentPage,
+        controller,
+        lastInteractionMs,
+    ) {
         if (!isPlaying && !showControls) {
             // 暂停瞬间刷一次位置 + 时长用于下次显示，之后不再轮询。
             positionMs = currentController?.currentPosition?.coerceAtLeast(0L) ?: 0L
@@ -486,6 +495,11 @@ internal fun PlayerContent(
                     )
                 }
             }
+            // 暂停且最后一次遥控器操作已过刷新窗口:位置不会再变,停止轮询,
+            // 避免暂停后无人观看时仍持续 2Hz 重组整个播放页。
+            if (!isPlaying && System.currentTimeMillis() - lastInteractionMs > PAUSED_REFRESH_WINDOW_MS) {
+                break
+            }
             delay(500)
         }
     }
@@ -517,11 +531,15 @@ internal fun PlayerContent(
         }
     }
 
-    // 断网恢复:播放错误源于网络时,网络可用后自动重试一次(解析 + 重新加载)
+    // 断网恢复:播放错误源于网络时,网络可用后自动重试一次(解析 + 重新加载)。
+    // 清晰度/分P切换解析失败(overlayError)同样走解析重试,否则网络恢复后
+    // 用户还要自己按一次重试。
     NetworkRestoreEffect(onRestored = {
         if (playerError != null) {
             playerError = null
             loadEpoch++
+            onRetryResolve()
+        } else if (overlayError != null) {
             onRetryResolve()
         }
     })
@@ -820,3 +838,6 @@ private fun PlaybackStateGlyph(
 }
 
 private const val EpisodeSwitchThrottleMs = 700L
+
+/** 暂停后仍刷新进度条的窗口(最后交互起算):覆盖遥控器 seek 的即时反馈,之后停止轮询。 */
+private const val PAUSED_REFRESH_WINDOW_MS = 3_000L

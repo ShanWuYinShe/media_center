@@ -67,16 +67,19 @@ class MediaCenterApp : Application(), ImageLoaderFactory {
      */
     private fun warmProcessSingletons() {
         appScope.launch {
-            runCatching { com.example.mediacenter.data.MediaRepositoryHolder.repository }
-                .onFailure { AppLog.w("App", "warm repository failed: ${it.message}", it) }
-            runCatching { Coil.imageLoader(this@MediaCenterApp) }
-                .onFailure { AppLog.w("App", "warm image loader failed: ${it.message}", it) }
-            // 播放首段缓存:SimpleCache 首次构造要打开数据库/扫描目录,提前到进程启动预热。
+            // 播放首段缓存放到最前:SimpleCache 首次构造要打开数据库/扫描目录,
+            // 而且 PlaybackService.onCreate 在主线程同步取它的工厂——一旦用户
+            // 起播时这里还没预热到该步,主线程会阻塞等锁并亲自构造缓存,造成
+            // 首帧前 jank。仓库/图片加载的预热可以接受稍后完成。
             runCatching {
                 com.example.mediacenter.player.PlaybackMediaCache.warmUp(this@MediaCenterApp)
             }.onFailure {
                 AppLog.w("App", "warm playback cache failed: ${it.message}", it)
             }
+            runCatching { com.example.mediacenter.data.MediaRepositoryHolder.repository }
+                .onFailure { AppLog.w("App", "warm repository failed: ${it.message}", it) }
+            runCatching { Coil.imageLoader(this@MediaCenterApp) }
+                .onFailure { AppLog.w("App", "warm image loader failed: ${it.message}", it) }
         }
     }
 

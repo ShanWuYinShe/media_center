@@ -46,4 +46,23 @@ object PlaybackTuning {
             ?: return result
         return result.copy(options = listOf(preferred) + options.filter { it.url != preferred.url })
     }
+
+    /**
+     * 指定档位优先:把 [qn] 匹配的档位提到首位,其余档位保留(顺序不变)。
+     *
+     * 用于"重试/断网恢复时带着已选 qn 重新解析"的场景:YouTube 服务端始终按
+     * 清晰度降序返回全部档位,若直接用原始顺序,options.first() 会变成最高档
+     * (4K/8K),把用户已经收敛好的 1080P 悄悄重置成最高档。重排后播放页仍
+     * 使用用户选中的清晰度,其余档位保留供手动切换。
+     *
+     * 找不到匹配档位(如 B 站每次只返回一条流)时原样返回。
+     */
+    fun preferOption(result: PlaybackResult, qn: Int): PlaybackResult {
+        if (qn <= 0) return result
+        val options = result.options
+        if (options.size < 2) return result
+        val preferred = options.firstOrNull { it.qn == qn } ?: return result
+        if (options.first() == preferred) return result
+        return result.copy(options = listOf(preferred) + options.filter { it.url != preferred.url })
+    }
 }
