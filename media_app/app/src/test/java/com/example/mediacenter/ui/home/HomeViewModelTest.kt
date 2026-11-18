@@ -13,6 +13,7 @@ import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -135,7 +136,9 @@ class HomeViewModelTest {
         repository.gateTvRequest = CompletableDeferred()
 
         viewModel.selectTab("tv")
-        advanceUntilIdle()
+        // 用 runCurrent 只跑已就绪任务:刷新请求被 gate 挂起时不能 advanceUntilIdle,
+        // 否则虚拟时间会推进过 20s 首屏预算、请求先超时,测不到"在途"状态。
+        runCurrent()
 
         // 刷新尚未返回:先把过期缓存渲染出来(不闪骨架),并拦住 loadMore 抢跑。
         assertEquals("tv", viewModel.uiState.value.selectedTab)
@@ -161,7 +164,8 @@ class HomeViewModelTest {
         repository.gateTvRequest = CompletableDeferred()
 
         viewModel.selectTab("tv")
-        advanceUntilIdle()
+        // 同 selectTab_expiredCache:请求在途时只跑就绪任务,避免虚拟时间触发首屏超时。
+        runCurrent()
         assertEquals(stale.map { it.id }, viewModel.uiState.value.items.map { it.id })
 
         repository.gateTvRequest?.completeExceptionally(IOException("network down"))
