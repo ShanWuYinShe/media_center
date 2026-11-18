@@ -42,6 +42,9 @@ data class HomeUiState(
     val isLoadingMore: Boolean = false,
     val loadMoreError: String? = null,
     val error: String? = null,
+    // SWR:已有内容在屏时后台刷新失败(只记日志、不弹全屏错误)。网络恢复后
+    // 自动重试需要这个标记,否则用户会长时间停留在过期内容上且无法感知。
+    val staleRefreshFailed: Boolean = false,
     val providers: List<ProviderInfo> = emptyList(),
     val currentProvider: String = "",
     // 本地观看历史(ViewModel 在 IO 线程读取,UI 只负责渲染)
@@ -263,7 +266,9 @@ class HomeViewModel(
                 val hasContent = keepContent && _uiState.value.items.isNotEmpty()
                 _uiState.update {
                     if (hasContent) {
-                        it.copy(isLoading = false)
+                        // 保留旧内容,但记住"后台刷新失败":网络恢复时自动重试,
+                        // 不让用户无声无息地一直看过期内容。
+                        it.copy(isLoading = false, staleRefreshFailed = true)
                     } else {
                         it.copy(
                             isLoading = false,
@@ -323,6 +328,7 @@ class HomeViewModel(
                         isLoadingMore = false,
                         loadMoreError = null,
                         error = null,
+                        staleRefreshFailed = false,
                     )
                 }
                 AppLog.i(
@@ -447,6 +453,7 @@ class HomeViewModel(
                         total = response.total,
                         canLoadMore = canLoadMore,
                         isLoading = false,
+                        staleRefreshFailed = false,
                     )
                 }
                 AppLog.i(
@@ -466,7 +473,7 @@ class HomeViewModel(
                         _uiState.value.items.isNotEmpty()
                     _uiState.update {
                         if (hasContent) {
-                            it.copy(isLoading = false)
+                            it.copy(isLoading = false, staleRefreshFailed = true)
                         } else {
                             it.copy(
                                 isLoading = false,

@@ -77,4 +77,42 @@ class PlaybackPrefetcherTest {
         assertNull("qn 不同不应命中", PlaybackPrefetcher.resolve(repository, videoId, null))
         assertNull("视频不同不应命中", PlaybackPrefetcher.resolve(repository, "BV1other", 80))
     }
+
+    private fun option(qn: Int) = PlaybackOption(
+        id = "q$qn",
+        kind = "progressive",
+        label = "${qn}P",
+        url = "https://example.test/$qn",
+        qn = qn,
+    )
+
+    private fun multiQualityResult(vararg qns: Int) = PlaybackResult(
+        options = qns.map(::option),
+        availableQualities = qns.map { QualityOption(it, "${it}P") },
+    )
+
+    @Test
+    fun `按 qn 查询可命中按自动档位写入的多档预取结果`() = runTest {
+        // 多P「下一集」预取用 qn=null(自动选档)写入,播放页 selectPage 却按
+        // currentQn 精确查询;没有这层兼容查找,预取永远白做、切页仍要重新解析。
+        val repository = FakeRepository()
+        val videoId = "BV1prefetch-compatible"
+        PlaybackPrefetcher.put(repository, videoId, null, multiQualityResult(2160, 1080, 720))
+
+        val hit = PlaybackPrefetcher.resolve(repository, videoId, 1080)
+        assertEquals("应命中同视频的多档结果", 1080, hit?.options?.firstOrNull()?.qn)
+        assertEquals("其余档位应保留", 3, hit?.options?.size)
+    }
+
+    @Test
+    fun `缓存结果没有请求档位时不命中`() = runTest {
+        val repository = FakeRepository()
+        val videoId = "BV1prefetch-missing-qn"
+        PlaybackPrefetcher.put(repository, videoId, null, multiQualityResult(2160, 1440))
+
+        assertNull(
+            "结果里没有 720P 时不应拿最高档冒充",
+            PlaybackPrefetcher.resolve(repository, videoId, 720),
+        )
+    }
 }
