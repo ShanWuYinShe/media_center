@@ -174,6 +174,15 @@ internal object PlaybackMediaCache {
     }
 
     /**
+     * 当前缓存占用字节(设置页入口显示大小用);失败返回 -1。
+     * 磁盘 IO 很轻(读索引),调用方仍应移出主线程。
+     */
+    fun cacheSizeBytes(context: Context): Long {
+        val cache = cache(context) ?: return -1
+        return runCatching { cache.getCacheSpace() }.getOrDefault(-1L)
+    }
+
+    /**
      * 清空全部媒体缓存(设置页「清除播放媒体缓存」入口,用户主动自救用)。
      * 预取去重记录一并清空(下次解析会重新预取);返回清除的资源数。
      * SimpleCache 无整体 clear,逐 key removeResource;失败返回 -1 由 UI 提示重试。
