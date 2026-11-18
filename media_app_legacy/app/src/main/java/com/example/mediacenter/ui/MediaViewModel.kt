@@ -199,7 +199,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         playbackPrefetchJob = viewModelScope.launch {
             val sem = Semaphore(PREFETCH_CONCURRENCY)
             coroutineScope {
-                candidates.map { video ->
+                candidates.mapIndexed { index, video ->
                     launch {
                         if (video.id in prefetchedPlaybackIds) return@launch
                         val details = VideoDetails(
@@ -218,16 +218,18 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                                     while (prefetchedPlaybackIds.size > MaxPrefetchedIds) {
                                         prefetchedPlaybackIds.remove(prefetchedPlaybackIds.iterator().next())
                                     }
-                                    // 解析成功顺手预热首段媒体缓存(头部/尾部),
-                                    // 用户点播放时命中磁盘,起播不再等 CDN 握手。
-                                    result.options.firstOrNull()?.let { option ->
-                                        MediaCenterApp.instance?.let { context ->
-                                            LegacyPlaybackMediaCache.prefetchInitialBytes(
-                                                context,
-                                                option.url,
-                                                option.mimeType,
-                                                hasAudioTrack = !option.audioUrl.isNullOrBlank(),
-                                            )
+                                    // 解析成功顺手预热首段媒体缓存(头部/尾部)。只对列表第一条做:
+                                    // 预取越靠后的视频越可能不被点开,每多一条多 2.8MB 流量。
+                                    if (index == 0) {
+                                        result.options.firstOrNull()?.let { option ->
+                                            MediaCenterApp.instance?.let { context ->
+                                                LegacyPlaybackMediaCache.prefetchInitialBytes(
+                                                    context,
+                                                    option.url,
+                                                    option.mimeType,
+                                                    hasAudioTrack = !option.audioUrl.isNullOrBlank(),
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1608,7 +1610,10 @@ private const val CategoryCacheTtlMs = 10 * 60 * 1000L
 
 // 播放地址预取:只预取前 N 条(用户不会逐一点开全部可见项),并发限到 M。
 // 每个 playbackOptions 是 3 个串行网络调用;无限制并发会在长列表上打满网络/内存。
-private const val MAX_PREFETCH = 4
+// 浏览列表预取条数:每条解析成功后还会预取首段媒体(头部 768KB + 尾部 2MB≈2.8MB),
+// 旧值 4 条 ≈ 11MB/屏,弱网会与首屏/缩略图抢带宽、挤磁盘缓存;降到 2 条(只够
+// "下一两个可能点开的视频"),媒体预取只对第一条做(见 prefetchVisiblePlayback)。
+private const val MAX_PREFETCH = 2
 private const val PREFETCH_CONCURRENCY = 2
 
 // 内存缓存上限:长时间浏览多分类/多视频后防止纯 Java 对象无限累积,

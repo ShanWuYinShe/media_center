@@ -31,8 +31,10 @@ class YouTubeApi(
     private val mediaApi: MediaApi,
     private val client: OkHttpClient = AppHttpClient.newBuilder()
         .connectTimeout(15, TimeUnit.SECONDS)
-        // 解析代理会等 vod_extractor 跑完 yt-dlp(秒级),15s 的目录超时不够。
-        .readTimeout(45, TimeUnit.SECONDS)
+        // 解析代理会等 vod_extractor 跑完 yt-dlp(秒级;服务端 /resolve 端到端
+        // 预算 70s,含 Deno 签名/PO Token 冷启动)。旧值 45s < 服务端 70s,弱网
+        // 排队时客户端先报"网络错误"、服务端仍在解析;留 10s 余量对齐到 80s。
+        .readTimeout(80, TimeUnit.SECONDS)
         .build(),
     private val json: Json = Json {
         ignoreUnknownKeys = true
