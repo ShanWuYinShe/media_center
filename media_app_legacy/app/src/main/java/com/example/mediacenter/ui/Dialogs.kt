@@ -141,6 +141,12 @@ internal fun MainActivity.showSystemInfoDialog() {
                 label("焦点在最左分类时连续按左键 5 次触发 · 仅用于排查", 13f, Colors.TEXT_TERTIARY, maxLines = 1),
                 LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(4)),
             )
+            // 诊断信息行数多(14+ 行),1080p TV 上远超 0.72 倍屏高的弹窗内容区:
+            // 必须放进 ScrollView,否则底部「播放缓存占用/清除缓存/关闭」会被裁掉、
+            // 用户以为弹窗没有这些入口(焦点还会请求到窗口外的关闭按钮上)。
+            val content = LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+            }
 
             val dm = resources.displayMetrics
             val memInfo = ActivityManager.MemoryInfo().also {
@@ -155,7 +161,8 @@ internal fun MainActivity.showSystemInfoDialog() {
             val totalMemMb = if (memInfo.totalMem > 0) memInfo.totalMem / (1024 * 1024) else -1
 
             // 信息行:左 label(灰)+ 右 value(白),SDK_INT 用 AppleBlue 突出(最关键)。
-            fun row(title: String, value: String, highlight: Boolean = false) {
+            // 返回 value 视图,供异步计算的值(如缓存占用)回填。
+            fun row(title: String, value: String, highlight: Boolean = false): TextView {
                 val rowLayout = LinearLayout(activity).apply {
                     orientation = LinearLayout.HORIZONTAL
                 }
@@ -164,11 +171,13 @@ internal fun MainActivity.showSystemInfoDialog() {
                     LinearLayout.LayoutParams(0, wrap(), 0.42f),
                 )
                 val valueColor = if (highlight) Colors.APPLE_BLUE else Colors.TEXT_PRIMARY
+                val valueView = label(value, 16f, valueColor, maxLines = 2)
                 rowLayout.addView(
-                    label(value, 16f, valueColor, maxLines = 2),
+                    valueView,
                     LinearLayout.LayoutParams(0, wrap(), 0.58f),
                 )
-                card.addView(rowLayout, linearMatch().withTopMargin(dp(10)))
+                content.addView(rowLayout, linearMatch().withTopMargin(dp(10)))
+                return valueView
             }
 
             // CPU 架构:Build.SUPPORTED_ABIS 是 API 21+,API 19 用废弃的 CPU_ABI/CPU_ABI2。
@@ -199,33 +208,84 @@ internal fun MainActivity.showSystemInfoDialog() {
             row("可用内存", "${availMemMb}MB / ${totalMemMb}MB")
 
             // 播放媒体缓存占用与清除:老盒子磁盘紧张时的自救入口。
-            val cacheBytesMb = com.example.mediacenter.player.LegacyPlaybackMediaCache
-                .cacheSizeBytes(this@showSystemInfoDialog) / (1024 * 1024)
-            row("播放缓存占用", if (cacheBytesMb >= 0) "${cacheBytesMb}MB" else "不可用")
+            // 缓存大小与清理都是磁盘 IO(可能数秒),不能在主线程做,否则打开
+            // 诊断弹窗/点清除时界面直接卡住;先显示「计算中…」再异步回填。
+            val cacheSizeValue = row("播放缓存占用", "计算中…")
+            val cacheScope = this@showSystemInfoDialog.lifecycleScope
+            cacheScope.launch {
+                val cacheBytes = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.example.mediacenter.player.LegacyPlaybackMediaCache
+                        .cacheSizeBytes(this@showSystemInfoDialog)
+                }
+                val mb = cacheBytes / (1024 * 1024)
+                cacheSizeValue.text = if (cacheBytes >= 0) "${mb}MB" else "不可用"
+            }
+
+            val scroll = ScrollView(activity).apply {
+                isVerticalScrollBarEnabled = false
+                overScrollMode = View.OVER_SCROLL_NEVER
+                clipChildren = false
+                clipToPadding = false
+                addView(content, ViewGroup.LayoutParams(match(), wrap()))
+            }
+            card.addView(scroll, LinearLayout.LayoutParams(match(), 0, 1f).withTopMargin(dp(8)))
+            // 弹窗里只有按钮可聚焦,ScrollView 本身吃不到遥控器按键:
+            // 在按钮上拦截上/下键滚动内容(与 showDescriptionDialog 同一做法),
+            // 让用户能看全被裁在下面的诊断信息。
+            val scrollKeyListener = View.OnKeyListener { _, keyCode, event ->
+                when {
+                    event.action != KeyEvent.ACTION_DOWN -> false
+                    keyCode == KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        scroll.smoothScrollBy(0, dp(180))
+                        true
+                    }
+                    keyCode == KeyEvent.KEYCODE_DPAD_UP -> {
+                        scroll.smoothScrollBy(0, -dp(180))
+                        true
+                    }
+                    else -> false
+                }
+            }
 
             var clearBtn: TextView = TextView(activity)
             clearBtn = pill(
-                text = if (cacheBytesMb > 0) "清除媒体缓存 (${cacheBytesMb}MB)" else "清除媒体缓存",
+                text = "清除媒体缓存",
                 selected = false,
                 heightDp = 48,
                 horizontalPaddingDp = 28,
                 onClick = {
-                    val removed = com.example.mediacenter.player.LegacyPlaybackMediaCache
-                        .clearAll(this@showSystemInfoDialog)
-                    // 反馈:更新按钮文案;弹窗内其他行不动。
-                    clearBtn.text = when {
-                        removed < 0 -> "清除失败，请重试"
-                        removed == 0 -> "缓存已是空的"
-                        else -> "已清除 $removed 项"
+                    // 逐资源移除是磁盘 IO:置灰按钮防重复点击,放到 IO 线程执行,
+                    // 完成后回主线程给结果反馈(老盒子上 128MB 缓存删除可耗数百 ms)。
+                    val btn = clearBtn
+                    if (!btn.isEnabled) {
+                        // 正在清除中,忽略重复点击。
+                    } else {
+                        btn.isEnabled = false
+                        btn.text = "正在清除…"
+                        cacheScope.launch {
+                        val removed = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            com.example.mediacenter.player.LegacyPlaybackMediaCache
+                                .clearAll(this@showSystemInfoDialog)
+                        }
+                        btn.isEnabled = true
+                        btn.text = when {
+                            removed < 0 -> "清除失败，请重试"
+                            removed == 0 -> "缓存已是空的"
+                            else -> "已清除 $removed 项"
+                        }
+                        if (removed > 0) cacheSizeValue.text = "0MB"
+                        }
                     }
                 },
             )
+            clearBtn.setOnKeyListener(scrollKeyListener)
             card.addView(
                 clearBtn,
                 LinearLayout.LayoutParams(match(), dp(48)).withTopMargin(dp(16)),
             )
 
             val close = pill("关闭", selected = true, heightDp = 48, horizontalPaddingDp = 28) { dismiss() }
+            close.setOnKeyListener(scrollKeyListener)
             card.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(20)))
             setContentView(card)
             window?.setBackgroundDrawableResource(android.R.color.transparent)

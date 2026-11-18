@@ -175,6 +175,11 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
     // 限到 [PREFETCH_CONCURRENCY](每条 playbackOptions 是 3 个串行网络调用,无限制并发
     // 会在长列表上打满网络/内存)。
     private fun prefetchVisiblePlayback(videos: List<VideoSummary>) {
+        // YouTube 实时通道的解析是服务端 yt-dlp 重操作(解析槽位有限):
+        // 浏览分类时预取会替用户触发最多 4 次解析,既可能占满服务端解析槽
+        // (用户真正点播时反而 503),也抬高上游风控风险。仅目录型 provider
+        // (B 站本地解析)做列表预取。
+        if (repository.currentProvider == "youtube") return
         playbackPrefetchJob?.cancel()
         val candidates = videos
             .asSequence()
@@ -226,6 +231,9 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
     }
 
     init {
+        // 凭证单独在后台拉取:不再阻塞首页 bootstrap(旧实现 await 凭证,
+        // 弱网下首屏会被凭证接口的 15s×3 重试拖到半分钟以上)。
+        viewModelScope.launch { repository.refreshCredentials() }
         viewModelScope.launch {
             // 冷启动 SWR:先用上次首屏快照渲染,再后台静默刷新;快照不可用则走原流程。
             val restored = restoreHomeSnapshot()
@@ -271,6 +279,53 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                 "category=$categoryId, ${snapshot.items.size} items",
         )
         return true
+    }
+
+    /**
+     * 退出搜索模式(BACK /「清除」):清空关键词并回到当前分类浏览。
+     *
+     * 旧实现只清了 MainActivity.searchVisible,state.query 仍是旧关键词;而
+     * selectCategory 命中"已选中分类"时直接 return,导致默认分类下按 BACK 或
+     * 清除完全没有反应(非默认分类则会跳回第一个分类、丢失浏览位置)。这里
+     * 显式清 query,并优先复用分类缓存避免重新请求。
+     */
+    fun exitSearch() {
+        val current = mutableState.value
+        val categoryId = current.selectedCategoryId
+        searchJob?.cancel()
+        detailsJob?.cancel()
+        recoveryJob?.cancel()
+        loadMoreJob?.cancel()
+        if (categoryId == null) {
+            mutableState.update {
+                it.copy(query = "", loading = false, error = null, selected = null, playing = null)
+            }
+            return
+        }
+        pendingCategoryId = categoryId
+        val cached = categoryListCache[categoryId]
+        if (cached != null && cached.items.isNotEmpty()) {
+            applyCachedCategory(categoryId, cached)
+            if (System.currentTimeMillis() - cached.timestamp > CategoryCacheTtlMs) {
+                refreshCategoryInBackground(categoryId)
+            }
+        } else {
+            // 先清空关键词与旧搜索结果,避免新分类内容到达前仍显示搜索命中。
+            mutableState.update {
+                it.copy(
+                    query = "",
+                    selectedCategoryId = categoryId,
+                    loading = true,
+                    error = null,
+                    items = emptyList(),
+                    page = 1,
+                    canLoadMore = false,
+                    loadingMore = false,
+                    loadMoreError = null,
+                )
+            }
+            search("", categoryId = categoryId)
+        }
     }
 
     fun search(
@@ -338,6 +393,10 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                             selected = null,
                             playing = null,
                             playingVideo = null,
+                            // 切换分类/新搜索后旧视频的选集与清晰度不再有效,
+                            // 否则下一次进详情页会在解析完成前显示上一个视频的数据。
+                            currentPages = null,
+                            availableQualities = emptyList(),
                         )
                     }
                 }
@@ -581,6 +640,8 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                 selected = null,
                 playing = null,
                 playingVideo = null,
+                currentPages = null,
+                availableQualities = emptyList(),
             )
         }
         AppLog.i(
@@ -677,19 +738,38 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
     fun openDetails(video: VideoSummary, autoPlay: Boolean = false) {
         detailsJob?.cancel()
         detailsJob = viewModelScope.launch {
-            mutableState.update { it.copy(loading = true, error = null) }
+            // 切换视频时清掉上一个视频的选集/清晰度,否则解析完成前详情页会
+            // 短暂展示上一部视频的「选集 · 第 X/Y 集」与清晰度 chips(可点击,
+            // 且会用旧 pages 去切新视频分页)。
+            currentPlaybackQn = 0
+            mutableState.update {
+                it.copy(
+                    loading = true,
+                    error = null,
+                    currentPages = null,
+                    availableQualities = emptyList(),
+                )
+            }
             val details = repository.details(video)
             // 如果列表预取已缓存该视频的播放地址,直接写入 selected。
             val cached = playbackCache[video.id]
             if (cached != null) {
+                // 缓存命中必须同时回填当前 qn 与可用清晰度:否则 play() 发现
+                // stream.qn != currentPlaybackQn(0) 会再解析一次(多等 1~10s),
+                // 详情页清晰度 chips 也会缺失。
+                currentPlaybackQn = cached.options.firstOrNull()?.qn ?: 0
                 mutableState.update {
                     it.copy(selected = details.copy(playbackOptions = cached.options), loading = false,
-                            currentPages = cached.pages)
+                            currentPages = cached.pages,
+                            availableQualities = cached.availableQualities)
                 }
                 if (autoPlay) cached.options.firstOrNull()?.let { play(it) }
                 return@launch
             }
-            mutableState.update { it.copy(selected = details, loading = false) }
+            // 未预取:解析播放地址期间保持 loading=true。详情页会盖加载态遮罩,
+            // 避免 1~3s 内把「暂无可播放视频」误报成错误(此前会闪错误态,
+            // 解析成功整页重建后焦点还会丢失)。
+            mutableState.update { it.copy(selected = details, loading = true) }
             var autoPlayOption: PlaybackOption? = null
             runCatchingCancellable { repository.playbackOptions(details) }
                 .onSuccess { result ->
@@ -707,7 +787,8 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                     }
                     mutableState.update { state ->
                         if (state.selected?.id != details.id) return@update state
-                        state.copy(selected = state.selected.copy(playbackOptions = result.options),
+                        state.copy(loading = false,
+                                   selected = state.selected.copy(playbackOptions = result.options),
                                    currentPages = result.pages,
                                    availableQualities = result.availableQualities)
                     }
@@ -716,7 +797,10 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                 .onFailure { error ->
                     mutableState.update { state ->
                         if (state.selected?.id != details.id) return@update state
-                        state.copy(error = error.message ?: "解析播放地址失败")
+                        state.copy(
+                            loading = false,
+                            error = error.message ?: "解析播放地址失败",
+                        )
                     }
                 }
             autoPlayOption?.let { play(it) }
