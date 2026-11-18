@@ -115,7 +115,7 @@ class HomeViewModel(
         }
         viewModelScope.launch {
             val snapshot = withContext(Dispatchers.IO) { HomeSnapshotStore.load(context) }
-            val restored = snapshot?.takeIf { it.provider == repository.currentProvider }
+            val restored = snapshot?.snapshot?.takeIf { it.provider == repository.currentProvider }
             if (restored != null) {
                 categoryCache[restored.selectedTab] = CategoryCacheEntry(
                     provider = restored.provider,
