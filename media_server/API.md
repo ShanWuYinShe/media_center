@@ -36,6 +36,9 @@
 | 503 | `SERVICE_BUSY` | 并发满载：catalog 搜索闸门，或 youtube 实时端点排队等不到 vod_extractor 并发槽（带 `Retry-After`，稍后重试即可） |
 | 503 | `RESOLVE_UNAVAILABLE` / `UPSTREAM_UNAVAILABLE` | youtube 实时通道**基础设施类**故障（cookies 失效/风控/extractor 不可达/超时/配置错误）：带 `Retry-After`，可安全重试；不按视频负缓存，连续失败会触发进程级熔断（见 `/healthz` 的 `youtube` 字段） |
 | 503 | `CONTENT_PREPARING` | youtube 分类端点 12s 服务端预算内未拿到结果（冷缓存）：带 `Retry-After: 5`，后台单飞会继续填充缓存，稍后重试直接命中 |
+| 503 | `CATALOG_UNAVAILABLE` | 配置了 catalog DB 但打开失败（启动期故障）：目录相关端点返回 503（`no-store`）而不是 200 空目录，客户端可重试，`/healthz` 显示 `catalog=error` |
+| 503 | `UPDATE_UNAVAILABLE` | App 更新清单损坏（JSON/sha256 非法）或 APK 缺失：更新检查返回 503 而不是静默 204，`/healthz` 显示 `appUpdate=error` |
+| 410 | `APK_VERSION_GONE` | APK 下载的版本令牌 `v` 与当前 manifest 不匹配（发版后旧地址）：客户端应重新检查更新，不再返回当前 APK |
 | 503 | `TIMEOUT` | 单个 API 请求超过服务端 75s 硬超时（防慢查询/卡住 handler 拖垮服务；超时响应为同一 JSON 包络，可安全重试） |
 | 503 | `NOT_CONFIGURED` | youtube 实时端点：服务端未配置 API key / 解析服务 |
 
@@ -73,6 +76,7 @@ type VideoSummary = {
   "status": "ok",
   "version": "v1.1.0-3-gabc1234",
   "catalog": "ok",
+  "appUpdate": "ok",
   "cache": {
     "resolveMemoryHits": 0,
     "resolveDiskHits": 0,
@@ -102,6 +106,8 @@ type VideoSummary = {
 `searchLastMs` 为最近一次上游搜索（含分类预热）耗时——用于判断"慢在解析还是慢在缓存失效"。
 
 `catalog` 取值：`ok`（数据库已打开）、`disabled`（未配置 DB）、`error`（配置了 DB 但打开失败）。`error` 时 HTTP 状态为 **503**，`status` 为 `degraded`——服务仍能响应空目录，但这是必须告警的故障态。
+
+`appUpdate` 是 App 更新通道状态：`ok`（清单与 APK 均可用）、`missing`（未发布过更新，检查更新返回 204）、`error`（清单损坏/sha256 非法/APK 缺失，检查更新返回 503 `UPDATE_UNAVAILABLE`）。
 
 `youtube` 是 YouTube 实时通道的熔断状态（仅在配置了 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 时出现）：`circuit=open` 表示连续基础设施失败（cookies 失效/风控/extractor 不可达等）已触发快失败，`retryAfterSeconds` 为剩余冷却时间；冷却后半开放行探测请求，成功后自动恢复 `closed`。看到 `open` 应优先检查 extractor 容器、cookies 与上游网络，而不是怀疑某个视频。
 
@@ -180,6 +186,7 @@ App 首页启动聚合端点：一次返回 providers 与指定 provider 的分�
 - `items` 只包含 `approved` 剧集，顺序与来源合集列表一致；未过审剧集不会出现（审核关卡不被绕过）。
 - `currentIndex` 是当前视频在 `items` 中的下标；当前视频未过审/不在队列时为 `-1`。
 - 视频不在任何合集，或合集内没有已审核剧集时返回 `{"collection":null,"currentIndex":-1,"items":[]}`（200，不是错误）。
+- 队列下发上限 **500 集**（`collection.total` 仍为真实总集数）：该端点只服务"播完自动下一集"，超大合集全量下发会让响应体随集数线性增长；客户端应只依赖 `currentIndex` 与相邻项。
 - 合集关系由采集工具通过内部接口写入，不属于公开 API。
 
 ### `GET /api/search?q=关键词&provider=bilibili&page=1&pageSize=20`
@@ -259,6 +266,8 @@ YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返�
 
 返回 Android TV App 的最新发布版本。已是最新返回 `204 No Content`。
 
+- 清单文件不存在 → 204（等价于"没有发布过更新"）；清单损坏（JSON/sha256 非法）或 APK 缺失 → **503 `UPDATE_UNAVAILABLE`**（`no-store`），不再静默 204，`/healthz` 的 `appUpdate` 会显示 `error`。
+
 - `versionCode`：当前已安装版本号，服务端仅当 manifest 版本更新时返回 200。
 - `variant`：可选，App 变体（`normal` 或 `legacy`）。非空时读取 `app-update-{variant}.json` 对应变体的发布清单；省略时读默认清单（`app-update.json`）。
 
@@ -278,7 +287,7 @@ YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返�
 
 下载 admin 发布并审查过的 Android TV App APK。`variant` 语义同上，非空时下载对应变体的 APK。
 
-`v` 是版本令牌（manifest `sha256` 的前 12 位），由 `/api/app/update` 下发的 `apkUrl` 自动携带：同一版本重新打包也会变，所以 **带 `v` 的 URL 内容不可变**，服务端返回
+`v` 是版本令牌（manifest `sha256` 的前 12 位），由 `/api/app/update` 下发的 `apkUrl` 自动携带：同一版本重新打包也会变，所以 **带 `v` 的 URL 内容不可变**。`v` 与当前 manifest 不匹配（发版/重新打包后的旧地址）返回 **410 `APK_VERSION_GONE`**，客户端应重新检查更新，而不是下载一份 sha256 对不上的新包；缺省 `v` 的旧地址仍可下载但 `no-store`。匹配时服务端返回
 `Cache-Control: public, max-age=31536000, immutable` + `ETag`，可被 CDN/浏览器长缓存。缺省 `v` 或 `v` 与当前 manifest 不匹配（旧客户端/发版后的旧地址）时返回 `Cache-Control: no-store`，避免把旧 APK 发给新版本客户端。
 
 ### `POST /api/crash/report`

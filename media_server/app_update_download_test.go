@@ -74,19 +74,24 @@ func TestAppDownloadCachePolicy(t *testing.T) {
 	tests := []struct {
 		name          string
 		query         string
+		wantStatus    int
 		wantCacheable bool
 	}{
-		{"versioned url", "?variant=normal&v=" + token, true},
-		{"legacy url without token", "?variant=normal", false},
-		{"wrong token", "?variant=normal&v=000000000000", false},
+		{"versioned url", "?variant=normal&v=" + token, http.StatusOK, true},
+		{"legacy url without token", "?variant=normal", http.StatusOK, false},
+		// 旧令牌内容已不存在:410 让客户端重新检查更新(见 TestAppDownloadVersionMismatchReturns410)。
+		{"wrong token", "?variant=normal&v=000000000000", http.StatusGone, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/app/download"+tt.query, nil)
 			rec := httptest.NewRecorder()
 			s.handleAppDownload(rec, req)
-			if rec.Code != http.StatusOK {
-				t.Fatalf("download status = %d, want 200", rec.Code)
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("download status = %d, want %d (body=%s)", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+			if tt.wantStatus != http.StatusOK {
+				return
 			}
 			cacheControl := rec.Header().Get("Cache-Control")
 			if tt.wantCacheable {

@@ -13,7 +13,32 @@ import (
 //   - catalog 中有 approved 视频的 provider;
 //   - 配置了 vod_extractor 时追加 youtube——其内容只走实时搜索,永不写 catalog,
 //     若只按 catalog 推导,App 将永远无法切换到 youtube 源。
+//
+// rejectIfCatalogUnavailable 在「配置了 catalog DB 但打开失败」时返回 503:
+// 旧实现直接返回 200 空目录,客户端会把它当成功并缓存(OkHttp 磁盘缓存 +
+// 首页快照/10 分钟内存缓存),故障恢复后仍可能长时间看到"暂无内容",也不会
+// 触发网络恢复重试。503 能明确暴露故障并让客户端重试。
+// provider=youtube 且实时通道可用时不拦:bilibili 目录故障不应连带 YouTube 实时分区。
+func (s *mediaServer) rejectIfCatalogUnavailable(w http.ResponseWriter, provider string) bool {
+	if s.catalogErr == nil {
+		return false
+	}
+	if provider == "youtube" && s.youtubeRealtimeEnabled() {
+		return false
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	s.writeError(w, &apiError{
+		Status:  http.StatusServiceUnavailable,
+		Code:    "CATALOG_UNAVAILABLE",
+		Message: "目录服务暂不可用，请稍后重试。",
+	})
+	return true
+}
+
 func (s *mediaServer) handleProviders(w http.ResponseWriter) {
+	if s.rejectIfCatalogUnavailable(w, "") {
+		return
+	}
 	// 目录数据变化低频(审核后更新),60s 缓存显著减少 App 启动/回首页的重复拉取;
 	// 凭证等敏感接口不在此列。
 	w.Header().Set("Cache-Control", "public, max-age=60")
@@ -83,6 +108,9 @@ func (s *mediaServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	if query == "" {
 		s.writeJSON(w, http.StatusOK, SearchResponse{Query: "", Total: 0, Items: []VideoSummary{}})
+		return
+	}
+	if s.rejectIfCatalogUnavailable(w, "") {
 		return
 	}
 	// 搜索经三列 lower() LIKE '%q%' 全表扫描,无界 query 会放大计算量。128 字节
@@ -172,7 +200,13 @@ func (s *mediaServer) handleProviderRoute(w http.ResponseWriter, r *http.Request
 // handleVideoCollection 返回某视频所在合集的“已审核剧集”播放队列。
 // 未入合集/合集内没有已审核剧集时返回 collection=null + 空 items(200),
 // 让 App 静默退化为不连播,而不是把正常视频当成错误。
+// maxCollectionQueueItems 是合集播放队列的下发上限(见 handleVideoCollection)。
+const maxCollectionQueueItems = 500
+
 func (s *mediaServer) handleVideoCollection(w http.ResponseWriter, r *http.Request, provider, videoID string) {
+	if s.rejectIfCatalogUnavailable(w, provider) {
+		return
+	}
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	resp := VideoCollectionResponse{CurrentIndex: -1, Items: []VideoSummary{}}
 	videoID = strings.TrimSpace(videoID)
@@ -192,7 +226,13 @@ func (s *mediaServer) handleVideoCollection(w http.ResponseWriter, r *http.Reque
 	}
 	resp.Collection = &VideoCollectionInfo{ID: queue.ID, Title: queue.Title, Total: len(queue.Items)}
 	resp.CurrentIndex = queue.CurrentIndex
-	for _, cv := range queue.Items {
+	// 队列只用于"播完自动下一集",客户端不需要整季完整列表;超大合集(数百集)
+	// 全量下发会让响应体随集数线性增长、客户端也可能一次性预取过多。上限 500
+	// 集足够覆盖真实剧集,同时给响应体一个硬边界(Total 仍回真实总数)。
+	for i, cv := range queue.Items {
+		if i >= maxCollectionQueueItems {
+			break
+		}
 		resp.Items = append(resp.Items, s.summaryFromCatalogVideo(cv))
 	}
 	s.writeJSON(w, http.StatusOK, resp)
@@ -200,6 +240,9 @@ func (s *mediaServer) handleVideoCollection(w http.ResponseWriter, r *http.Reque
 
 // handleProviderCategories 返回某 provider 有 approved 视频的分类列表。
 func (s *mediaServer) handleProviderCategories(w http.ResponseWriter, r *http.Request, provider string) {
+	if s.rejectIfCatalogUnavailable(w, provider) {
+		return
+	}
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	items, err := s.categoriesForProvider(provider)
 	if err != nil {
@@ -263,6 +306,9 @@ func (s *mediaServer) categoriesForProvider(provider string) ([]PublicCategory, 
 // 两个子查询任一失败即整体 500——聚合接口返回半份数据会让 App 状态机
 // 更难判断,不如让它走原有的错误重试路径。
 func (s *mediaServer) handleProviderBootstrap(w http.ResponseWriter, r *http.Request, provider string) {
+	if s.rejectIfCatalogUnavailable(w, provider) {
+		return
+	}
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	providers, err := s.providersList()
 	if err != nil {
@@ -288,6 +334,9 @@ func (s *mediaServer) handleProviderCategoryVideos(w http.ResponseWriter, r *htt
 	// YouTube 分类不走 catalog,由实时 ytsearch 提供;鉴权/限流在 handler 内处理。
 	if provider == "youtube" {
 		s.handleYouTubeCategoryVideos(w, r, categoryID)
+		return
+	}
+	if s.rejectIfCatalogUnavailable(w, provider) {
 		return
 	}
 	w.Header().Set("Cache-Control", "public, max-age=60")

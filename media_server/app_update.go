@@ -78,12 +78,20 @@ func (s *mediaServer) handleAppUpdate(w http.ResponseWriter, r *http.Request) {
 	variant := appUpdateVariant(r)
 	manifest, err := s.readAppUpdateManifest(r, variant)
 	if err != nil {
+		// 只有"清单文件不存在"才等价于"没有发布过更新"(204);JSON 损坏、
+		// sha256 非法、APK 缺失、下载地址无法推导等都是服务端故障,静默 204
+		// 会让更新通道永久失效且没有任何信号(客户端以为已是最新)。
 		if errors.Is(err, os.ErrNotExist) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		log.Printf("app update manifest read error: %v", err)
-		w.WriteHeader(http.StatusNoContent)
+		w.Header().Set("Cache-Control", "no-store")
+		s.writeError(w, &apiError{
+			Status:  http.StatusServiceUnavailable,
+			Code:    "UPDATE_UNAVAILABLE",
+			Message: "更新服务暂不可用，请稍后重试。",
+		})
 		return
 	}
 
@@ -151,12 +159,23 @@ func (s *mediaServer) handleAppDownload(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// 版本化下载地址(带 v=<sha256 前 12 位>)内容不可变,允许 CDN/浏览器长缓存;
-	// 没有 v 或 v 不匹配(旧客户端/发版后旧地址)仍 no-store——同一 URL 会随发版
-	// 变化,缓存它会把旧 APK 发给新版本客户端。
+	// 版本化下载地址(带 v=<sha256 前 12 位>)内容不可变,允许 CDN/浏览器长缓存。
 	versionToken := appDownloadVersionToken(manifest.SHA256)
-	if versionToken != "" &&
-		strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("v")), versionToken) {
+	requestedToken := strings.TrimSpace(r.URL.Query().Get("v"))
+	if requestedToken != "" && !strings.EqualFold(requestedToken, versionToken) {
+		// 旧令牌对应的内容已不存在(发版/重新打包)。直接 410 让客户端重新
+		// 检查更新,而不是白下载一份 sha256 对不上的新 APK(旧实现会 200 返回
+		// 当前 APK,客户端校验失败后整包重下)。
+		w.Header().Set("Cache-Control", "no-store")
+		s.writeError(w, &apiError{
+			Status:  http.StatusGone,
+			Code:    "APK_VERSION_GONE",
+			Message: "安装包已更新，请重新检查更新。",
+		})
+		return
+	}
+	// 版本化地址内容不可变 → 长缓存;旧地址/直链下载内容会随发版变化 → no-store。
+	if requestedToken != "" && strings.EqualFold(requestedToken, versionToken) {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		w.Header().Set("ETag", "\""+manifest.SHA256+"\"")
 	} else {
@@ -291,6 +310,30 @@ func (s *mediaServer) appDownloadURL(r *http.Request, variant, sha256Hex string)
 		prefix = "/api"
 	}
 	return withVersion(scheme + "://" + host + prefix + "/app/download?variant=" + variant)
+}
+
+// appUpdateHealth 返回 update 通道状态(ok/missing/error)供 /healthz 使用。
+// 清单损坏/sha 非法/APK 缺失会让更新检查返回 503,但只有暴露在探针/监控上,
+// 运维才能在"所有电视都收不到更新"之前发现(旧实现静默 204 + 一行日志)。
+func (s *mediaServer) appUpdateHealth() string {
+	data, err := os.ReadFile(s.appUpdateManifestPath(""))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "missing"
+		}
+		return "error"
+	}
+	var manifest AppUpdateManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return "error"
+	}
+	if err := validateAppUpdateManifest(manifest); err != nil {
+		return "error"
+	}
+	if _, err := os.Stat(s.appUpdateAPKPath(manifest, "")); err != nil {
+		return "error"
+	}
+	return "ok"
 }
 
 // appDownloadVersionToken 返回 APK 下载地址的版本化令牌(sha256 前 12 位)。
