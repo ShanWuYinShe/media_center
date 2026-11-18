@@ -37,15 +37,27 @@ object HomeSnapshotCodec {
 /** 首页快照本地存储:filesDir 下单个 JSON,临时文件 + rename 保证不读到半写文件。 */
 object HomeSnapshotStore {
     private const val FILE_NAME = "home-snapshot.json"
-    private const val MAX_AGE_MS = 10 * 60 * 1000L
+    // SWR 的 stale 阈值:超过后快照仍展示(秒出),但后台立即刷新保证最终一致。
+    private const val STALE_AFTER_MS = 10 * 60 * 1000L
+    // 硬上限:超过后快照直接丢弃(数据结构可能已随版本演进,陈旧到没有意义)。
+    private const val MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000L
 
-    fun load(context: Context): HomeSnapshot? {
+    /** 加载结果:snapshot 非 null 时 stale 表示是否已超 SWR 新鲜窗口。 */
+    data class Loaded(val snapshot: HomeSnapshot, val stale: Boolean)
+
+    fun load(context: Context): Loaded? {
         val file = File(context.filesDir, FILE_NAME)
         if (!file.isFile) return null
         val snapshot = HomeSnapshotCodec.decode(runCatching { file.readText() }.getOrNull()) ?: return null
-        if (System.currentTimeMillis() - snapshot.savedAtEpochMs > MAX_AGE_MS) return null
         if (snapshot.categories.isEmpty() || snapshot.items.isEmpty()) return null
-        return snapshot
+        return evaluate(snapshot.savedAtEpochMs, System.currentTimeMillis(), snapshot)
+    }
+
+    /** 纯逻辑:按快照年龄判定加载结果(JVM 可测)。 */
+    internal fun evaluate(savedAtEpochMs: Long, nowMs: Long, snapshot: HomeSnapshot): Loaded? {
+        val age = nowMs - savedAtEpochMs
+        if (age > MAX_AGE_MS || age < 0) return null
+        return Loaded(snapshot, stale = age > STALE_AFTER_MS)
     }
 
     fun save(context: Context, snapshot: HomeSnapshot) {
