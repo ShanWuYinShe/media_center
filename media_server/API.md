@@ -250,7 +250,7 @@ YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返�
 {
   "versionCode": 2,
   "versionName": "1.1.0",
-  "apkUrl": "https://media.chaoset.com/api/v1/app/download",
+  "apkUrl": "https://media.chaoset.com/api/v1/app/download?variant=&v=1a2b3c4d5e6f",
   "sizeBytes": 12345678,
   "sha256": "64 字符 SHA-256 hex",
   "releaseNotes": "修复播放失败后跳回首页的问题",
@@ -258,9 +258,12 @@ YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返�
 }
 ```
 
-### `GET /api/app/download?variant=normal`
+### `GET /api/app/download?variant=normal&v=<sha256 前 12 位>`
 
 下载 admin 发布并审查过的 Android TV App APK。`variant` 语义同上，非空时下载对应变体的 APK。
+
+`v` 是版本令牌（manifest `sha256` 的前 12 位），由 `/api/app/update` 下发的 `apkUrl` 自动携带：同一版本重新打包也会变，所以 **带 `v` 的 URL 内容不可变**，服务端返回
+`Cache-Control: public, max-age=31536000, immutable` + `ETag`，可被 CDN/浏览器长缓存。缺省 `v` 或 `v` 与当前 manifest 不匹配（旧客户端/发版后的旧地址）时返回 `Cache-Control: no-store`，避免把旧 APK 发给新版本客户端。
 
 ### `POST /api/crash/report`
 
