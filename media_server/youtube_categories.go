@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // youtubeCategory 是 YouTube 实时源的内置分类:YouTube 内容不落 catalog,
@@ -36,6 +39,12 @@ func youtubeCategoryByID(id string) (youtubeCategory, bool) {
 func (s *mediaServer) youtubeRealtimeEnabled() bool {
 	return s.yt != nil && strings.TrimSpace(s.yt.vodExtractorURL) != ""
 }
+
+// youtubeCategoryTimeout 是 YouTube 分类端点的服务端预算,必须短于两端 App
+// 目录客户端的 15s 读超时:冷缓存时 ytsearch 可能数十秒,若服务端慢到 35s
+// 才返回,客户端会先报「网络错误」,而 extractor 进程仍在跑并占槽。
+// 做成变量便于测试缩短。
+var youtubeCategoryTimeout = 12 * time.Second
 
 func publicYouTubeCategories() []PublicCategory {
 	items := make([]PublicCategory, 0, len(defaultYouTubeCategories))
@@ -92,20 +101,39 @@ func (s *mediaServer) handleYouTubeCategoryVideos(w http.ResponseWriter, r *http
 		})
 		return
 	}
+	if ok, retryAfter := s.youtubeCircuit().allow(time.Now()); !ok {
+		s.writeYouTubeCircuitOpen(w, retryAfter, "UPSTREAM_UNAVAILABLE", "YouTube 服务暂不可用，请稍后重试。")
+		return
+	}
 	if !s.youtubeSearchLimiter.allow(clientIPFromRequest(r)) {
 		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "分类加载过于频繁，请稍后再试。"})
 		return
 	}
-	items, err := s.cachedYouTubeCategory(r.Context(), category)
+	// 超时即回 503 CONTENT_PREPARING + Retry-After:请求方不必干等到客户端
+	// 15s 读超时报网络错误;后台单飞仍会跑完并填充缓存,稍后重试直接命中。
+	ctx, cancel := context.WithTimeout(r.Context(), youtubeCategoryTimeout)
+	defer cancel()
+	items, err := s.cachedYouTubeCategory(ctx, category)
 	if err != nil {
 		log.Printf("youtube category %s search %q: %v", category.ID, category.Query, err)
-		if isExtractorBusy(err) {
-			s.writeYouTubeBusy(w)
+		switch {
+		case errors.Is(err, context.Canceled) && r.Context().Err() != nil:
+			// 请求方自己断开(切分类/退出),不是上游故障:不写响应、不记熔断。
 			return
+		case isExtractorBusy(err):
+			s.writeYouTubeBusy(w)
+		case errors.Is(err, context.DeadlineExceeded):
+			w.Header().Set("Retry-After", "5")
+			s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "CONTENT_PREPARING", Message: "内容准备中，请稍后重试。"})
+		case classifyYouTubeFailure(err) == youtubeFailureInfra:
+			s.youtubeCircuit().recordInfraFailure(youtubeFailureLabel(err), time.Now())
+			s.writeYouTubeUnavailable(w, "UPSTREAM_UNAVAILABLE", "YouTube 服务暂不可用，请稍后重试。")
+		default:
+			s.writeError(w, &apiError{Status: http.StatusBadGateway, Code: "UPSTREAM_ERROR", Message: "YouTube 搜索暂不可用,请稍后再试。"})
 		}
-		s.writeError(w, &apiError{Status: http.StatusBadGateway, Code: "UPSTREAM_ERROR", Message: "YouTube 搜索暂不可用,请稍后再试。"})
 		return
 	}
+	s.youtubeCircuit().recordSuccess()
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	s.writeJSON(w, http.StatusOK, VideosResponse{
 		Category: &public,

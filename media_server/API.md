@@ -32,8 +32,10 @@
 | 404 | `NOT_FOUND` | 资源不存在（分类、路径等） |
 | 429 | `RATE_LIMITED` | 触发 per-IP 限流 |
 | 500 | `INTERNAL_ERROR` | 服务端内部错误 |
-| 502 | `UPSTREAM_ERROR` / `RESOLVE_FAILED` | youtube 实时端点：vod_extractor(yt-dlp) 上游失败 |
+| 502 | `UPSTREAM_ERROR` / `RESOLVE_FAILED` | youtube 实时端点：**内容类**失败（视频受限/地区限制/私有/无可用格式），重试无效 |
 | 503 | `SERVICE_BUSY` | 并发满载：catalog 搜索闸门，或 youtube 实时端点排队等不到 vod_extractor 并发槽（带 `Retry-After`，稍后重试即可） |
+| 503 | `RESOLVE_UNAVAILABLE` / `UPSTREAM_UNAVAILABLE` | youtube 实时通道**基础设施类**故障（cookies 失效/风控/extractor 不可达/超时/配置错误）：带 `Retry-After`，可安全重试；不按视频负缓存，连续失败会触发进程级熔断（见 `/healthz` 的 `youtube` 字段） |
+| 503 | `CONTENT_PREPARING` | youtube 分类端点 12s 服务端预算内未拿到结果（冷缓存）：带 `Retry-After: 5`，后台单飞会继续填充缓存，稍后重试直接命中 |
 | 503 | `TIMEOUT` | 单个 API 请求超过服务端 75s 硬超时（防慢查询/卡住 handler 拖垮服务；超时响应为同一 JSON 包络，可安全重试） |
 | 503 | `NOT_CONFIGURED` | youtube 实时端点：服务端未配置 API key / 解析服务 |
 
@@ -82,6 +84,12 @@ type VideoSummary = {
     "resolveAvgMs": 0,
     "resolveCount": 0,
     "searchLastMs": 0
+  },
+  "youtube": {
+    "circuit": "closed",
+    "consecutiveFailures": 0,
+    "lastReason": "",
+    "retryAfterSeconds": 0
   }
 }
 ```
@@ -94,6 +102,8 @@ type VideoSummary = {
 `searchLastMs` 为最近一次上游搜索（含分类预热）耗时——用于判断"慢在解析还是慢在缓存失效"。
 
 `catalog` 取值：`ok`（数据库已打开）、`disabled`（未配置 DB）、`error`（配置了 DB 但打开失败）。`error` 时 HTTP 状态为 **503**，`status` 为 `degraded`——服务仍能响应空目录，但这是必须告警的故障态。
+
+`youtube` 是 YouTube 实时通道的熔断状态（仅在配置了 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 时出现）：`circuit=open` 表示连续基础设施失败（cookies 失效/风控/extractor 不可达等）已触发快失败，`retryAfterSeconds` 为剩余冷却时间；冷却后半开放行探测请求，成功后自动恢复 `closed`。看到 `open` 应优先检查 extractor 容器、cookies 与上游网络，而不是怀疑某个视频。
 
 ### `GET /api/providers`
 
@@ -138,6 +148,7 @@ App 首页启动聚合端点：一次返回 providers 与指定 provider 的分�
 `minDurationSeconds` / `maxDurationSeconds` 为可选的时长筛选（单位秒，**含边界**），用于「短片/中片/长片」等档位；两者可单独使用。启用筛选时时长缺失的视频会被排除，`total` 为筛选后的总数。参数非数字、负数或 `min > max` 返回 400 `BAD_REQUEST`。
 
 `provider=youtube` 时该端点把分类映射为一次实时 ytsearch：需要 `X-App-Token`，与 YouTube 搜索共用每 IP 每分钟 12 次限流，但**缓存命中不计数**（翻回刚看过的分类不会 429）；只支持第 1 页（`page=2` 返回空页），`total` 为本次返回条数，时长筛选参数被忽略。分类限流的文案是"分类加载过于频繁"（与搜索区分）；yt-dlp 并发槽满时同样映射 503 `SERVICE_BUSY` + `Retry-After`。
+服务端给该端点 **12s 预算**（短于两端 App 目录客户端的 15s 读超时）：预算内没拿到结果返回 503 `CONTENT_PREPARING` + `Retry-After: 5`，后台单飞继续跑完并填充缓存，App 稍后重试即可命中，不会看到"网络错误"。
 
 ```json
 {
@@ -211,7 +222,7 @@ YouTube **实时搜索**：经 vod_extractor 的 yt-dlp `ytsearch`（flat 模式
 
 `total` 是本次返回条数（ytsearch 单页固定 20 条），不返回 `nextPageToken`。
 
-- 未配置 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 返回 503 `NOT_CONFIGURED`；yt-dlp 失败（cookies 失效、风控等）返回 502 `UPSTREAM_ERROR`。
+- 未配置 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 返回 503 `NOT_CONFIGURED`；yt-dlp 失败（cookies 失效、风控、extractor 不可达/超时等基础设施类）返回 503 `UPSTREAM_UNAVAILABLE` + `Retry-After: 15`（可安全重试；连续失败会触发进程级熔断，见 `/healthz` 的 `youtube` 字段）。旧版 extractor 的裸 502（无 `reason`）保留 502 `UPSTREAM_ERROR` 兼容。
 
 ### `GET /api/providers/youtube/resolve?id=<11字符视频ID>`
 
@@ -236,7 +247,12 @@ YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返�
 
 - `options` 按清晰度从高到低排列，App 取首项播放；`mimeType` 为 `application/x-mpegurl` 时按 HLS 加载。
 - `audioUrl` 存在时代表音视频分离：`url` 是视频轨、`audioUrl` 是音轨，`audioMimeType` 为音轨容器（`audio/mp4`/`audio/webm`），App 必须合流播放。
-- 未配置 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 返回 503 `NOT_CONFIGURED`；解析失败（视频受限、cookies 失效、无可用格式）返回 502 `RESOLVE_FAILED`；vod_extractor 并发槽满（排队+短退避重试后仍无槽）返回 503 `SERVICE_BUSY` + `Retry-After: 10`——这是瞬时容量问题，不是该视频不可播，App 应提示"服务繁忙，稍后重试"且可安全重试（busy 不进负缓存）。
+- 失败语义按原因分类（App 应据此提示，不要一律说"视频受限"）：
+  - **内容类**（`unavailable`/`geo_blocked`/`private`/`no_formats`）→ 502 `RESOLVE_FAILED`，按视频负缓存 5 分钟（这类失败重试无效）；旧版 extractor 的裸 502（无 `reason`）也按内容类兼容。
+  - **基础设施类**（`bot_check`/`rate_limited`/`timeout`/cookies 或 extractor 连接/配置错误）→ 503 `RESOLVE_UNAVAILABLE` + `Retry-After: 15`，**不写视频级负缓存**；连续 3 次基础设施失败打开进程级熔断（冷却 60s，`/healthz.youtube` 可见），避免用户换视频重试把 extractor 并发槽打满、连带搜索/分类不可用。
+  - **容量繁忙**（extractor 槽满排队+短退避重试后仍 busy）→ 503 `SERVICE_BUSY` + `Retry-After: 10`（不写负缓存）。
+- 限流与缓存：内存/磁盘缓存命中不消耗 per-IP 配额；只有真正要打 yt-dlp 的未命中请求才计数（熔断打开时直接快失败、不计数）。
+- 未配置 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 返回 503 `NOT_CONFIGURED`。
 - **部署硬前提**：`deploy/data/vod/youtube-cookies.txt`（容器内只读挂载为 `/config/youtube-cookies.txt`）必须存在，否则 YouTube 对数据中心 IP 的播放解析一律返回 bot 检测失败；搜索（flat 列表页）不受影响。路径与过期重导出运维以 `vod_extractor/AGENTS.md` 为准。
 
 ### `GET /api/app/update?versionCode=1&variant=normal`

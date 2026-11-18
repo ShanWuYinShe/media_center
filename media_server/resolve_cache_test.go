@@ -79,13 +79,20 @@ func TestResolveCacheEvictsOldestAtCapacity(t *testing.T) {
 }
 
 // fakeExtractorUpstream 起一个 httptest 上游模拟 vod_extractor:
-// mode=fail 时恒返 502+reason(每次调用计数),mode=ok 时返最小可播放 JSON。
+// mode=fail 时恒返 502+reason="unavailable"(内容类失败,可负缓存),
+// mode=fail_infra 时返 502+reason="bot_check"(基础设施类,不按视频负缓存),
+// mode=ok 时返最小可播放 JSON。每次调用计数。
 func fakeExtractorUpstream(t *testing.T, mode string, hits *int) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		*hits++
 		w.Header().Set("Content-Type", "application/json")
 		if mode == "fail" {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":"extractor failed","reason":"unavailable"}`))
+			return
+		}
+		if mode == "fail_infra" {
 			w.WriteHeader(http.StatusBadGateway)
 			_, _ = w.Write([]byte(`{"error":"extractor failed","reason":"bot_check"}`))
 			return
@@ -122,8 +129,10 @@ func swapResolveCache(t *testing.T) *resolveCache {
 	return globalResolveCache
 }
 
-// TestResolveHandlerNegativeCache 锁定负缓存:首次真实解析失败后,同 ID 重试
-// 在 TTL 内不再打上游(bot_check 风控失败不该被反复重试消耗 cookies)。
+// TestResolveHandlerNegativeCache 锁定内容类失败的负缓存:首次真实解析失败后,
+// 同 ID 重试在 TTL 内不再打上游(视频受限/无格式这类失败重试也没用)。
+// 基础设施类失败(bot_check/cookies/超时)不写负缓存,见
+// TestYouTubeResolveInfraFailureMaps503AndSkipsNegativeCache。
 func TestResolveHandlerNegativeCache(t *testing.T) {
 	swapResolveCache(t)
 	hits := 0
