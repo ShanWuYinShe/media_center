@@ -287,7 +287,11 @@ fun SettingsScreen(onBack: () -> Unit) {
                     },
                 )
                 val sizeLabel = mediaCacheBytes?.takeIf { bytes -> bytes > 0 }
-                    ?.let { bytes -> " (${bytes / 1024 / 1024}MB)" } ?: ""
+                    ?.let { bytes ->
+                        val mb = bytes / 1024 / 1024
+                        // <1MB 显示 "<1MB",避免 "(0MB)" 误导用户以为缓存是空的
+                        if (mb > 0) " (${mb}MB)" else " (<1MB)"
+                    } ?: ""
                 ActionRow(
                     label = "清除播放缓存$sizeLabel",
                     onClick = {
