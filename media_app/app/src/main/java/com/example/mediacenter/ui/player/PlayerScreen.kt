@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -14,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mediacenter.data.MediaRepositoryHolder
@@ -25,6 +27,7 @@ import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.theme.BackgroundDark
 import com.example.mediacenter.util.BackgroundWork
+import com.example.mediacenter.util.NetworkRestoreEffect
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -85,6 +88,23 @@ fun PlayerScreen(
     val context = LocalContext.current
 
     BackHandler(onBack = onBack)
+
+    // 播放页期间保持亮屏:播放器/MediaSession 本身不会设置 KEEP_SCREEN_ON,
+    // 长视频无人操作时可能被系统屏保/节能策略熄屏(尤其机顶盒"无操作 x 分钟
+    // 关屏"设置)。整页存活期持屏,离开播放页立即释放。
+    val hostView = LocalView.current
+    DisposableEffect(hostView) {
+        hostView.setKeepScreenOn(true)
+        onDispose { hostView.setKeepScreenOn(false) }
+    }
+
+    // 首次解析失败(播放页还没拿到任何播放流)时没有 PlayerContent 承接断网恢复;
+    // 这里补一份:网络恢复后自动重试解析,与首页/搜索页行为一致。
+    NetworkRestoreEffect(onRestored = {
+        if (state.error != null && state.playbackResult == null) {
+            viewModel.resolvePlayback()
+        }
+    })
 
     // 片尾连播预热:播放页停留 15s 后预取下一集播放地址(见 PlaybackPrefetcher),
     // 自动/手动切集直接命中,不用再等解析;离开页面或下一集变化时协程自动取消。

@@ -217,6 +217,20 @@ fun SettingsScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.headlineMedium,
                 modifier = Modifier.padding(start = 16.dp),
             )
+            // 操作结果反馈固定在标题栏右侧:列表本身比 1080p TV 可视区更长,
+            // 反馈若跟在列表末尾(旧实现)基本落在屏外,用户按了看不到任何结果。
+            feedback?.let { message ->
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = message,
+                    color = TextTertiary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.padding(start = 24.dp),
+                )
+            }
         }
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
@@ -330,16 +344,6 @@ fun SettingsScreen(onBack: () -> Unit) {
                         }
                     },
                 )
-            }
-            feedback?.let { message ->
-                item {
-                    Text(
-                        text = message,
-                        color = TextTertiary,
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(horizontal = ScreenHorizontalPadding, vertical = 8.dp),
-                    )
-                }
             }
         }
     }

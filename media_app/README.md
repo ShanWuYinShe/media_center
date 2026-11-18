@@ -28,7 +28,7 @@ B 站单视频（bvid）可能包含多个分 P（如 P1/P2/P3）：
 - **播放页切 P**：解析 `view` 拿到全部 pages，控制条的"分P"行按页切换，切页时重新解析该页直链。
 - **按页续播**：断点按 `videoId#pN` 隔离存储；"继续观看"记录最后观看页，点击直达该页。
 - 个别老视频的播放地址由多段 `durl` 组成：App 保留全部分段并顺序拼接播放（`ConcatenatingMediaSource`），不再只播第一段。
-- 不做列表预取、不自动连播下一个视频；播放地址不落盘，每次播放/切清晰度按需调用 `BilibiliApi.resolvePlayback`（WBI 签名 + view + playurl，客户端本地解析）。
+- 播放地址按需解析：详情页停留 1.2s / 播放页停留 15s 后预取（`PlaybackPrefetcher`，仅进程内存、TTL 5 分钟）；多 P 与已同步合集播完自动连播下一集；首次播放/切清晰度调用 `BilibiliApi.resolvePlayback`（WBI 签名 + view + playurl，客户端本地解析），播放地址不落盘。
 
 ## 服务端 URL 覆盖
 
@@ -36,7 +36,7 @@ B 站单视频（bvid）可能包含多个分 P（如 P1/P2/P3）：
 
 首页从服务端读取 provider 与分类（分类顺序以服务端 `contentCategories.json` 编排为准），App 只消费 providers / categories / videos 三个目录接口。`VideoSummary.id` 是 nativeId：bilibili 由 App 本地解析播放，youtube 调 server 的 `/providers/youtube/resolve`（1080P+ 会返回分离的音轨，由播放服务用 `MergingMediaSource` 合流）。App 不处理直播、网页播放或外部打开。
 
-播放器使用 Media3 `DefaultHttpDataSource` 直接流式读取播放 URL；客户端不使用下载器或落盘媒体缓存。B 站 CDN 播放流与图床（`*.hdslb.com`）需要带 PC UA + Referer 请求头，由 `PlaybackService` 的 `BILI_CDN_HEADERS` 与 Coil 的 `BilibiliImageLoaderFactory` 统一注入（见 `app/src/main/java/com/example/mediacenter/net/BilibiliImageLoaderFactory.kt`）。
+播放器经 Media3 `CacheDataSource` + `SimpleCache` 读取播放 URL（write-through：首播边播边写、重看/续播命中磁盘；LRU 128MB/256MB，仅缓存媒体数据，不落盘播放地址）。B 站 CDN 播放流与图床（`*.hdslb.com`）需要带 PC UA + Referer 请求头，由 `PlaybackService` 的 `BILI_CDN_HEADERS` 与 Coil 的 `BilibiliImageLoaderFactory` 统一注入（见 `app/src/main/java/com/example/mediacenter/net/BilibiliImageLoaderFactory.kt`）。
 
 ## 应用内更新
 

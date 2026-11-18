@@ -181,10 +181,13 @@ class PlayerViewModel(
             // 低端机默认清晰度收敛:YouTube 服务端按清晰度降序返回,options.first
             // 是最高档(可达 4K/8K),弱 GPU/弱网直接起播会先卡缓冲。只在自动选档
             // (qn==null)时收敛,手动切清晰度不受影响。
+            // 带 qn 重试/断网恢复(切清晰度、多P换页、错误重试)时同样要按已选档
+            // 重排:否则服务端降序结果会让 options.first() 变成最高档,把用户收敛
+            // 好的 1080P 悄悄重置成 4K/8K(弱机随即再次卡顿/失败)。
             val tuned = if (qn == null) {
                 PlaybackTuning.preferInitialOption(result, maxInitialQualityQn)
             } else {
-                result
+                PlaybackTuning.preferOption(result, qn)
             }
             if (tuned !== result) {
                 AppLog.i(
