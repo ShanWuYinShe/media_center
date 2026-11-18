@@ -293,7 +293,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     onClick = {
                         confirmAction = ConfirmAction(
                             title = "清除播放缓存",
-                            message = "将清空已缓存的播放媒体片段（预取与边看边存的部分），下次播放重新从网络加载。",
+                            message = "将清空已缓存的播放媒体片段（预取与边看边存的部分），下次播放重新从网络加载。若正在播放，可能有短暂卡顿后自动恢复。",
                             onConfirm = { clearMediaCache() },
                         )
                     },
