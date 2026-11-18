@@ -58,11 +58,11 @@ func (e *catalogUnavailableError) Error() string { return e.msg }
 func (s *mediaServer) setCatalogReady(c *Catalog) {
 	s.catalogPtr.Store(c)
 	s.catalogErrText.Store("")
-	s.catalogErr = nil
 }
 
+// setCatalogFailed 只写原子错误槽:catalogErr 字段仅保留给测试在构造时注入,
+// 运行期不再写它(否则后台重开 goroutine 与 handler 读会产生 data race)。
 func (s *mediaServer) setCatalogFailed(err error) {
-	s.catalogErr = err
 	if err != nil {
 		s.catalogErrText.Store(err.Error())
 	} else {
