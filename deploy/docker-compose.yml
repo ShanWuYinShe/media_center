@@ -196,6 +196,11 @@ services:
       - VOD_EXTRACTOR_TIMEOUT_MS=${VOD_EXTRACTOR_TIMEOUT_MS:-60000}
       - VOD_EXTRACTOR_MAX_OUTPUT_BYTES=${VOD_EXTRACTOR_MAX_OUTPUT_BYTES:-20971520}
       - VOD_EXTRACTOR_MAX_CONCURRENT=${VOD_EXTRACTOR_MAX_CONCURRENT:-2}
+      # 满槽排队(毫秒)与搜索独立超时:多端同时解析时第三台先排队而不是立刻
+      # 503(media_server 对 busy 再短退避重试一次);搜索不走 Deno 签名,用短
+      # 超时避免慢搜索长期占槽。默认值见 vod_extractor/README.md「Runtime limits」。
+      - VOD_EXTRACTOR_QUEUE_TIMEOUT_MS=${VOD_EXTRACTOR_QUEUE_TIMEOUT_MS:-3000}
+      - VOD_EXTRACTOR_SEARCH_TIMEOUT_MS=${VOD_EXTRACTOR_SEARCH_TIMEOUT_MS:-20000}
       # 默认用 web 客户端 + bgutil PO Token provider；覆盖时必须保留
       # youtubepot-bgutilhttp:base_url(插件默认找 127.0.0.1)。
       - VOD_EXTRACTOR_EXTRACTOR_ARGS=${VOD_EXTRACTOR_EXTRACTOR_ARGS:-youtubepot-bgutilhttp:base_url=http://bgutil_pot:4416;youtube:player_client=web}

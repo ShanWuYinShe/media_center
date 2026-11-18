@@ -23,6 +23,20 @@ MAX_OUTPUT_BYTES = int(os.environ.get("VOD_EXTRACTOR_MAX_OUTPUT_BYTES", str(20 *
 MAX_REQUEST_BYTES = 16 * 1024
 MAX_ERROR_BYTES = 64 * 1024
 MAX_CONCURRENT = max(1, int(os.environ.get("VOD_EXTRACTOR_MAX_CONCURRENT", "2")))
+# 并发槽排队:满槽时不再立刻 503,先排队最多 N 毫秒(默认 3s)吸收多端
+# 同时请求的短突发;等不到才返回 busy(503, reason=busy)。media_server 对
+# busy 再做一次短退避重试。
+# 取值上限受调用方预算约束:resolve 端到端 70s,而单次解析最长 60s,
+# 若排队过久会与调用方超时相撞(客户端已放弃、槽位仍被占)。3s 下最坏
+# 路径为 3s + 3s 退避 + 60s = 66s < 70s。
+QUEUE_TIMEOUT_MS = max(0, int(os.environ.get("VOD_EXTRACTOR_QUEUE_TIMEOUT_MS", "3000")))
+QUEUE_TIMEOUT_SECONDS = QUEUE_TIMEOUT_MS / 1000.0
+# 搜索独立超时:搜索只抓 flat 列表页(不走 Deno 签名/PO Token),典型数秒;
+# 旧实现与解析共用 60s 超时,慢搜索会长时间占住并发槽,让 media_server
+# (搜索超时 35s)先放弃、进程却还在跑。默认 20s 保证先于调用方结束。
+SEARCH_TIMEOUT_SECONDS = max(
+    1, int(os.environ.get("VOD_EXTRACTOR_SEARCH_TIMEOUT_MS", "20000")) // 1000
+)
 DEFAULT_COOKIES_FILE = "/config/youtube-cookies.txt"
 # extractor_command 的哨兵:区分“调用方显式传 None(本次不用 cookies)”与
 # “未指定,读取全局配置”。
@@ -178,6 +192,10 @@ class RequestBodyTimeoutError(OSError):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "vod-extractor/1.0"
+    # HTTP/1.1 + 每个响应都带 content-length(send_json 保证):media_server 的
+    # http.Client 连接池可以复用 TCP,不必每次调用新建连接。BaseHTTPRequestHandler
+    # 默认 HTTP/1.0(响应后关连接)。
+    protocol_version = "HTTP/1.1"
     # socket 级读超时:慢速连接(慢发请求头/体)不能无限占用线程,
     # 内网暴露也保留这道防线。
     timeout = 30
@@ -198,6 +216,14 @@ class Handler(BaseHTTPRequestHandler):
                     # 失败计数(按分类累计):bot_check 持续增长 = cookies 失效/风控
                     # 拦截,外部监控据此告警(见 README 监控章节),不必等用户报障。
                     "failures": failure_snapshot(),
+                    # 并发/超时配置:排查"第三台电视 503"时先看这里——
+                    # 槽位满 + 排队超时才是 busy,不是视频问题。
+                    "concurrency": {
+                        "max": MAX_CONCURRENT,
+                        "queue_timeout_ms": QUEUE_TIMEOUT_MS,
+                        "extract_timeout_ms": TIMEOUT_SECONDS * 1000,
+                        "search_timeout_ms": SEARCH_TIMEOUT_SECONDS * 1000,
+                    },
                 },
             )
             return
@@ -240,7 +266,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": str(error)})
             return
         except ExtractorBusyError as error:
-            self.send_json(503, {"error": str(error)})
+            # reason=busy:media_server 据此判定"可重试的容量问题",做一次短
+            # 退避重试并映射成 503 SERVICE_BUSY(而不是误导性的 502 视频受限)。
+            self.send_json(503, {"error": str(error), "reason": "busy"})
             return
         except ExtractorConfigError as error:
             # 服务端配置问题(如 cookies 不可用)是 503,不是客户端的 400
@@ -398,9 +426,18 @@ def is_allowed_extract_host(host):
     return False
 
 
-def extract_vod(url):
-    if not EXTRACTOR_SEMAPHORE.acquire(blocking=False):
+def acquire_extractor_slot():
+    """获取一个 yt-dlp 并发槽:满槽时先排队 QUEUE_TIMEOUT_SECONDS,超时才 busy。"""
+    if QUEUE_TIMEOUT_SECONDS > 0:
+        acquired = EXTRACTOR_SEMAPHORE.acquire(timeout=QUEUE_TIMEOUT_SECONDS)
+    else:
+        acquired = EXTRACTOR_SEMAPHORE.acquire(blocking=False)
+    if not acquired:
         raise ExtractorBusyError("extractor is busy")
+
+
+def extract_vod(url):
+    acquire_extractor_slot()
     try:
         return run_extractor(url, single_video=True)
     finally:
@@ -424,22 +461,25 @@ def parse_search_payload(payload):
 def search_youtube(query, limit):
     """YouTube 搜索:走 yt-dlp 的 ytsearch 伪播放列表(--flat-playlist 只抓
     搜索结果页,不逐个解析视频),与观众浏览器同一条公开前端路径,无 Data API 配额。"""
-    if not EXTRACTOR_SEMAPHORE.acquire(blocking=False):
-        raise ExtractorBusyError("extractor is busy")
+    acquire_extractor_slot()
     try:
-        return run_extractor(f"ytsearch{limit}:{query}", single_video=False)
+        return run_extractor(
+            f"ytsearch{limit}:{query}",
+            single_video=False,
+            timeout_seconds=SEARCH_TIMEOUT_SECONDS,
+        )
     finally:
         EXTRACTOR_SEMAPHORE.release()
 
 
-def run_extractor(url, single_video=True):
+def run_extractor(url, single_video=True, timeout_seconds=None):
     # cookies 源文件在部署时是只读挂载:yt-dlp 退出时会回写 cookies,
     # 直接 --cookies /config/youtube-cookies.txt 会抛
     # "Read-only file system",把成功解析变成 502。每次执行复制到容器内
     # 可写的临时文件(0600),结束后删除。
     cookies_file = writable_cookies_copy()
     try:
-        return _run_extractor(url, single_video, cookies_file)
+        return _run_extractor(url, single_video, cookies_file, timeout_seconds)
     finally:
         if cookies_file:
             try:
@@ -448,7 +488,7 @@ def run_extractor(url, single_video=True):
                 pass
 
 
-def _run_extractor(url, single_video, cookies_file):
+def _run_extractor(url, single_video, cookies_file, timeout_seconds=None):
     # start_new_session=True 让 yt-dlp 及其子进程(ffmpeg 等)独占进程组,
     # stop_process 用 os.killpg 杀整组,避免 SIGKILL 只杀主进程留下孤儿。
     process = subprocess.Popen(
@@ -458,7 +498,7 @@ def _run_extractor(url, single_video, cookies_file):
         start_new_session=True,
     )
     try:
-        stdout, stderr = read_limited_process_output(process)
+        stdout, stderr = read_limited_process_output(process, timeout_seconds)
     except TimeoutError:
         record_failure("timeout")
         raise
@@ -561,11 +601,14 @@ def cookies_health():
     }
 
 
-def read_limited_process_output(process):
+def read_limited_process_output(process, timeout_seconds=None):
     selector = selectors.DefaultSelector()
     stdout = bytearray()
     stderr = bytearray()
-    deadline = time.monotonic() + TIMEOUT_SECONDS
+    # 搜索走独立的更短超时(SEARCH_TIMEOUT_SECONDS);解析用全局 TIMEOUT_SECONDS
+    # (解析含 Deno 签名/PO Token,冷启动 25~30s)。
+    budget = TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    deadline = time.monotonic() + budget
 
     for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
         if stream is None:

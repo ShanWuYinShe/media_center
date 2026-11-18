@@ -257,8 +257,9 @@ class ExtractorCommandTest2(unittest.TestCase):
 
 
 class ExtractVodBusyTest(unittest.TestCase):
-    """并发上限:信号量已被占用时必须抛 ExtractorBusyError(→503),
-    不能排队等待(否则请求线程会被 yt-dlp 时长拖住)。"""
+    """并发上限:满槽时先排队 QUEUE_TIMEOUT_SECONDS,排队超时才抛
+    ExtractorBusyError(→503 reason=busy);不能无限等待,否则请求线程会被
+    yt-dlp 时长拖死。解析本身仍由 media_server 端到端超时兜底。"""
 
     def test_extract_vod_busy_when_semaphore_taken(self):
         with mock.patch.object(
@@ -275,6 +276,42 @@ class ExtractVodBusyTest(unittest.TestCase):
             with self.assertRaises(server.ExtractorBusyError):
                 server.search_youtube("cats", 5)
         run.assert_not_called()
+
+    def test_acquire_waits_with_configured_queue_timeout(self):
+        with mock.patch.object(
+            server, "QUEUE_TIMEOUT_SECONDS", 2.5
+        ), mock.patch.object(
+            server.EXTRACTOR_SEMAPHORE, "acquire", return_value=True
+        ) as acquire:
+            server.acquire_extractor_slot()
+        acquire.assert_called_once_with(timeout=2.5)
+
+    def test_acquire_non_blocking_when_queue_timeout_disabled(self):
+        # QUEUE_TIMEOUT_MS=0(部署可配):退回旧的快速失败语义,不阻塞线程。
+        with mock.patch.object(
+            server, "QUEUE_TIMEOUT_SECONDS", 0
+        ), mock.patch.object(
+            server.EXTRACTOR_SEMAPHORE, "acquire", return_value=False
+        ) as acquire:
+            with self.assertRaises(server.ExtractorBusyError):
+                server.acquire_extractor_slot()
+        acquire.assert_called_once_with(blocking=False)
+
+    def test_search_uses_shorter_search_timeout(self):
+        # 搜索不走 Deno/PO Token,必须用独立短超时;与解析共用 60s 会长期占槽。
+        with mock.patch.object(
+            server.EXTRACTOR_SEMAPHORE, "acquire", return_value=True
+        ), mock.patch.object(
+            server.EXTRACTOR_SEMAPHORE, "release"
+        ), mock.patch.object(
+            server, "run_extractor", return_value={"entries": []}
+        ) as run:
+            server.search_youtube("cats", 5)
+        run.assert_called_once_with(
+            "ytsearch5:cats",
+            single_video=False,
+            timeout_seconds=server.SEARCH_TIMEOUT_SECONDS,
+        )
 
     def test_semaphore_released_on_failure(self):
         # 失败路径必须释放信号量,否则一次超时会让并发额度永久少一个
