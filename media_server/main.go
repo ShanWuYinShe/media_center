@@ -37,8 +37,9 @@ type mediaServer struct {
 	catalog        *Catalog
 	catalogPtr     atomic.Pointer[Catalog]
 	catalogErrText atomic.Value
-	// catalogErr 记录配置了 DB 但打开失败的原因(测试/兜底字段,与 catalogErrText
-	// 同步);/health 会标记 degraded,避免"进程活着但全站空白"被监控漏掉。
+	// catalogErr 仅给测试在构造字面量时注入错误态;运行期错误写 catalogErrText
+	// (原子),避免后台重开 goroutine 与 handler 读产生竞态。/health 会标记 degraded,
+	// 避免"进程活着但全站空白"被监控漏掉。
 	catalogErr error
 	// YouTube resolve 成功结果的持久缓存(独立 SQLite 文件);nil 时只用内存缓存。
 	resolveDisk  *resolveDiskCache
