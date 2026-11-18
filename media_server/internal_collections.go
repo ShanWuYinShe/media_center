@@ -25,7 +25,7 @@ type internalCollectionItem struct {
 // handleInternalCollections 用一次快照替换 provider 的全部合集关系。
 // 供 scripts/sync-bilibili-collections.py 等采集工具调用(内部令牌鉴权)。
 func (s *mediaServer) handleInternalCollections(w http.ResponseWriter, r *http.Request) {
-	if s.catalog == nil {
+	if s.catalogHandle() == nil {
 		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "CATALOG_DISABLED", Message: "分类维护数据库未启用。"})
 		return
 	}
@@ -62,7 +62,7 @@ func (s *mediaServer) handleInternalCollections(w http.ResponseWriter, r *http.R
 		}
 		items = append(items, CollectionImport{ID: id, Title: c.Title, VideoIDs: c.VideoIDs})
 	}
-	collectionCount, memberCount, err := s.catalog.ReplaceCollections(provider, items)
+	collectionCount, memberCount, err := s.catalogHandle().ReplaceCollections(provider, items)
 	if err != nil {
 		log.Printf("replace collections provider=%s: %v", provider, err)
 		s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "合集写入失败。"})

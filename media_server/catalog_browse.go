@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -42,11 +43,18 @@ WHERE v.provider = ? AND v.native_id = ?`, provider, nativeID)
 }
 
 // DistinctProviders 返回 catalog 中有 approved 视频的所有 provider(升序)。
+// 后台/测试路径用它(与 handler 的 Context 版本等价)。
 func (c *Catalog) DistinctProviders() ([]string, error) {
+	return c.DistinctProvidersContext(context.Background())
+}
+
+// DistinctProvidersContext 同 DistinctProviders,但把请求 ctx 传给 SQLite:
+// HTTP 超时/客户端断开后查询可被取消,不再占住单连接拖慢后续请求。
+func (c *Catalog) DistinctProvidersContext(ctx context.Context) ([]string, error) {
 	if c == nil {
 		return nil, nil
 	}
-	rows, err := c.db.Query(`SELECT DISTINCT provider FROM category_members WHERE status = 'approved' AND ` + notPageGlobCond("provider", "native_id") + ` ORDER BY provider ASC`)
+	rows, err := c.db.QueryContext(catalogRequestContext(ctx), `SELECT DISTINCT provider FROM category_members WHERE status = 'approved' AND `+notPageGlobCond("provider", "native_id")+` ORDER BY provider ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query distinct providers: %w", err)
 	}
@@ -64,11 +72,16 @@ func (c *Catalog) DistinctProviders() ([]string, error) {
 
 // CategoriesForProvider 返回某 provider 有 approved 视频的所有 category_id(升序)。
 func (c *Catalog) CategoriesForProvider(provider string) ([]string, error) {
+	return c.CategoriesForProviderContext(context.Background(), provider)
+}
+
+// CategoriesForProviderContext 是 CategoriesForProvider 的请求上下文版本。
+func (c *Catalog) CategoriesForProviderContext(ctx context.Context, provider string) ([]string, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if provider == "" || c == nil {
 		return nil, nil
 	}
-	rows, err := c.db.Query(`SELECT DISTINCT category_id FROM category_members WHERE provider = ? AND status = 'approved' AND `+notPageGlobCond("provider", "native_id")+` ORDER BY category_id ASC`, provider)
+	rows, err := c.db.QueryContext(catalogRequestContext(ctx), `SELECT DISTINCT category_id FROM category_members WHERE provider = ? AND status = 'approved' AND `+notPageGlobCond("provider", "native_id")+` ORDER BY category_id ASC`, provider)
 	if err != nil {
 		return nil, fmt.Errorf("query categories for provider: %w", err)
 	}
@@ -123,6 +136,12 @@ func (c *Catalog) ApprovedPageForProvider(provider, categoryID string, page, pag
 // 过滤。计数与列表共用同一 WHERE,保证 total 与分页内容一致;翻页时过滤条件
 // 由调用方原样透传(同一档位内 total 不变)。
 func (c *Catalog) ApprovedPageForProviderFiltered(provider, categoryID string, page, pageSize int, bounds DurationBounds) ([]CatalogVideo, int, error) {
+	return c.ApprovedPageForProviderFilteredContext(context.Background(), provider, categoryID, page, pageSize, bounds)
+}
+
+// ApprovedPageForProviderFilteredContext 是请求上下文版本:超时/断开后计数与
+// 列表查询可被取消,不占住单连接拖慢目录浏览主链路。
+func (c *Catalog) ApprovedPageForProviderFilteredContext(ctx context.Context, provider, categoryID string, page, pageSize int, bounds DurationBounds) ([]CatalogVideo, int, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	categoryID = strings.TrimSpace(categoryID)
 	if provider == "" || categoryID == "" || c == nil {
@@ -137,7 +156,7 @@ func (c *Catalog) ApprovedPageForProviderFiltered(provider, categoryID string, p
 	durationCond, durationArgs := bounds.conditions()
 	countArgs := append([]any{provider, categoryID}, durationArgs...)
 	var total int
-	if err := c.db.QueryRow(
+	if err := c.db.QueryRowContext(catalogRequestContext(ctx),
 		`SELECT COUNT(*) FROM category_members m JOIN videos v ON v.provider = m.provider AND v.native_id = m.native_id
 WHERE m.provider = ? AND m.category_id = ? AND m.status = 'approved' AND `+notPageGlobCond("m.provider", "v.native_id")+durationCond,
 		countArgs...,
@@ -150,7 +169,7 @@ WHERE m.provider = ? AND m.category_id = ? AND m.status = 'approved' AND `+notPa
 	offset := (page - 1) * pageSize
 	listArgs := append([]any{provider, categoryID}, durationArgs...)
 	listArgs = append(listArgs, pageSize, offset)
-	rows, err := c.db.Query(`
+	rows, err := c.db.QueryContext(catalogRequestContext(ctx), `
 SELECT v.provider, v.native_id, v.title, v.description, v.creators, v.duration_sec, v.year, v.thumbnail_url, v.source_url
 FROM category_members m
 JOIN videos v ON v.provider = m.provider AND v.native_id = m.native_id
@@ -306,6 +325,13 @@ func escapeLike(s string) string {
 // provider 非空时只搜索该 provider(如 App 端只支持 bilibili 播放,避免返回
 // 其他 provider 无法播放的结果)。
 func (c *Catalog) SearchApproved(query, provider string, page, pageSize int) ([]CatalogVideo, int, error) {
+	return c.SearchApprovedContext(context.Background(), query, provider, page, pageSize)
+}
+
+// SearchApprovedContext 是 SearchApproved 的请求上下文版本:搜索是本服务最重的
+// 公开查询(两次全表 LIKE 扫描),超时/断开后必须能被取消,不能再继续占着
+// MaxOpenConns(1) 的唯一连接。
+func (c *Catalog) SearchApprovedContext(ctx context.Context, query, provider string, page, pageSize int) ([]CatalogVideo, int, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return []CatalogVideo{}, 0, nil
@@ -335,7 +361,7 @@ FROM videos v
 JOIN category_members m ON m.provider = v.provider AND m.native_id = v.native_id
 WHERE ` + whereSQL + `
 GROUP BY v.provider, v.native_id)`
-	if err := c.db.QueryRow(countSQL, args...).Scan(&total); err != nil {
+	if err := c.db.QueryRowContext(catalogRequestContext(ctx), countSQL, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count search: %w", err)
 	}
 	if total == 0 {
@@ -353,7 +379,7 @@ GROUP BY v.provider, v.native_id
 ORDER BY top DESC, sc DESC, v.native_id ASC
 LIMIT ? OFFSET ?`
 	queryArgs := append(append([]any{}, args...), pageSize, offset)
-	rows, err := c.db.Query(listSQL, queryArgs...)
+	rows, err := c.db.QueryContext(catalogRequestContext(ctx), listSQL, queryArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query search: %w", err)
 	}

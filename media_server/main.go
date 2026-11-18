@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -30,9 +31,14 @@ type mediaServer struct {
 	config         AppConfig
 	categories     []ContentCategory
 	categoriesByID map[string]ContentCategory
+	// catalog 指针/错误/状态用原子槽:启动期打开失败后会后台退避重开并在成功时
+	// 原子替换(见 catalog_reopen.go),读路径无锁。catalog 字段仅保留给测试直接
+	// 构造 mediaServer{catalog: c};生产路径只走 catalogPtr。
 	catalog        *Catalog
-	// catalogErr 记录配置了 DB 但打开失败的原因:此时服务仍可响应(空目录),
-	// 但 /health 会标记 degraded,避免"进程活着但全站空白"被监控漏掉。
+	catalogPtr     atomic.Pointer[Catalog]
+	catalogErrText atomic.Value
+	// catalogErr 记录配置了 DB 但打开失败的原因(测试/兜底字段,与 catalogErrText
+	// 同步);/health 会标记 degraded,避免"进程活着但全站空白"被监控漏掉。
 	catalogErr error
 	// YouTube resolve 成功结果的持久缓存(独立 SQLite 文件);nil 时只用内存缓存。
 	resolveDisk  *resolveDiskCache
@@ -178,10 +184,12 @@ func main() {
 
 	if config.CatalogDBPath != "" {
 		if catalog, err := OpenCatalog(config.CatalogDBPath); err != nil {
-			log.Printf("warning: open catalog %q failed: %v", config.CatalogDBPath, err)
-			server.catalogErr = err
+			// 不再永久降级:后台按退避重开,成功后原子替换目录(见 catalog_reopen.go)。
+			log.Printf("warning: open catalog %q failed: %v (will retry in background)", config.CatalogDBPath, err)
+			server.setCatalogFailed(err)
+			server.startCatalogReopenLoop(config.CatalogDBPath)
 		} else {
-			server.catalog = catalog
+			server.setCatalogReady(catalog)
 			defer catalog.Close()
 		}
 	}
@@ -312,12 +320,16 @@ func (s *mediaServer) serveAPI(w http.ResponseWriter, r *http.Request) {
 		if s.yt != nil && s.yt.vodExtractorURL != "" {
 			payload["youtube"] = s.youtubeCircuit().snapshot(time.Now())
 		}
-		switch {
-		case s.catalogErr != nil:
+		switch health := s.catalogHealth(); health {
+		case "error":
 			status = http.StatusServiceUnavailable
 			payload["status"] = "degraded"
 			payload["catalog"] = "error"
-		case s.catalog == nil:
+			if err := s.catalogErrorMessage(); err != nil {
+				// 具体原因只给探针/运维看(可能含路径),便于判断是磁盘/权限还是锁冲突。
+				payload["catalogError"] = err.Error()
+			}
+		case "disabled":
 			payload["catalog"] = "disabled"
 		default:
 			payload["catalog"] = "ok"
@@ -326,7 +338,7 @@ func (s *mediaServer) serveAPI(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(r.URL.Path, "/internal/"):
 		s.handleInternal(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/providers":
-		s.handleProviders(w)
+		s.handleProviders(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/providers/credentials":
 		s.handleProviderCredentials(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/providers/"):
