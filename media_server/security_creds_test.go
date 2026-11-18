@@ -141,7 +141,7 @@ func TestAppDownloadURLRejectsHostPoisoning(t *testing.T) {
 		s := &mediaServer{config: AppConfig{PublicBaseURL: "https://yinghuoren.com"}}
 		req := httptest.NewRequest(http.MethodGet, "/api/app/update", nil)
 		req.Host = "evil.example.com"
-		got := s.appDownloadURL(req, "normal")
+		got := s.appDownloadURL(req, "normal", "")
 		if got != "https://yinghuoren.com/app/download?variant=normal" {
 			t.Fatalf("public url must win over host, got %q", got)
 		}
@@ -151,7 +151,7 @@ func TestAppDownloadURLRejectsHostPoisoning(t *testing.T) {
 		s := &mediaServer{config: AppConfig{}}
 		req := httptest.NewRequest(http.MethodGet, "/api/app/update", nil)
 		req.Host = "evil.example.com"
-		if got := s.appDownloadURL(req, "normal"); got != "" {
+		if got := s.appDownloadURL(req, "normal", ""); got != "" {
 			t.Fatalf("untrusted host must be rejected, got %q", got)
 		}
 	})
@@ -161,7 +161,7 @@ func TestAppDownloadURLRejectsHostPoisoning(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/app/update", nil)
 		req.Host = "media_server:8787" // 内部地址,但 X-Forwarded-Host 被伪造
 		req.Header.Set("X-Forwarded-Host", "attacker.com")
-		if got := s.appDownloadURL(req, "normal"); got != "" {
+		if got := s.appDownloadURL(req, "normal", ""); got != "" {
 			t.Fatalf("spoofed forwarded host must be rejected, got %q", got)
 		}
 	})
@@ -170,7 +170,7 @@ func TestAppDownloadURLRejectsHostPoisoning(t *testing.T) {
 		s := &mediaServer{config: AppConfig{}}
 		req := httptest.NewRequest(http.MethodGet, "/api/app/update", nil)
 		req.Host = "localhost:8787"
-		got := s.appDownloadURL(req, "normal")
+		got := s.appDownloadURL(req, "normal", "")
 		if got == "" || !strings.Contains(got, "localhost") {
 			t.Fatalf("localhost should be allowed for dev, got %q", got)
 		}

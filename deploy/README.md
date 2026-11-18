@@ -63,6 +63,16 @@ media_server/Dockerfile 与 `.github/workflows/ci.yml` 的同名字段仍一致
   告警口径：看 `failures.counts.bot_check` 是否持续增长，而非看搜索成功率。
   可由外部监控定时打内网 /health，或在 media_server 侧观察 resolve 的 502 率。
 
+## 边缘缓存（可选）
+
+media_server 对**版本化** APK 下载地址（`/api/v1/app/download?...&v=<sha256 前 12 位>`，
+由 `/api/app/update` 下发的 `apkUrl` 自动携带）返回 `Cache-Control: public, max-age=31536000, immutable`；
+缺省/不匹配 `v` 的旧地址仍 `no-store`。如需经 Cloudflare 缓存 APK 降低回源：建 Cache Rule
+（URL 匹配 `/api/v1/app/download*` 且存在查询参数 `v`）→ Eligible for cache、Edge TTL 1 年。
+**不要在无 `v` 的地址上开缓存**（发版后会缓存住旧 APK 导致更新校验失败）。
+catalog JSON 接口已带 `Cache-Control: public, max-age=30/60`，可按需加 Cache Rule；
+凭证（`/providers/credentials`）、youtube 实时端点、崩溃上报、内部接口带 `no-store` 或限流语义，禁止缓存。
+
 ## 运维
 
 - **版本升级**：改 `versions.env` → `make build` → `make up <svc...>`。

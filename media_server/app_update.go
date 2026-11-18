@@ -151,7 +151,17 @@ func (s *mediaServer) handleAppDownload(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	w.Header().Set("Cache-Control", "no-store")
+	// 版本化下载地址(带 v=<sha256 前 12 位>)内容不可变,允许 CDN/浏览器长缓存;
+	// 没有 v 或 v 不匹配(旧客户端/发版后旧地址)仍 no-store——同一 URL 会随发版
+	// 变化,缓存它会把旧 APK 发给新版本客户端。
+	versionToken := appDownloadVersionToken(manifest.SHA256)
+	if versionToken != "" &&
+		strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("v")), versionToken) {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Header().Set("ETag", "\""+manifest.SHA256+"\"")
+	} else {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	w.Header().Set("Content-Type", "application/vnd.android.package-archive")
 	// 下载文件名与变体对齐(normal: media-center-app.apk;其余变体加后缀),
 	// 与 release-apk.sh 的服务器索引命名约定一致。
@@ -207,7 +217,7 @@ func (s *mediaServer) readAppUpdateManifest(r *http.Request, variant string) (Ap
 	// 重新打包而不准)。此前用 info.Size() != manifest.SizeBytes 强校验会直接报错,
 	// 导致「检查更新」也被阻塞——尺寸校验应由客户端下载后按 sha256 做,这里不拦。
 	manifest.SizeBytes = info.Size()
-	manifest.APKURL = s.appDownloadURL(r, variant)
+	manifest.APKURL = s.appDownloadURL(r, variant, manifest.SHA256)
 	if manifest.APKURL == "" {
 		// 推导失败(无 PUBLIC_URL 且 Host 不受信):不让客户端拿到空/被投毒的地址,
 		// 直接按内部错误处理,运维可从日志看到被拒绝的 Host。
@@ -245,10 +255,17 @@ func validateAppUpdateManifest(manifest AppUpdateManifest) error {
 	return nil
 }
 
-func (s *mediaServer) appDownloadURL(r *http.Request, variant string) string {
+func (s *mediaServer) appDownloadURL(r *http.Request, variant, sha256Hex string) string {
+	versionToken := appDownloadVersionToken(sha256Hex)
+	withVersion := func(downloadURL string) string {
+		if versionToken == "" {
+			return downloadURL
+		}
+		return downloadURL + "&v=" + versionToken
+	}
 	baseURL := s.config.PublicBaseURL
 	if base := strings.TrimRight(baseURL, "/"); base != "" {
-		return base + "/app/download?variant=" + variant
+		return withVersion(base + "/app/download?variant=" + variant)
 	}
 	// 未配置 MEDIA_SERVER_PUBLIC_URL 时的兜底推导:Host 必须可信(显式白名单
 	// 或本地开发网段),否则拒绝——防止 Host 头投毒把 apkUrl 指向攻击者域名,
@@ -273,7 +290,18 @@ func (s *mediaServer) appDownloadURL(r *http.Request, variant string) string {
 	if prefix == "" {
 		prefix = "/api"
 	}
-	return scheme + "://" + host + prefix + "/app/download?variant=" + variant
+	return withVersion(scheme + "://" + host + prefix + "/app/download?variant=" + variant)
+}
+
+// appDownloadVersionToken 返回 APK 下载地址的版本化令牌(sha256 前 12 位)。
+// 令牌来自 manifest 的 sha256:同一版本重新打包(哪怕 versionCode 不变)也会变,
+// 从而保证"URL 与内容一一对应",CDN 可以安全地用长缓存。
+func appDownloadVersionToken(sha256Hex string) string {
+	sha := strings.TrimSpace(strings.ToLower(sha256Hex))
+	if len(sha) < 12 {
+		return ""
+	}
+	return sha[:12]
 }
 
 // isAllowedDownloadHost 判断 Host 是否可信:显式白名单(MEDIA_SERVER_ALLOWED_HOSTS)、
