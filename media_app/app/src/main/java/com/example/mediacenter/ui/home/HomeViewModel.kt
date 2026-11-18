@@ -26,6 +26,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+
+// 首屏/分类请求总预算:弱网/服务端不可达时 OkHttp 单次 15s × 3 次尝试可达
+// 约 47s 才出错误,期间用户只看到骨架屏。给首屏一个确定结论(与 legacy 的
+// 20s 首屏预算对齐);到点取消在飞请求,靠 NetworkRestoreEffect 在恢复后重试。
+private const val HomeLoadTimeoutMs = 20_000L
+
+/** 首屏/分类请求超出总预算(见 [HomeLoadTimeoutMs])。 */
+private class HomeLoadTimeoutException : Exception("home load timeout")
 
 /** 首页顶部的「继续观看」伪分类 id；不会与真实目录分类冲突。 */
 const val HomeContinueTabId = "__continue__"
@@ -222,7 +231,11 @@ class HomeViewModel(
             }
             try {
                 // 一次 bootstrap 聚合请求拿到 providers + 分类(替代串行两次 RTT)。
-                val (providers, categories) = repository.bootstrap()
+                // 总预算防止弱网下 3 次内部重试把首屏拖到 40s+ 才报错。
+                val bootstrap = withTimeoutOrNull(HomeLoadTimeoutMs) {
+                    repository.bootstrap()
+                } ?: throw HomeLoadTimeoutException()
+                val (providers, categories) = bootstrap
                 _uiState.update {
                     it.copy(providers = providers, currentProvider = repository.currentProvider)
                 }
@@ -272,7 +285,11 @@ class HomeViewModel(
                     } else {
                         it.copy(
                             isLoading = false,
-                            error = e.friendlyLoadMessage("首页加载失败，请重试"),
+                            error = if (e is HomeLoadTimeoutException) {
+                                "加载超时，请检查网络后重试"
+                            } else {
+                                e.friendlyLoadMessage("首页加载失败，请重试")
+                            },
                         )
                     }
                 }
@@ -431,7 +448,9 @@ class HomeViewModel(
                         return@launch
                     }
                 }
-                val response = repository.catalogPage(categoryId, page = 1, pageSize = HomePageSize)
+                val response = withTimeoutOrNull(HomeLoadTimeoutMs) {
+                    repository.catalogPage(categoryId, page = 1, pageSize = HomePageSize)
+                } ?: throw HomeLoadTimeoutException()
                 if (_uiState.value.selectedTab != categoryId ||
                     repository.currentProvider != provider
                 ) return@launch
@@ -477,7 +496,11 @@ class HomeViewModel(
                         } else {
                             it.copy(
                                 isLoading = false,
-                                error = e.friendlyLoadMessage("分类内容加载失败，请重试"),
+                                error = if (e is HomeLoadTimeoutException) {
+                                    "加载超时，请检查网络后重试"
+                                } else {
+                                    e.friendlyLoadMessage("分类内容加载失败，请重试")
+                                },
                             )
                         }
                     }

@@ -199,4 +199,23 @@ class PlayerViewModelTest {
         assertNull(vm.uiState.value.next)
         assertEquals(false, vm.onPlaybackEnded())
     }
+
+    @Test
+    fun `播放失败重试强制重新解析而不命中预取缓存`() = runTest {
+        val repo = FakeRepository(playback(0, 0))
+        val vm = PlayerViewModel("A", repository = repo)
+        advanceUntilIdle()
+        assertEquals(listOf("A"), repo.resolvedIds)
+
+        // 首次解析结果已回填预取缓存:普通重试直接命中,不再打 repository。
+        vm.resolvePlayback()
+        advanceUntilIdle()
+        assertEquals(listOf("A"), repo.resolvedIds)
+
+        // 播放错误后的重试必须绕过 5 分钟预取缓存:缓存里是同一批失效直链,
+        // 不重新解析会让「重试」变成死循环。
+        vm.resolvePlayback(forceRefresh = true)
+        advanceUntilIdle()
+        assertEquals(listOf("A", "A"), repo.resolvedIds)
+    }
 }

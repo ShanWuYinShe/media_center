@@ -151,6 +151,13 @@ internal fun PlayerContent(
     // (loadEpoch 驱动,同分P携位续播);再错才显示错误层交手动重试,防无限
     // 循环。READY 即播放成功,重置计数。
     var playerAutoRetries by remember { mutableIntStateOf(0) }
+    // 自动恢复总预算:单档重载 + 逐档降清晰度可能循环很久(每档内部还有重试),
+    // 弱网/坏流下会让用户长时间盯着无文案转圈。超出预算直接展示错误层,
+    // 交还用户手动重试(重试会强制重新解析,见 PlayerViewModel.resolvePlayback)。
+    var recoveryAttempts by remember { mutableIntStateOf(0) }
+    var recoveryStartedAtMs by remember { mutableLongStateOf(0L) }
+    // 自动恢复期间的文案,避免"画面冻住但没有任何提示"。
+    var recoveryNotice by remember { mutableStateOf<String?>(null) }
     // 每个流(换P/换清晰度)只允许触发一次自动连播,避免 ENDED 重复回调导致连跳。
     var autoNextTriggered by remember { mutableStateOf(false) }
     val currentHasAutoNext by rememberUpdatedState(hasAutoNext)
@@ -245,20 +252,35 @@ internal fun PlayerContent(
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (recoveryStartedAtMs == 0L) recoveryStartedAtMs = now
+                recoveryAttempts++
+                if (recoveryAttempts > MAX_AUTO_RECOVERY_ATTEMPTS ||
+                    now - recoveryStartedAtMs > AUTO_RECOVERY_BUDGET_MS
+                ) {
+                    // 预算耗尽:不再静默循环,直接展示错误层(用户可按重试强制重新解析)。
+                    AppLog.w("Player", "auto recovery budget exhausted (attempts=$recoveryAttempts)")
+                    recoveryNotice = null
+                    playerError = friendlyPlaybackError(error)
+                    return
+                }
                 if (playerAutoRetries < 1) {
                     // 首次错误自动重载一次:loadEpoch 驱动加载 effect 重走,
                     // 同分P携位续播;playerError 由加载 effect 清空。
                     playerAutoRetries++
                     loadEpoch++
+                    recoveryNotice = "网络不稳定，正在重试…"
                     return
                 }
                 // 重载后仍失败:先尝试降一档清晰度(弱网/高码率最常见的恢复手段),
-                // 成功切换则重置重试预算;没有更低档才展示错误层。
+                // 成功切换则重置单档重试预算;没有更低档才展示错误层。
                 if (currentOnQualityFallback()) {
                     playerAutoRetries = 0
                     playerError = null
+                    recoveryNotice = "播放失败，正在尝试更低清晰度…"
                     return
                 }
+                recoveryNotice = null
                 playerError = friendlyPlaybackError(error)
             }
         }
@@ -266,6 +288,19 @@ internal fun PlayerContent(
     // 换流/换P后重新允许自动连播;同一流内 ENDED 只触发一次。
     LaunchedEffect(stream, playbackResult.pages.currentPage) {
         autoNextTriggered = false
+        // 换流/换分P是新的播放尝试:恢复预算重新计算。
+        recoveryAttempts = 0
+        recoveryStartedAtMs = 0L
+        recoveryNotice = null
+    }
+    // 连续稳定播放 10s 才算恢复成功并重置预算:只按 READY 重置会让
+    // 「就绪即失败」的流无限循环(READY→错误→READY…)。
+    LaunchedEffect(isPlaying) {
+        if (!isPlaying) return@LaunchedEffect
+        delay(10_000)
+        recoveryAttempts = 0
+        recoveryStartedAtMs = 0L
+        recoveryNotice = null
     }
     // 合集队列是并行网络请求,极短视频可能在队列到达前就播完:队列晚到时
     // 如果播放器已处于 ENDED,补触发一次(否则用户停在最后一帧没有下一步)。
@@ -738,6 +773,13 @@ internal fun PlayerContent(
         if (isBuffering) {
             LoadingIndicator(modifier = Modifier.fillMaxSize())
         }
+        // 播放失败自动恢复期间的文案:旧实现只有一圈无文案 spinner,用户无法
+        // 判断是在重试、已卡死还是按键失灵。
+        if (recoveryNotice != null && !isLoading && playerError == null && overlayError == null) {
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.38f))) {
+                LoadingIndicator(message = recoveryNotice!!)
+            }
+        }
         // 切清晰度/换分P 的等待反馈:解析可能需要数秒(YouTube 冷解析更久),
         // 旧流仍在播放,不给提示用户会以为按键失灵。错误层优先于它。
         if (isLoading && overlayError == null && playerError == null) {
@@ -746,9 +788,11 @@ internal fun PlayerContent(
             }
         }
         // 中央播放状态：暂停时常驻 ▶，恢复播放时短暂显示 ❚❚ 后淡出。
-        // 放在缓冲指示之后，暂停/缓冲时三角形不会被转圈盖住。
+        // 缓冲(isBuffering)时隐藏——旧实现缓冲期间会画出「暂停 ▶」并盖住转圈，
+        // 像视频已暂停/需要按 OK。
         PlaybackStateGlyph(
             isPlaying = isPlaying,
+            isBuffering = isBuffering,
             modifier = Modifier.align(Alignment.Center),
         )
         // 控制条与解析失败错误层互斥渲染：错误层盖在控制条上时，
@@ -788,12 +832,17 @@ internal fun PlayerContent(
 @Composable
 private fun PlaybackStateGlyph(
     isPlaying: Boolean,
+    isBuffering: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    var visible by remember { mutableStateOf(!isPlaying) }
-    LaunchedEffect(isPlaying) {
-        visible = true
+    // 缓冲/首次加载时 media3 的 isPlaying 为 false(STATE_BUFFERING),旧实现会
+    // 在缓冲期间常驻「暂停 ▶」圆盘并盖住缓冲转圈,像视频已暂停/需要按 OK。
+    var visible by remember { mutableStateOf(!isPlaying && !isBuffering) }
+    LaunchedEffect(isPlaying, isBuffering) {
+        visible = !isPlaying && !isBuffering
         if (isPlaying) {
+            // 恢复播放短暂显示 ❚❚ 后淡出。
+            visible = true
             delay(800)
             visible = false
         }
@@ -838,6 +887,10 @@ private fun PlaybackStateGlyph(
 }
 
 private const val EpisodeSwitchThrottleMs = 700L
+
+// 播放失败自动恢复预算:尝试次数与总时长任一超限即展示错误层(见 onPlayerError)。
+private const val MAX_AUTO_RECOVERY_ATTEMPTS = 6
+private const val AUTO_RECOVERY_BUDGET_MS = 90_000L
 
 /** 暂停后仍刷新进度条的窗口(最后交互起算):覆盖遥控器 seek 的即时反馈,之后停止轮询。 */
 private const val PAUSED_REFRESH_WINDOW_MS = 3_000L

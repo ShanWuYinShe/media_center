@@ -23,6 +23,10 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+
+/** 目录搜索超出总预算(见 [CATALOG_SEARCH_TIMEOUT_MS])。 */
+private class SearchTimeoutException : Exception("search timeout")
 
 data class SearchUiState(
     val query: String = "",
@@ -161,7 +165,13 @@ class SearchViewModel(
                 )
                 recordHistory(query)
             } else {
-                applyFirstPage(query, repository.search(query, page = 1, pageSize = SEARCH_PAGE_SIZE))
+                // 目录搜索给总预算:弱网/服务端不可达时 MediaApi 内部重试可达 ~47s,
+                // 期间已有旧结果时界面看起来像"搜了没反应"。超时落明确文案。
+                // YouTube 实时搜索自身有服务端 35s 预算,不走这里的短超时。
+                val response = withTimeoutOrNull(CATALOG_SEARCH_TIMEOUT_MS) {
+                    repository.search(query, page = 1, pageSize = SEARCH_PAGE_SIZE)
+                } ?: throw SearchTimeoutException()
+                applyFirstPage(query, response)
                 recordHistory(query)
             }
             AppLog.i(
@@ -252,6 +262,7 @@ class SearchViewModel(
 
     private fun searchErrorMessage(error: Exception): String = when {
         error is ApiException && error.statusCode == 429 -> "搜索过于频繁，请稍后再试"
+        error is SearchTimeoutException -> "搜索超时，请检查网络后重试"
         else -> error.friendlyLoadMessage("搜索失败，请重试")
     }
 
@@ -259,5 +270,8 @@ class SearchViewModel(
         const val SEARCH_DEBOUNCE_MS = 600L
         // 与服务端 pageSize 上限(40)留余量,兼顾首屏速度。
         const val SEARCH_PAGE_SIZE = 30
+        // 目录搜索(本地解析 provider)总预算;YouTube 实时搜索有服务端 35s 预算,
+        // 不走这个短超时(冷启动 ytsearch 本身就可能十几秒)。
+        const val CATALOG_SEARCH_TIMEOUT_MS = 15_000L
     }
 }

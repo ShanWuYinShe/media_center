@@ -24,3 +24,12 @@ internal fun nextPrefetchTargetId(
     }
     is PlaybackNext.Episode -> next.video.id
 }
+
+/**
+ * 下一集预取的清晰度 key:
+ * - 多P切页(selectPage)按当前档位传 currentQn,预取才能按 qn 精确命中;
+ * - 合集切集(switchEpisode)会先把 currentQn 置 null,预取也必须用 null,
+ *   否则写入 key 与切集查询 key 不一致,预取永远命中不了(还要白跑一次解析)。
+ */
+internal fun nextPrefetchQn(next: PlaybackNext?, currentQn: Int?): Int? =
+    if (next is PlaybackNext.Episode) null else currentQn

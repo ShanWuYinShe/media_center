@@ -181,6 +181,17 @@ class HomeViewModelTest {
         assertEquals(3, viewModel.uiState.value.items.size)
         assertFalse("重试成功后标记应清空", viewModel.uiState.value.staleRefreshFailed)
     }
+
+    @Test
+    fun `首屏请求超预算时展示加载超时而不是一直骨架`() = runTest {
+        val repository = FakeRepository().apply { providersDelayMs = 60_000 }
+        val viewModel = HomeViewModel(repository, autoCheckUpdate = false)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertFalse(state.isLoading)
+        assertEquals("加载超时，请检查网络后重试", state.error)
+    }
 }
 
 private class FakeRepository : MediaRepositoryApi {
@@ -190,12 +201,17 @@ private class FakeRepository : MediaRepositoryApi {
     /** 非空时 tv 分类请求会挂起,模拟"后台刷新在途"以验证 SWR 行为。 */
     var gateTvRequest: CompletableDeferred<Unit>? = null
 
+    /** >0 时 bootstrap 的 providers 请求延迟(虚拟时间),用于验证首屏总预算。 */
+    var providersDelayMs: Long = 0
+
     override fun setProvider(provider: String) {
         currentProvider = provider
     }
 
-    override suspend fun providers(): List<ProviderInfo> =
-        listOf(ProviderInfo("bilibili", "B站"))
+    override suspend fun providers(): List<ProviderInfo> {
+        if (providersDelayMs > 0) kotlinx.coroutines.delay(providersDelayMs)
+        return listOf(ProviderInfo("bilibili", "B站"))
+    }
 
     override suspend fun refreshCredentials() = Unit
 

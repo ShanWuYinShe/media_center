@@ -95,7 +95,13 @@ fun PagedVideoGrid(
         }
     }
 
+    // 只在 resetKey 真正变化(切分类/换关键词)时归零:首次组合或从详情/播放
+    // 返回时,rememberSaveable 恢复的滚动位置必须保留,否则返回首页会被强制滚回
+    // 顶部、焦点恢复也找不到目标(旧实现每次进入组合都执行 scrollToItem(0))。
+    var lastResetKey by remember { mutableStateOf(resetKey) }
     LaunchedEffect(resetKey) {
+        if (lastResetKey == resetKey) return@LaunchedEffect
+        lastResetKey = resetKey
         if (gridState.firstVisibleItemIndex != 0 || gridState.firstVisibleItemScrollOffset != 0) {
             gridState.scrollToItem(0)
         }
