@@ -201,7 +201,11 @@ def fix_arg(s):
     try:
         return s.encode("utf-8").decode("utf-8")
     except UnicodeDecodeError:
+        # argv 里的孤代理: 按 surrogateescape 还原原始字节再按 UTF-8 解码;
+        # 无法还原的字节用 replace 兜底,保证任何环境不崩溃。
         return s.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+    except UnicodeEncodeError:
+        return s.encode("utf-8", "replace").decode("utf-8")
 
 path, vcode, vname, apk_name, size, sha, notes = (fix_arg(a) for a in sys.argv[1:8])
 manifest = {
