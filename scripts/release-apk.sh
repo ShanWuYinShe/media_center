@@ -191,7 +191,8 @@ build_variant() {
 # 发布说明为空时不写 releaseNotes（Go 侧 omitempty 可选字段）。
 write_manifest() {
   local path="$1" vcode="$2" vname="$3" apk_name="$4" size="$5" sha="$6" notes="$7"
-  python3 - "${path}" "${vcode}" "${vname}" "${apk_name}" "${size}" "${sha}" "${notes}" <<'PY'
+  # PYTHONUTF8=1: force UTF-8 argv decoding; runner locale may lack UTF-8 and Chinese notes via argv become surrogate escapes, crashing json.dump with ensure_ascii=False (seen on v1.18.0 release).
+  PYTHONUTF8=1 python3 - "${path}" "${vcode}" "${vname}" "${apk_name}" "${size}" "${sha}" "${notes}" <<'PY'
 import json, sys
 from datetime import datetime, timezone
 
