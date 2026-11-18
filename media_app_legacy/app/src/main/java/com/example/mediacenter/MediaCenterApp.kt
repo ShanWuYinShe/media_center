@@ -40,17 +40,12 @@ class MediaCenterApp : MultiDexApplication() {
         // 必须在任何网络请求之前完成,否则 OkHttp / HttpsURLConnection 用的仍是
         // 平台默认 TLS——Android 4.4.2 的老 TLS 栈(OpenSSL 1.0.1)与 Cloudflare
         // 等现代服务器握手失败(缺 TLS 1.2 默认启用 / 现代套件 / GTS 根)。
-        // 顺序:先 init(加载 Conscrypt + 证书 + 构建 TLS),再 install(设为
-        // HttpsURLConnection 默认)。
-        AppHttpClient.init(this)
-        // 把自定义 TLS 设为 HttpsURLConnection 进程级默认,覆盖 ExoPlayer
-        // DefaultHttpDataSource(走 HttpsURLConnection)的播放链路。
-        AppHttpClient.installHttpsUrlConnectionDefault()
-        // 启用 HTTP 磁盘缓存(缩略图复用):必须在任何图片请求前、Application 早期初始化。
-        AppHttpClient.initCache(this)
-        // 播放媒体磁盘缓存:SimpleCache 首次构造要打开数据库/扫描目录,提前预热
-        // (老盒子上可占数十~数百 ms,见 LegacyPlaybackMediaCache)。
-        LegacyPlaybackMediaCache.cache(this)
+        // TLS 初始化与媒体缓存构造(Conscrypt/AndroidCAStore/TrustManager、
+        // SimpleCache 打开数据库/扫描目录)在老盒子上可达数十~数百 ms:放后台线程
+        // 预热,不占冷启动首帧;首个网络客户端/首次播放会同步等待就绪
+        // (AppHttpClient.newBuilder/awaitInit、LegacyPlaybackMediaCache.cache 的锁)。
+        AppHttpClient.initAsync(this)
+        LegacyPlaybackMediaCache.prewarmAsync(this)
         installCrashHandler()
     }
 

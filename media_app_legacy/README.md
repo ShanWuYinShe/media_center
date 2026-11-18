@@ -13,7 +13,7 @@
 3. 打包调试 APK：使用 **Build > Build Bundle(s) / APK(s) > Build APK(s)**。
 4. 打包发布 APK：使用 **Build > Generate Signed Bundle / APK...**。
 
-App 仍按 Android 4.4.2/API 19 设计，使用原生 View UI（不打包 Compose、Coil 2.x、TV Material 等 API 21+ 依赖），但视觉与交互口径跟随新版；老旧低内存盒子优先保证启动速度、焦点稳定与图片缓存上限。
+App 仍按 Android 4.4.2/API 19 设计，使用原生 View UI（不打包 Compose、Coil 2.x、TV Material 等 API 21+ 依赖），但视觉与交互口径跟随新版；老旧低内存盒子优先保证启动速度、焦点稳定与图片缓存上限。TLS（Conscrypt/信任库）与播放媒体 SimpleCache 在后台线程预热，不占冷启动首帧；首个网络客户端/首次播放会同步等待就绪（≤10s 兜底），避免老盒子用平台 TLS 握手失败。
 
 ## B 站多 P 视频支持
 
