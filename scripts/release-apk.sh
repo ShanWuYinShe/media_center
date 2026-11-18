@@ -196,7 +196,14 @@ write_manifest() {
 import json, sys
 from datetime import datetime, timezone
 
-path, vcode, vname, apk_name, size, sha, notes = sys.argv[1:8]
+def fix_arg(s):
+    """还原 shell 经 locale surrogateescape 传入的孤代理字节为合法 UTF-8。"""
+    try:
+        return s.encode("utf-8").decode("utf-8")
+    except UnicodeDecodeError:
+        return s.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+
+path, vcode, vname, apk_name, size, sha, notes = (fix_arg(a) for a in sys.argv[1:8])
 manifest = {
     "versionCode": int(vcode),
     "versionName": vname,
