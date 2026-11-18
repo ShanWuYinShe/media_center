@@ -91,7 +91,10 @@ class BilibiliApi(
             AppLog.i("Bili", "multi-page video: $bvid has $totalPages pages, requesting cid=$targetCid (page=$pageIndex) quality=$qn")
         }
         val payload = fetchPlayUrl(bvid, targetCid, quality = qn)
-        if (payload.code != 0) throw BilibiliApiException("playurl 接口返回 code=${payload.code}")
+        if (payload.code != 0) {
+            AppLog.w("Bili", "playurl failed: code=${payload.code} bvid=$bvid cid=$targetCid")
+            throw BilibiliApiException(biliCodeMessage(payload.code))
+        }
 
         val options = buildPlaybackOptions(bvid, pageIndex, payload)
         if (options.isEmpty()) throw BilibiliApiException("B 站未返回播放流(可能触发风控)")
@@ -123,7 +126,10 @@ class BilibiliApi(
             throw BilibiliApiException("pageIndex $pageIndex out of bounds (${cids.size} pages)")
         }
         val payload = fetchPlayUrl(bvid, cids[pageIndex], quality = preferredQuality())
-        if (payload.code != 0) throw BilibiliApiException("playurl 接口返回 code=${payload.code}")
+        if (payload.code != 0) {
+            AppLog.w("Bili", "playurl failed: code=${payload.code} bvid=$bvid cid=${cids[pageIndex]}")
+            throw BilibiliApiException(biliCodeMessage(payload.code))
+        }
         val options = buildPlaybackOptions(bvid, pageIndex, payload)
         if (options.isEmpty()) throw BilibiliApiException("B 站未返回播放流(可能触发风控)")
         options
@@ -171,6 +177,12 @@ class BilibiliApi(
             PlaybackQuality(qn, label)
         }
 
+    // B 站业务错误码 → 用户可读文案(原始 code 与 bvid 由调用方写入日志)。
+    private fun biliCodeMessage(code: Int): String = when (code) {
+        -404, -403 -> "该视频已下架或暂时不可见"
+        else -> "暂时无法获取播放地址，请稍后重试"
+    }
+
     // 调 B 站 view API 拿 bvid/cid/pages。
     private suspend fun fetchView(bvid: String): BiliViewResponse {
         val keys = ensureWbiKeys()
@@ -178,10 +190,13 @@ class BilibiliApi(
         val url = buildUrl("https://api.bilibili.com/x/web-interface/wbi/view", signed)
         val payload = getJson<BiliViewResponse>(url)
         if (payload.code != 0 || payload.data == null || payload.data.bvid.isEmpty()) {
-            throw BilibiliApiException("view 接口返回 code=${payload.code} 找不到 bvid=$bvid")
+            // 技术细节只进日志:详情页会把异常 message 直接展示给电视用户,
+            // "view 接口返回 code=-404 找不到 bvid=..." 对用户不可读。
+            AppLog.w("Bili", "view failed: code=${payload.code} bvid=$bvid")
+            throw BilibiliApiException(biliCodeMessage(payload.code))
         }
         if (payload.data.cid == 0L) {
-            throw BilibiliApiException("view 接口未返回 cid(可能视频被删/审核)")
+            throw BilibiliApiException("视频信息不完整，暂时无法播放")
         }
         return payload
     }

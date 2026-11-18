@@ -4,8 +4,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.example.mediacenter.log.AppLog
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeoutOrNull
 
 class MediaRepository(
     private val api: MediaApi,
@@ -34,10 +34,13 @@ class MediaRepository(
         // 客户端关键词搜索时最多拉取的分类页数(每页 ≤ pageSize 条),用于扩大命中范围。
         // 服务端单分类通常几百条,5 页 × 18 ≈ 90 条已足够覆盖常见搜索词。
         const val SEARCH_MAX_PAGES = 5
+        // 凭证缓存时长:凭证变化很少,避免每次 providers()/bootstrap 重复请求。
+        const val CredentialsTtlMs = 5 * 60 * 1000L
     }
 
     override suspend fun providers(): List<ProviderInfo> {
-        refreshCredentials()
+        // 凭证最多等 5s:目录才是首屏关键路径,凭证失败/超时降级为无凭证模式。
+        withTimeoutOrNull(5_000) { refreshCredentials() }
         val items = api.providers().items.orEmpty()
         applyProviderSelection(items)
         return items
@@ -45,21 +48,21 @@ class MediaRepository(
 
     /**
      * 首页启动聚合:一次请求拿到 providers + 分类(替代串行的 providers→categories,
-     * 老盒子弱网下省一个 RTT);凭证请求与之并行,凭证失败不影响目录。
-     * 旧服务端没有聚合端点时自动退回原有两次请求。
+     * 老盒子弱网下省一个 RTT)。旧服务端没有聚合端点时自动退回原有两次请求。
+     *
+     * 注意:这里不再 await 凭证请求。旧实现 await 让首屏被凭证接口拖住——凭证
+     * 连接超时 15s × 3 次重试时,目录数据早就回来了,用户仍要等半分钟以上才见
+     * 到首页。凭证只影响 B 站播放清晰度等次要能力,由 ViewModel 在后台单独拉取。
      */
     override suspend fun bootstrap(): Pair<List<ProviderInfo>, List<ContentCategory>> {
         val requestedProvider = currentProvider
         return coroutineScope {
-            val credentials = async { refreshCredentials() }
             val response = try {
                 api.bootstrap(requestedProvider)
             } catch (e: Exception) {
-                credentials.cancel()
                 AppLog.w("Repo", "bootstrap failed, fallback to providers+categories: ${e.message}", e)
                 return@coroutineScope providers() to categories()
             }
-            credentials.await()
             val providers = response.providers.orEmpty()
             applyProviderSelection(providers)
             val categories = if (currentProvider == requestedProvider) {
@@ -103,7 +106,14 @@ class MediaRepository(
 
     // 从 server 拉取 provider 凭证并注入到对应的 API 客户端。
     // 失败时静默降级为无凭证模式(不影响基本播放)。
+    // 5 分钟 TTL:旧实现每次 providers()/bootstrap 都发一次凭证请求,弱网下
+    // 重复占用连接;凭证本身不常变,按 TTL 复用。
+    @Volatile
+    private var credentialsLoadedAtMs = 0L
+
     override suspend fun refreshCredentials() {
+        val now = System.currentTimeMillis()
+        if (now - credentialsLoadedAtMs < CredentialsTtlMs) return
         try {
             val response = api.credentials()
             for (cred in response.credentials.orEmpty()) {
@@ -111,6 +121,7 @@ class MediaRepository(
                     bilibiliApi.updateCredentials(cred.fields.orEmpty())
                 }
             }
+            credentialsLoadedAtMs = now
         } catch (e: Exception) {
             AppLog.w("Repo", "failed to fetch provider credentials, using no-credential mode", e)
         }

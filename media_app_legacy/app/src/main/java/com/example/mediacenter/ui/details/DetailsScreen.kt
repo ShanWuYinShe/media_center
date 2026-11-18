@@ -193,26 +193,42 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
 
         var detailErrorRetry: () -> Unit = viewModel::refreshSelectedPlayback
         if (options.isEmpty()) {
-            info.addView(label("暂无可播放视频", 15f, Colors.TEXT_TERTIARY, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapPlay)))
-            if (detailFocusTarget == DetailFocusTarget.Play) {
-                detailFocusTarget = DetailFocusTarget.Refresh
+            // 播放地址解析中不要渲染「暂无可播放视频」:这不是错误,解析完成即消失,
+            // 提前展示会误导用户。给一句明确的等待文案(YouTube 解析可达数十秒)。
+            // 只有真正解析结束且没有可播地址时才进入错误态,并把焦点交给「刷新播放地址」。
+            if (state.loading) {
+                info.addView(
+                    label("正在解析播放地址…", 15f, Colors.TEXT_TERTIARY, maxLines = 1),
+                    LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapPlay)),
+                )
+            } else {
+                info.addView(label("暂无可播放视频", 15f, Colors.TEXT_TERTIARY, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapPlay)))
+                if (detailFocusTarget == DetailFocusTarget.Play) {
+                    detailFocusTarget = DetailFocusTarget.Refresh
+                }
+                val refresh = pill(
+                    "刷新播放地址",
+                    selected = false,
+                    heightDp = chipH,
+                    horizontalPaddingDp = chipHPad,
+                    onFocusChange = { focused ->
+                        if (focused) detailFocusTarget = DetailFocusTarget.Refresh
+                    },
+                    onClick = {
+                        detailFocusTarget = DetailFocusTarget.Play
+                        viewModel.refreshSelectedPlayback()
+                    },
+                )
+                registerDetailFocus(DetailFocusTarget.Refresh, refresh)
+                info.addView(refresh, LinearLayout.LayoutParams(wrap(), dp(chipH)).withTopMargin(dp(12)))
             }
-            val refresh = pill(
-                "刷新播放地址",
-                selected = false,
-                heightDp = chipH,
-                horizontalPaddingDp = chipHPad,
-                onFocusChange = { focused ->
-                    if (focused) detailFocusTarget = DetailFocusTarget.Refresh
-                },
-                onClick = {
-                    detailFocusTarget = DetailFocusTarget.Play
-                    viewModel.refreshSelectedPlayback()
-                },
-            )
-            registerDetailFocus(DetailFocusTarget.Refresh, refresh)
-            info.addView(refresh, LinearLayout.LayoutParams(wrap(), dp(chipH)).withTopMargin(dp(12)))
         } else {
+            // 解析成功会重建整个详情页:上一轮可能把焦点目标改成过 Refresh(空态),
+            // 而 options 到达后 Refresh 已不存在。这里归位到播放按钮,否则整页
+            // 重建后没有任何 requestFocus,遥控器方向键/OK 会全部失效。
+            if (detailFocusTarget == DetailFocusTarget.Refresh) {
+                detailFocusTarget = DetailFocusTarget.Play
+            }
             val option = selectedOption!!
             selectedPlaybackOptionId = option.id
             detailErrorRetry = { viewModel.play(option) }

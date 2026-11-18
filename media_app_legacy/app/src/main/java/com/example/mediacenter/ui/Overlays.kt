@@ -105,12 +105,20 @@ internal fun MainActivity.updatePlayerErrorOverlay(error: String?) {
 
 internal fun MainActivity.exitSearchMode() {
         searchVisible = false
-        currentState.categories.firstOrNull()?.let {
-            pendingHomeFocus = HomeFocusTarget.Category(it.id)
-            rememberedCategoryId = it.id
+        // 保留用户当前所在分类,不再固定跳回第一个分类(会丢失浏览位置)。
+        val categoryId = currentState.selectedCategoryId
+            ?: currentState.categories.firstOrNull()?.id
+        if (categoryId != null) {
+            pendingHomeFocus = HomeFocusTarget.Category(categoryId)
+            rememberedCategoryId = categoryId
             homeFocusArea = HomeFocusArea.Category
-            viewModel.selectCategory(it)
         }
+        // 关键:必须真正清空 state.query。旧实现只把 searchVisible 置 false:
+        // 默认分类下 selectCategory(当前分类) 会直接 return,state 不变,于是
+        // BACK /「清除」没有任何反应,用户被困在搜索结果里。
+        // state 更新会经 StateFlow 触发重绘;这里不要再调 invalidateUi,
+        // 否则会先用旧 state(关键词仍非空)重绘一帧搜索栏,出现闪烁。
+        viewModel.exitSearch()
     }
 
 internal fun MainActivity.requestHomeFocus(target: HomeFocusTarget) {
