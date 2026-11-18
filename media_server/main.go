@@ -230,8 +230,8 @@ func main() {
 		ReadTimeout:       30 * time.Second,
 		// WriteTimeout 不设:它是「从 request body 读完到写完响应」的硬截止,
 		// 对 http.ServeFile 流式发送的大文件下载(/api/app/download)会在慢客户端
-		// 下被强行截断。API 路由的超时保护改由 ServeHTTP 里的 TimeoutHandler 精确
-		// 施加(下载端点绕过它),避免一刀切。
+		// 下被强行截断。API 路由的超时保护改由 ServeHTTP 里的 apiTimeoutHandler
+		// 精确施加(下载端点绕过它),避免一刀切。
 		IdleTimeout: 120 * time.Second,
 	}
 	log.Printf("media_server %s listening on %s", version, addr)
@@ -255,8 +255,9 @@ func main() {
 }
 
 // apiTimeout 是普通 API 路由的超时上限。http.Server.WriteTimeout 之所以置空,
-// 是为了让大文件下载(/api/app/download)不被砍断;这里用 TimeoutHandler 把超时
-// 保护精确施加在 API 路由上,下载端点在 ServeHTTP 里优先匹配、绕过此包裹。
+// 是为了让大文件下载(/api/app/download)不被砍断;这里用 apiTimeoutHandler 把
+// 超时保护精确施加在 API 路由上,下载端点在 ServeHTTP 里优先匹配、绕过此包裹。
+// 超时响应是统一 JSON 错误包络(503 TIMEOUT),不是标准库 TimeoutHandler 的纯文本。
 const apiTimeout = 75 * time.Second
 
 // apiV1Prefix 是独立站(media.chaoset.com)部署的对外规范业务前缀
@@ -271,17 +272,18 @@ func (s *mediaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if rest, ok := strings.CutPrefix(r.URL.Path, apiV1Prefix); ok {
 		r.URL.Path = "/api" + rest
 	}
-	// 大文件下载绕过超时包裹:TimeoutHandler 会缓冲整个响应再写出,对流式发送
+	// 大文件下载绕过超时包裹:apiTimeoutHandler 会缓冲整个响应再写出,对流式发送
 	// 的 APK 下载既没必要又浪费内存,且超时会截断传输。优先匹配后直接交给 handler。
 	if r.Method == http.MethodGet && r.URL.Path == "/api/app/download" {
 		s.handleAppDownload(w, r)
 		return
 	}
-	http.TimeoutHandler(http.HandlerFunc(s.serveAPI), apiTimeout, "服务超时").ServeHTTP(w, r)
+	newAPITimeoutHandler(apiTimeout, http.HandlerFunc(s.serveAPI)).ServeHTTP(w, r)
 }
 
-// serveAPI 处理除大文件下载外的全部路由。由 ServeHTTP 经 TimeoutHandler 包裹,
-// 单个 API 请求超过 apiTimeout 即返回 503 并中断,防止慢查询/卡住的 handler 拖垮服务。
+// serveAPI 处理除大文件下载外的全部路由。由 ServeHTTP 经 apiTimeoutHandler 包裹,
+// 单个 API 请求超过 apiTimeout 即返回 503 TIMEOUT(JSON 包络)并中断,防止慢查询/
+// 卡住的 handler 拖垮服务。
 func (s *mediaServer) serveAPI(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && (r.URL.Path == "/health" || r.URL.Path == "/healthz" || r.URL.Path == "/api/health"):

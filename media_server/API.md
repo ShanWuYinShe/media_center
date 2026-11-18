@@ -34,6 +34,7 @@
 | 500 | `INTERNAL_ERROR` | 服务端内部错误 |
 | 502 | `UPSTREAM_ERROR` / `RESOLVE_FAILED` | youtube 实时端点：vod_extractor(yt-dlp) 上游失败 |
 | 503 | `SERVICE_BUSY` | 并发满载：catalog 搜索闸门，或 youtube 实时端点排队等不到 vod_extractor 并发槽（带 `Retry-After`，稍后重试即可） |
+| 503 | `TIMEOUT` | 单个 API 请求超过服务端 75s 硬超时（防慢查询/卡住 handler 拖垮服务；超时响应为同一 JSON 包络，可安全重试） |
 | 503 | `NOT_CONFIGURED` | youtube 实时端点：服务端未配置 API key / 解析服务 |
 
 ## 数据模型
