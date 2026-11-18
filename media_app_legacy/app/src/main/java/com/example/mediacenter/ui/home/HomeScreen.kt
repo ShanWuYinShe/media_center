@@ -164,35 +164,56 @@ internal fun MainActivity.renderHome(state: MediaUiState) {
         }
 
         setContent(screen)
-        // 首次焦点在真实布局/窗口获得焦点后重试：每次 render 都会重建 View，
-        // 且应用启动转场期间 requestFocus 可能返回 false。只重试有限次数，
-        // 成功即停；用户已经开始操作（焦点不在分类）则立即放弃，不抢焦点。
+        // 首次焦点循环只在"真实分类已存在且首屏无错误"时启动:没有真实分类时
+        // 占位 chip 永远满足不了"已聚焦真实分类"的完成条件,旧实现会在弱网首屏/
+        // 分类为空时每 180ms 重试 24 次并随每次 render 重开,持续抢走"重试/设置"
+        // 的焦点。等分类到达后的 render 再启动(见 startHomeInitialFocusLoop)。
         if (!homeInitialFocusApplied && !searchVisible && state.query.isBlank() &&
-            state.playing == null && state.selected == null
+            state.playing == null && state.selected == null &&
+            state.error == null && state.categories.isNotEmpty()
         ) {
-            val attempts = intArrayOf(0)
-            val focusRunnable = object : Runnable {
-                override fun run() {
-                    if (homeInitialFocusApplied) return
-                    if (attempts[0]++ >= 24) return
-                    val target = homeDefaultCategoryTarget(currentState) ?: return
-                    val view = screen.findViewWithTag<View>(target.viewTag())
-                    val requested = view?.requestFocus() == true
-                    val realCategory = target is HomeFocusTarget.Category &&
-                        target.id != HomeFocusNoCategoryKey
-                    if (requested && view.isFocused && realCategory) {
-                        homeInitialFocusApplied = true
-                        pendingHomeFocus = null
-                    } else {
-                        // 分类尚未加载时先落在占位 chip，不算完成；继续等真实分类
-                        // 到达后再把焦点迁过去，避免搜索按钮抢走首屏焦点。
-                        screen.postDelayed(this, 180)
-                    }
-                }
-            }
-            screen.postDelayed(focusRunnable, 180)
+            startHomeInitialFocusLoop(screen)
         }
     }
+
+// 首屏焦点循环:窗口/视图就绪前 requestFocus 会静默失败,有限重试(24×180ms)。
+// 只在真实分类存在时调用;成功落到占位 chip 后若用户已把焦点移走(按方向键到
+// 搜索/设置等),立即放弃,不再抢回。
+internal fun MainActivity.startHomeInitialFocusLoop(screen: View) {
+    val attempts = intArrayOf(0)
+    var focusAppliedOnce = false
+    val focusRunnable = object : Runnable {
+        override fun run() {
+            if (homeInitialFocusApplied) return
+            if (attempts[0]++ >= 24) return
+            val target = homeDefaultCategoryTarget(currentState) ?: return
+            val view = screen.findViewWithTag<View>(target.viewTag())
+            if (view == null) {
+                screen.postDelayed(this, 180)
+                return
+            }
+            if (focusAppliedOnce) {
+                val current = screen.findFocus()
+                if (current != null && current !== view && current !== screen) {
+                    // 用户已经开始操作,不要再把焦点抢回分类。
+                    return
+                }
+            }
+            val realCategory = target is HomeFocusTarget.Category &&
+                target.id != HomeFocusNoCategoryKey
+            if (view.requestFocus() && view.isFocused) {
+                focusAppliedOnce = true
+                if (realCategory) {
+                    homeInitialFocusApplied = true
+                    pendingHomeFocus = null
+                    return
+                }
+            }
+            screen.postDelayed(this, 180)
+        }
+    }
+    screen.postDelayed(focusRunnable, 180)
+}
 
 internal fun MainActivity.homeTopBar(
         state: MediaUiState,

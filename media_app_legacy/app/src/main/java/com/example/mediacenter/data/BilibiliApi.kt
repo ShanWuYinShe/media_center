@@ -24,6 +24,15 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 class BilibiliApiException(message: String) : Exception(message)
+/** B 站 HTTP 非 2xx 的用户可读原因:原始 body 只进日志,不直接展示。 */
+private fun friendlyBilibiliHttpMessage(statusCode: Int): String = when (statusCode) {
+    403, 412 -> "B 站暂时限制访问，请稍后重试"
+    404 -> "视频不存在或已下架"
+    429 -> "请求过于频繁，请稍后重试"
+    in 500..599 -> "B 站服务暂不可用，请稍后重试"
+    else -> "B 站请求失败（HTTP $statusCode），请稍后重试"
+}
+
 
 /**
  * B 站官方 API 客户端:让 App 端拿到 catalog 的 bvid 后**自己**解析播放地址,
@@ -324,7 +333,14 @@ class BilibiliApi(
                             val text = it.body()?.string()
                                 ?: throw BilibiliApiException("B 站响应体为空")
                             if (!it.isSuccessful) {
-                                throw BilibiliApiException("B 站 API ${it.code()}: ${text.take(200)}")
+                                // 旧实现把 HTML 错误页前 200 字符直接展示给用户(如
+                                // "B 站 API 412: <html>..."),既难看也不可操作。
+                                // 状态码映射成可读原因,原始 body 只进日志便于排障。
+                                AppLog.w(
+                                    "BilibiliApi",
+                                    "http ${it.code()} body=${text.take(200)}",
+                                )
+                                throw BilibiliApiException(friendlyBilibiliHttpMessage(it.code()))
                             }
                             if (continuation.isActive) {
                                 // 只把原始 body 交给协程,解码放到下面 Default 执行,

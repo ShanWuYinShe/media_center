@@ -30,26 +30,29 @@ internal fun MainActivity.setContent(view: View) {
         root.addView(view, frameMatch())
     }
 
-    // 播放失败自动恢复(recoveringPlayback,仍为 loading)时,在播放画面上盖一层
-    // “正在重试…”提示;切集/切清晰度/切分页的 loading 不经过这里(它们不是重试)。
-    // 恢复结束(重建播放器或退出播放页)后移除。setContent 会清空 root,因此一并清引用。
-internal fun MainActivity.updatePlayerRetryOverlay(show: Boolean) {
+    // 播放等待遮罩:播放失败自动恢复显示「正在重试…」,播放页切清晰度显示
+    // 「正在切换清晰度…」。旧实现只有恢复流程有提示,切档期间零反馈且旧画质
+    // 继续播,用户以为按键失灵。
+    // 遮罩结束(重建播放器或退出播放页)后移除。setContent 会清空 root,因此一并清引用。
+internal fun MainActivity.updatePlayerRetryOverlay(show: Boolean, message: String = "正在重试…") {
         if (show) {
-            if (playerRetryOverlay == null) {
-                val scrim = FrameLayout(this).apply {
-                    setBackgroundColor(Color.argb(140, 0, 0, 0))
-                    isClickable = false
-                    addView(
-                        centeredLoading("正在重试…"),
-                        FrameLayout.LayoutParams(wrap(), wrap(), Gravity.CENTER),
-                    )
-                }
-                playerRetryOverlay = scrim
-                root.addView(scrim, frameMatch())
+            if (playerRetryOverlay != null && playerRetryOverlayMessage == message) return
+            playerRetryOverlay?.let { root.removeView(it) }
+            val scrim = FrameLayout(this).apply {
+                setBackgroundColor(Color.argb(140, 0, 0, 0))
+                isClickable = false
+                addView(
+                    centeredLoading(message),
+                    FrameLayout.LayoutParams(wrap(), wrap(), Gravity.CENTER),
+                )
             }
+            playerRetryOverlay = scrim
+            playerRetryOverlayMessage = message
+            root.addView(scrim, frameMatch())
         } else {
             playerRetryOverlay?.let { root.removeView(it) }
             playerRetryOverlay = null
+            playerRetryOverlayMessage = null
         }
     }
 

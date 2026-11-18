@@ -109,7 +109,19 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
         fun registerDetailFocus(target: DetailFocusTarget, view: View) {
             if (!detailFocusRegistered && detailFocusTarget == target) {
                 detailFocusRegistered = true
-                view.post { view.requestFocus() }
+                // 每次 render 都会重建 View,解析期还可能连续重建(loading 态更新)。
+                // 单次 post 在视图尚未 attach/可见时 requestFocus 会静默失败,遥控器
+                // 就整页失灵;这里有限重试(约 1.8s)直到真正拿到焦点。
+                var remaining = 12
+                val focusRunnable = object : Runnable {
+                    override fun run() {
+                        if (view.requestFocus()) return
+                        if (remaining-- > 0 && view.isAttachedToWindow) {
+                            view.postDelayed(this, 150)
+                        }
+                    }
+                }
+                view.post(focusRunnable)
             }
         }
 
@@ -199,9 +211,27 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
             // 提前展示会误导用户。给一句明确的等待文案(YouTube 解析可达数十秒)。
             // 只有真正解析结束且没有可播地址时才进入错误态,并把焦点交给「刷新播放地址」。
             if (state.loading) {
+                // 解析期(YouTube 冷启动可达数十秒)必须有一个可聚焦控件:旧实现只放
+                // 一行不可聚焦文案,期间遥控器方向键/OK 全部失效,用户以为 App 卡死。
+                // 按 OK 重新发起解析(ViewModel 会取消上一次请求,幂等)。
+                val parsingPill = pill(
+                    "正在解析播放地址…",
+                    selected = false,
+                    heightDp = chipH,
+                    horizontalPaddingDp = chipHPad,
+                    onFocusChange = { focused ->
+                        if (focused) detailFocusTarget = DetailFocusTarget.Play
+                    },
+                    onClick = { viewModel.refreshSelectedPlayback() },
+                )
+                registerDetailFocus(DetailFocusTarget.Play, parsingPill)
                 info.addView(
-                    label("正在解析播放地址…", 15f, Colors.TEXT_TERTIARY, maxLines = 1),
-                    LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapPlay)),
+                    parsingPill,
+                    LinearLayout.LayoutParams(wrap(), dp(chipH)).withTopMargin(dp(gapPlay)),
+                )
+                info.addView(
+                    label("解析可能需要数十秒，按 OK 可重试", 13f, Colors.TEXT_TERTIARY, maxLines = 1),
+                    LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(10)),
                 )
             } else {
                 info.addView(label("暂无可播放视频", 15f, Colors.TEXT_TERTIARY, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapPlay)))

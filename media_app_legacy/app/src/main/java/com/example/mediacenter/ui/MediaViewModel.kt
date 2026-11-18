@@ -50,6 +50,9 @@ data class MediaUiState(
     // "正在重试…"遮罩。切集/切清晰度/切页也是 loading,但文案应是"正在加载/切换",
     // 旧实现把两者混在一起,用户误以为播放失败在重试。
     val recoveringPlayback: Boolean = false,
+    // 只有"播放页切清晰度"为 true:播放页据此显示「正在切换清晰度…」提示。
+    // 切集/切分页/解析同样是 loading,但不该套用清晰度文案。
+    val switchingQuality: Boolean = false,
     val loadingMore: Boolean = false,
     val loadMoreError: String? = null,
     val canLoadMore: Boolean = false,
@@ -855,7 +858,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         detailsJob?.cancel()
         recoveryJob?.cancel()
         detailsJob = viewModelScope.launch {
-            mutableState.update { it.copy(loading = true, error = null, recoveringPlayback = false) }
+            mutableState.update { it.copy(loading = true, error = null, recoveringPlayback = false, switchingQuality = false) }
             runCatchingCancellable { repository.playbackOptions(selected) }
                 .onSuccess { result ->
                     val options = result.options
@@ -902,17 +905,29 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         detailsJob?.cancel()
         recoveryJob?.cancel()
         detailsJob = viewModelScope.launch {
-            mutableState.update { it.copy(loading = true, error = null, recoveringPlayback = false) }
+            mutableState.update {
+                it.copy(
+                    loading = true,
+                    error = null,
+                    recoveringPlayback = false,
+                    switchingQuality = true,
+                )
+            }
             runCatchingCancellable { repository.playbackOptions(selected, stream.qn) }
                 .onSuccess { result ->
                     currentPlaybackQn = stream.qn
-                    val fresh = result.options.firstOrNull { it.id == stream.id }
+                    // 优先按 qn 精确匹配目标档:YouTube 解析返回全档(降序),合成 id
+                    // (quality-<qn>)/label 都对不上,旧实现回落到 firstOrNull()=最高档,
+                    // 用户选 480P 却被静默切到 2160P。B 站单档流再按 id/label 兜底。
+                    val fresh = result.options.firstOrNull { it.qn == stream.qn }
+                        ?: result.options.firstOrNull { it.id == stream.id }
                         ?: result.options.firstOrNull { it.label == stream.label }
                         ?: result.options.firstOrNull()
                     mutableState.update { state ->
                         if (state.selected?.id != selected.id) return@update state
                         state.copy(
                             loading = false,
+                            switchingQuality = false,
                             selected = state.selected.copy(playbackOptions = result.options),
                             playing = fresh,
                             playingVideo = video ?: state.playingVideo,
@@ -924,7 +939,11 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                 .onFailure { error ->
                     mutableState.update { state ->
                         if (state.selected?.id != selected.id) return@update state
-                        state.copy(loading = false, error = error.message ?: "切换清晰度失败")
+                        state.copy(
+                            loading = false,
+                            switchingQuality = false,
+                            error = error.message ?: "切换清晰度失败",
+                        )
                     }
                 }
         }
@@ -1029,7 +1048,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         val attempt = playbackRecoveryAttempts
         recoveryJob?.cancel()
         recoveryJob = viewModelScope.launch {
-            mutableState.update { it.copy(loading = true, error = null, recoveringPlayback = true) }
+            mutableState.update { it.copy(loading = true, error = null, recoveringPlayback = true, switchingQuality = false) }
             delay(attempt.coerceIn(1, MaxPlaybackRecoveryAttempts) * PlaybackRecoveryBackoffStepMs)
             val afterDelay = mutableState.value
             // 退避期间用户离开播放页或切换了清晰度 → 放弃恢复
@@ -1116,7 +1135,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         detailsJob?.cancel()
         recoveryJob?.cancel()
         detailsJob = viewModelScope.launch {
-            mutableState.update { it.copy(loading = true, error = null, recoveringPlayback = false) }
+            mutableState.update { it.copy(loading = true, error = null, recoveringPlayback = false, switchingQuality = false) }
             runCatchingCancellable { repository.playbackOptions(selected) }
                 .onSuccess { result ->
                     val options = result.options
@@ -1219,7 +1238,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         recoveryJob?.cancel()
         detailsJob = viewModelScope.launch {
             mutableState.update {
-                it.copy(loading = true, error = null, currentPages = updatedPages, recoveringPlayback = false)
+                it.copy(loading = true, error = null, currentPages = updatedPages, recoveringPlayback = false, switchingQuality = false)
             }
             runCatchingCancellable { repository.resolvePagePlayback(bvid, pageIndex) }
                 .onSuccess { options ->
@@ -1263,7 +1282,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         detailsJob?.cancel()
         recoveryJob?.cancel()
         detailsJob = viewModelScope.launch {
-            mutableState.update { it.copy(loading = true, error = null, recoveringPlayback = false) }
+            mutableState.update { it.copy(loading = true, error = null, recoveringPlayback = false, switchingQuality = false) }
             runCatchingCancellable {
                 val details = repository.details(nextVideo)
                 val result = repository.playbackOptions(details)

@@ -92,7 +92,11 @@ class YouTubeApi(
             continuation.invokeOnCancellation { call.cancel() }
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
-                    if (continuation.isActive) continuation.resumeWithException(e)
+                    // 原始 socket 异常直接透出会是英文技术串(dial tcp / timeout)并显示在
+                    // 详情页/播放错误层;统一转成分类友好文案,原始异常保留作 cause 进日志。
+                    if (continuation.isActive) {
+                        continuation.resumeWithException(IOException(friendlyNetworkMessage(e), e))
+                    }
                 }
 
                 override fun onResponse(call: Call, response: Response) {
