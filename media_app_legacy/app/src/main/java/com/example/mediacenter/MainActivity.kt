@@ -105,12 +105,21 @@ class MainActivity : ComponentActivity() {
     internal val playbackLoadErrorHandlingPolicy = CappedLoadErrorHandlingPolicy(MaxPlaybackRetries)
     // 瞬时 5xx 自动恢复期间盖在播放画面上的“正在重试…”提示,避免重试窗口里只剩黑屏/卡帧。
     internal var playerRetryOverlay: View? = null
+    // 当前重试遮罩的文案:切清晰度/重试共用同一遮罩,文案变化时重建提示。
+    internal var playerRetryOverlayMessage: String? = null
     internal var playerErrorOverlay: View? = null
+    // 切清晰度重建播放器前捕获的精确播放位置(-1 表示无):新流 prepare 时直接 seek,
+    // 旧实现按旧 option id 保存进度、新 key 读取=0,切档后从 0:00 重播。
+    internal var pendingPlaybackSeekPosition: Long = -1L
     internal lateinit var appUpdateManager: AppUpdateManager
     internal var pendingUpdateApk: File? = null
     // 更新已下载完但用户正在播放/看详情:先记下,回到首页再弹安装提示。
     // 旧实现不分页面直接弹框,会盖在播放画面上并抢走遥控器焦点。
     internal var pendingUpdatePrompt: AppUpdateResult.ReadyToInstall? = null
+    // 更新检查/下载是否已启动(首页就绪后只启动一次)。
+    private var updateCheckStarted = false
+    // 页面忙碌时被推迟的更新失败提示(回到首页再弹,避免抢播放/详情焦点)。
+    private var pendingUpdateMessage: String? = null
     // “播放已稳定”计时器:STATE_READY 后延迟触发;只有同一地址连续顺畅播放超过窗口
     // 才把 ViewModel 的恢复额度清零,防止“就绪即失败”的流陷入无限恢复循环。
     internal var playbackStabilityRunnable: Runnable? = null
@@ -174,13 +183,10 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        lifecycleScope.launch {
-            when (val result = appUpdateManager.checkAndDownload()) {
-                AppUpdateResult.NoUpdate -> Unit
-                is AppUpdateResult.Failed -> showUpdateMessage(result.message)
-                is AppUpdateResult.ReadyToInstall -> presentUpdatePrompt(result)
-            }
-        }
+        // 更新检查延后到首页内容就绪(见 maybeStartUpdateCheck):启动瞬间下载
+        // ~5.8MB APK 会与首屏/缩略图争带宽。这里 12s 兜底,保证首页加载失败/
+        // 分类为空时也会检查一次。
+        root.postDelayed({ maybeStartUpdateCheck(force = true) }, 12_000)
         registerNetworkRestore()
     }
 
@@ -270,16 +276,23 @@ class MainActivity : ComponentActivity() {
         renderedState = state
         renderedSearchVisible = searchVisible
 
+        if (state.playing == null) {
+            // 离开播放页:清掉换源保进度缓存,避免下次进播放页误用旧位置。
+            pendingPlaybackSeekPosition = -1L
+        }
         when {
             state.playing != null -> {
                 clearHomeVideoList()
                 resetHomeDetailsPrefetch()
                 renderPlayer(state)
-                // 只有播放失败自动恢复(recoveringPlayback)才显示"正在重试…";
-                // 切集/切清晰度/切分页也是 loading,但那是正常切换,文案不应误导。
-                updatePlayerRetryOverlay(
-                    state.recoveringPlayback && state.loading && state.error == null,
-                )
+                // 播放等待提示:自动恢复显示"正在重试…",切清晰度显示"正在切换清晰度…";
+                // 切集/切分页同样 loading,但不套用这两种文案(避免误导)。
+                val loadingHint = when {
+                    state.loading && state.error == null && state.recoveringPlayback -> "正在重试…"
+                    state.loading && state.error == null && state.switchingQuality -> "正在切换清晰度…"
+                    else -> null
+                }
+                updatePlayerRetryOverlay(loadingHint != null, loadingHint ?: "正在重试…")
                 updatePlayerErrorOverlay(state.error)
             }
             state.selected != null -> {
@@ -298,12 +311,45 @@ class MainActivity : ComponentActivity() {
                 releasePlayer()
                 resetPlayerOrientationToDefault()
                 renderHome(state)
+                // 首页内容已就绪:此时才开始检查/下载更新(见 maybeStartUpdateCheck)。
+                maybeStartUpdateCheck()
                 // 播放/详情期间被推迟的更新安装提示:回到首页后再弹,避免在播放画面上
                 // 抢焦点(习惯性按 OK 可能误触"安装更新")。
                 pendingUpdatePrompt?.let { pending ->
                     pendingUpdatePrompt = null
                     root.post { if (!isFinishing) promptInstallUpdate(pending) }
                 }
+                pendingUpdateMessage?.let { message ->
+                    pendingUpdateMessage = null
+                    root.post { if (!isFinishing) showUpdateMessage(message) }
+                }
+            }
+        }
+    }
+
+    /**
+     * 首页内容就绪后才开始检查/下载更新:避免启动瞬间与首屏、缩略图抢带宽。
+     * 播放/详情/搜索页可见时不启动(下载 + 可能的弹窗会打扰观看);离开播放页
+     * 回首页的 render 会再次触发(见 render 的 else 分支)。force=true 是启动兜底。
+     */
+    private fun maybeStartUpdateCheck(force: Boolean = false) {
+        if (updateCheckStarted) return
+        val state = currentState
+        if (state.playing != null || state.selected != null || searchVisible) return
+        if (!force && state.items.isEmpty()) return
+        updateCheckStarted = true
+        lifecycleScope.launch {
+            when (val result = appUpdateManager.checkAndDownload()) {
+                AppUpdateResult.NoUpdate -> Unit
+                is AppUpdateResult.Failed -> {
+                    // 失败提示同样延后:播放/详情中弹窗会抢焦点,习惯性按 OK 可能误触。
+                    if (currentState.playing != null || currentState.selected != null || searchVisible) {
+                        pendingUpdateMessage = result.message
+                    } else {
+                        showUpdateMessage(result.message)
+                    }
+                }
+                is AppUpdateResult.ReadyToInstall -> presentUpdatePrompt(result)
             }
         }
     }

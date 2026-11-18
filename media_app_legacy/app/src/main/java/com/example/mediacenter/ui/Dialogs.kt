@@ -230,19 +230,26 @@ internal fun MainActivity.showSystemInfoDialog() {
             }
             card.addView(scroll, LinearLayout.LayoutParams(match(), 0, 1f).withTopMargin(dp(8)))
             // 弹窗里只有按钮可聚焦,ScrollView 本身吃不到遥控器按键:
-            // 在按钮上拦截上/下键滚动内容(与 showDescriptionDialog 同一做法),
-            // 让用户能看全被裁在下面的诊断信息。
+            // 在按钮上拦截上/下键滚动内容。到了滚动边界必须把按键还给系统,
+            // 否则「清除媒体缓存」按钮永远吞掉 DPAD_UP/DOWN,遥控器无法在
+            // 两个按钮之间移动(只能点关闭)。
             val scrollKeyListener = View.OnKeyListener { _, keyCode, event ->
-                when {
-                    event.action != KeyEvent.ACTION_DOWN -> false
-                    keyCode == KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        scroll.smoothScrollBy(0, dp(180))
-                        true
-                    }
-                    keyCode == KeyEvent.KEYCODE_DPAD_UP -> {
-                        scroll.smoothScrollBy(0, -dp(180))
-                        true
-                    }
+                if (event.action != KeyEvent.ACTION_DOWN) return@OnKeyListener false
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_DOWN ->
+                        if (scroll.canScrollVertically(1)) {
+                            scroll.smoothScrollBy(0, dp(180))
+                            true
+                        } else {
+                            false
+                        }
+                    KeyEvent.KEYCODE_DPAD_UP ->
+                        if (scroll.canScrollVertically(-1)) {
+                            scroll.smoothScrollBy(0, -dp(180))
+                            true
+                        } else {
+                            false
+                        }
                     else -> false
                 }
             }
@@ -286,6 +293,11 @@ internal fun MainActivity.showSystemInfoDialog() {
 
             val close = pill("关闭", selected = true, heightDp = 48, horizontalPaddingDp = 28) { dismiss() }
             close.setOnKeyListener(scrollKeyListener)
+            // 遥控器左右键在「清除媒体缓存」/「关闭」之间互选(两个按钮横向相邻)。
+            clearBtn.id = View.generateViewId()
+            close.id = View.generateViewId()
+            clearBtn.nextFocusRightId = close.id
+            close.nextFocusLeftId = clearBtn.id
             card.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(20)))
             setContentView(card)
             window?.setBackgroundDrawableResource(android.R.color.transparent)

@@ -62,6 +62,11 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
         // 这段期间不要因播放器已进入 IDLE 而立刻重建同一个失败 URL。
         if (currentPlayerUrl == stream.url && root.isNotEmpty()) {
             if (state.loading || state.error != null || player?.playbackState != Player.STATE_IDLE) {
+                // 切清晰度解析期间旧流仍在播:在真正换流前捕获当前位置(解析可能
+                // 耗时 5-15s,点击时刻的位置会落后),新流 prepare 时直接 seek 过去。
+                if (state.switchingQuality && pendingPlaybackSeekPosition < 0L) {
+                    pendingPlaybackSeekPosition = player?.currentPosition ?: -1L
+                }
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 return
             }
@@ -102,7 +107,17 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // 在 prepare 之前加载上次保存的位置并一次 seek 到位，避免在 STATE_READY
         // 回调中 seek 导致 seek→buffer→ready→seek 的死循环。
-        val initialSeekPos = if (!currentState.loading) loadPlaybackPosition() else 0L
+        // 切清晰度/错误重试重建时优先用重建前捕获的精确位置(见 openPlayerOptionsDialog):
+        // 新旧流 option id 不同,按持久化 key 查不到旧进度。
+        val initialSeekPos = when {
+            currentState.loading -> 0L
+            pendingPlaybackSeekPosition >= 0L -> {
+                val pending = pendingPlaybackSeekPosition
+                pendingPlaybackSeekPosition = -1L
+                pending
+            }
+            else -> loadPlaybackPosition()
+        }
         var builtPlayer: ExoPlayer? = null
         try {
             builtPlayer = ExoPlayer.Builder(this)

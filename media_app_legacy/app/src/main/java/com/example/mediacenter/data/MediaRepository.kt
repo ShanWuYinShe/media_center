@@ -245,10 +245,17 @@ class MediaRepository(
         return result.copy(options = listOf(preferred) + options.filter { it.url != preferred.url })
     }
 
-    // 指定清晰度解析播放地址。youtube 端 qn 被忽略(server 忽略该参数,返回全档)。
+    // 指定清晰度解析播放地址。YouTube server 忽略 qn 参数、恒返回全档(降序),
+    // 这里在客户端把目标档提到首位,否则调用方取 first() 会静默播最高档。
     override suspend fun playbackOptions(video: VideoDetails, qn: Int): PlaybackResult = when (currentProvider) {
-        "youtube" -> youtubeApi.resolvePlayback(video.id)
+        "youtube" -> preferQuality(youtubeApi.resolvePlayback(video.id), qn)
         else -> bilibiliApi.resolvePlayback(video.id, qn)
+    }
+
+    /** 把指定 qn 的档位提到 options 首位;目标档不存在时原样返回。 */
+    private fun preferQuality(result: PlaybackResult, qn: Int): PlaybackResult {
+        val target = result.options.firstOrNull { it.qn == qn } ?: return result
+        return result.copy(options = listOf(target) + result.options.filter { it.url != target.url })
     }
 
     // 解析多P视频指定分页的播放地址。多P是 bilibili catalog 的概念
