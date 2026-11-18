@@ -92,7 +92,12 @@ jobs:
           fi
           printf '%s\n' "${NOTES}" > "${RUNNER_TEMP}/tag-notes.txt"
           # manifest.releaseNotes 只放一行短说明：App 内更新弹窗展示空间有限。
-          printf '%s\n' "${NOTES}" | sed -e '/^$/d' | head -n 1 | cut -c1-200 > "${RUNNER_TEMP}/manifest-notes.txt"
+          # 截断必须按 UTF-8 字符做：runner 默认 C/POSIX locale 下 cut -c 按字节切，
+          # 中文会被切在半个字符上，v1.18.0 的更新弹窗因此出现「…起播时自动取消?」。
+          # 这里显式按 UTF-8 解码后取前 200 个字符，不依赖 locale。
+          printf '%s\n' "${NOTES}" | sed -e '/^$/d' | head -n 1 \
+            | python3 -c 'import sys; s = sys.stdin.buffer.read().decode("utf-8", "replace").strip(); sys.stdout.write(s[:200])' \
+            > "${RUNNER_TEMP}/manifest-notes.txt"
 
       - name: Prepare signing keystore
         env:
