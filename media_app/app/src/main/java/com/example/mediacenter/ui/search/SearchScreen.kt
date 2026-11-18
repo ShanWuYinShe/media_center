@@ -225,6 +225,18 @@ fun SearchScreen(
                 .focusRequester(resultsFocus)
                 .then(if (hotWordPending) Modifier.focusable() else Modifier),
         ) {
+        // 已有旧结果时保留列表(不闪骨架),但要有"搜索中"提示:弱网下新查询
+        // 可能十几秒才返回,旧列表+无提示看起来像搜索没反应。
+        if (state.isSearching && state.results.isNotEmpty()) {
+            Text(
+                text = "搜索中…",
+                color = TextSecondary,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = ScreenHorizontalPadding, top = 8.dp),
+            )
+        }
         when {
             // 搜索中:结果为空用骨架屏;已有旧结果时保留结果继续展示,
             // 避免每次新查询都把列表闪回转圈(弱网下尤其明显)。

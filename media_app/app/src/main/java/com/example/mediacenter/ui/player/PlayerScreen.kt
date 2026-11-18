@@ -119,13 +119,15 @@ fun PlayerScreen(
     // 当前播放档位:多P 下一集预取要按同一档位解析,播放页切页(selectPage 传
     // currentQn)时才能按 qn 精确命中;只按 qn=null 预取与切页查询的 key 不一致。
     val currentPlaybackQn = state.playbackResult?.options?.firstOrNull()?.qn
-    LaunchedEffect(nextPrefetchTarget, currentPlaybackQn) {
+    // 多P切页按当前档位预取;合集切集走 qn=null(与 switchEpisode 的查询 key 一致)。
+    val nextPrefetchQualityQn = nextPrefetchQn(state.next, currentPlaybackQn)
+    LaunchedEffect(nextPrefetchTarget, nextPrefetchQualityQn) {
         val targetId = nextPrefetchTarget ?: return@LaunchedEffect
         delay(NEXT_PREFETCH_DELAY_MS)
         PlaybackPrefetcher.prefetch(
             MediaRepositoryHolder.repository,
             targetId,
-            qn = currentPlaybackQn,
+            qn = nextPrefetchQualityQn,
             maxInitialQualityQn = maxInitialQualityQn,
         )
     }
@@ -162,7 +164,8 @@ fun PlayerScreen(
                     isLoading = state.isLoading,
                     onSelectQuality = viewModel::selectQuality,
                     onSelectPage = viewModel::selectPage,
-                    onRetryResolve = viewModel::resolvePlayback,
+                    // 播放错误重试必须强制重新解析:5 分钟预取缓存里是同一批失效直链。
+                    onRetryResolve = { viewModel.resolvePlayback(forceRefresh = true) },
                     onQualityFallback = { viewModel.fallbackToLowerQuality() },
                     onBack = onBack,
                     hasAutoNext = state.next != null,
@@ -173,7 +176,7 @@ fun PlayerScreen(
             } else {
                 ErrorView(
                     message = "无可用播放地址",
-                    onRetry = viewModel::resolvePlayback,
+                    onRetry = { viewModel.resolvePlayback(forceRefresh = true) },
                     modifier = Modifier.fillMaxSize(),
                     // 全屏错误层必须有明确的遥控器焦点落点(与首页一致)
                     autoFocusRetry = true,
@@ -186,7 +189,7 @@ fun PlayerScreen(
             state.isLoading && result == null -> ResolvingPlaybackIndicator()
             state.error != null && result == null -> ErrorView(
                 message = state.error!!, autoFocusRetry = true,
-                onRetry = { viewModel.resolvePlayback() },
+                onRetry = { viewModel.resolvePlayback(forceRefresh = true) },
                 modifier = Modifier.fillMaxSize(),
             )
         }

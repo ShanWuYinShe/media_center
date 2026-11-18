@@ -97,7 +97,14 @@ class PlayerViewModel(
         }
     }
 
-    fun resolvePlayback() = launch { resolve(currentQn, currentPage) }
+    /**
+     * 重新解析当前播放地址。
+     *
+     * @param forceRefresh 播放失败后的重试必须为 true:跳过 5 分钟预取缓存并让
+     *   该视频的预取失效,否则会反复拿到同一批已过期/被拒的直链,重试等于没重试。
+     */
+    fun resolvePlayback(forceRefresh: Boolean = false) =
+        launch { resolve(currentQn, currentPage, forceRefresh) }
 
     /**
      * 切换清晰度:目标档已在解析结果的 options 中(YouTube 由 server 一次返回
@@ -105,13 +112,14 @@ class PlayerViewModel(
      * url 变化即重载,免去再次解析(YouTube 解析是服务端秒级操作且有频控)。
      * 未命中(如 bilibili,每次解析只含当前档一条流)仍按新 qn 重新解析。
      */
-    fun selectQuality(qn: Int) {
-        // 重复点当前档位不重新解析(YouTube 解析虽被服务端缓存,仍是一次网络请求)
-        if (qn == currentQn) return
+    fun selectQuality(qn: Int, forceRefresh: Boolean = false) {
+        // 重复点当前档位不重新解析(YouTube 解析虽被服务端缓存,仍是一次网络请求);
+        // 但播放失败重试/降档要强制刷新,不能因 qn 相同跳过。
+        if (!forceRefresh && qn == currentQn) return
         val current = _uiState.value.playbackResult
         val active = current?.options?.firstOrNull()
         val match = current?.options?.firstOrNull { it.qn == qn }
-        if (current != null && active != null && match != null && match.url != active.url) {
+        if (!forceRefresh && current != null && active != null && match != null && match.url != active.url) {
             currentQn = qn
             _uiState.value = _uiState.value.copy(
                 playbackResult = current.copy(
@@ -121,7 +129,7 @@ class PlayerViewModel(
             return
         }
         currentQn = qn
-        launch { resolve(qn, currentPage) }
+        launch { resolve(qn, currentPage, forceRefresh) }
     }
 
     /** 切换多P分页(0 起始):重新解析该页播放流。 */
@@ -157,7 +165,7 @@ class PlayerViewModel(
         resolveJob = viewModelScope.launch { block() }
     }
 
-    private suspend fun resolve(qn: Int?, pageIndex: Int) {
+    private suspend fun resolve(qn: Int?, pageIndex: Int, forceRefresh: Boolean = false) {
         // 保留旧播放结果:清晰度/分P切换期间播放器不中断,新流就绪后无缝切换
         _uiState.value = _uiState.value.copy(isLoading = true, error = null)
         val requestedVideoId = currentVideoId
@@ -172,7 +180,13 @@ class PlayerViewModel(
                 requestedVideoId
             }
             // 详情页/下一集预取命中或在途时直接用,省掉解析等待;未命中正常解析并回填。
-            val prefetched = PlaybackPrefetcher.resolve(repository, targetId, qn)
+            // 播放失败重试(forceRefresh)必须绕过预取:缓存里是同一批失效直链。
+            val prefetched = if (forceRefresh) {
+                PlaybackPrefetcher.invalidate(repository, targetId)
+                null
+            } else {
+                PlaybackPrefetcher.resolve(repository, targetId, qn)
+            }
             val result = prefetched ?: repository.resolvePlayback(targetId, qn).also {
                 PlaybackPrefetcher.put(repository, targetId, qn, it)
             }
@@ -248,7 +262,8 @@ class PlayerViewModel(
             .filter { it in 1 until activeQn }
             .maxOrNull() ?: return false
         AppLog.i("Player", "playback error fallback: qn $activeQn -> $lower")
-        selectQuality(lower)
+        // 降档同样要从服务端刷新签名地址(旧结果里的直链很可能正是失败原因)。
+        selectQuality(lower, forceRefresh = true)
         return true
     }
 

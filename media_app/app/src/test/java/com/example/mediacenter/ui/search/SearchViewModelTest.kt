@@ -147,4 +147,17 @@ class SearchViewModelTest {
         assertEquals("boom", state.error)
         assertFalse(state.isSearching)
     }
+
+    @Test
+    fun `目录搜索超出总预算时给出超时文案`() = runTest {
+        val repo = FakeRepository(searchHandler = { _, _, _ ->
+            kotlinx.coroutines.delay(60_000)
+            SearchResponse()
+        })
+        val vm = SearchViewModel(repo)
+        waitSearch(vm, "dota")
+        val state = vm.uiState.value
+        assertFalse(state.isSearching)
+        assertEquals("搜索超时，请检查网络后重试", state.error)
+    }
 }

@@ -18,7 +18,8 @@ import kotlinx.coroutines.launch
  *   把 YouTube 冷解析(占用 extractor 并发)浪费在"只看一眼"的视频上;
  * - 键包含 provider/videoId/qn,换 provider 或换清晰度不会误用;
  * - TTL 5 分钟 + 最多 8 条:播放直链有时效,过期结果不可回放;TTL 内可被重复复用
- *   (快速回看/重试同一视频不再重复解析);
+ *   (快速回看不再重复解析);播放错误后的「重试」必须走 invalidate + 强制重新解析,
+ *   否则会把同一批失效直链原样还回去(见 PlayerViewModel.resolvePlayback(forceRefresh));
  * - 与 PlayerViewModel 共享:预取在途时播放页等待同一任务,不重复解析;
  * - 失败静默丢弃,播放页照常重新解析并回填。
  */
@@ -138,6 +139,23 @@ object PlaybackPrefetcher {
             }
         }
         return null
+    }
+
+    /**
+     * 让某视频的预取结果与在途任务全部失效。
+     *
+     * 播放失败(典型:直链签名过期/CDN 403)后点「重试」必须重新解析拿新直链,
+     * 但 5 分钟 TTL 的预取缓存会原样返回同一批失效 URL,让"重试"变成死循环。
+     */
+    fun invalidate(repository: MediaRepositoryApi, videoId: String) {
+        if (videoId.isBlank()) return
+        val provider = repository.currentProvider
+        synchronized(lock) {
+            val cachedKeys = cache.keys.filter { it.provider == provider && it.videoId == videoId }
+            cachedKeys.forEach { cache.remove(it) }
+            val inflightKeys = inflight.keys.filter { it.provider == provider && it.videoId == videoId }
+            inflightKeys.forEach { key -> inflight.remove(key)?.cancel() }
+        }
     }
 
     /** 仅测试用:清空缓存与在途任务(JVM 测试进程内所有用例共享这个单例)。 */

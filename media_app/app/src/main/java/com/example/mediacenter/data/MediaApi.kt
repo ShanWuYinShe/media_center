@@ -26,6 +26,9 @@ class MediaApi(
     private val client: OkHttpClient = AppHttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(15))
         .readTimeout(Duration.ofSeconds(15))
+        // 单次调用兜底(含 DNS/连接/TLS/读写):内部重试由上层总预算
+        // (首页/搜索的 withTimeoutOrNull)兜住,避免"一次调用"本身挂太久。
+        .callTimeout(Duration.ofSeconds(20))
         .apply {
             // 目录接口(/providers、/categories)低频变更,服务端已带 60s Cache-Control;
             // 配上磁盘缓存后,App 启动/回首页的重复拉取走缓存,省流量更跟手。只缓存 GET,

@@ -115,4 +115,20 @@ class PlaybackPrefetcherTest {
             PlaybackPrefetcher.resolve(repository, videoId, 720),
         )
     }
+
+    @Test
+    fun `invalidate 只清目标视频的预取结果`() = runTest {
+        val repository = FakeRepository()
+        val target = "BV1prefetch-invalidate"
+        val other = "BV1prefetch-keep"
+        val targetResult = repository.resolvePlayback(target, null)
+        val otherResult = repository.resolvePlayback(other, null)
+        PlaybackPrefetcher.put(repository, target, null, targetResult)
+        PlaybackPrefetcher.put(repository, other, null, otherResult)
+
+        PlaybackPrefetcher.invalidate(repository, target)
+
+        assertNull("失败重试前必须清掉失效直链的预取", PlaybackPrefetcher.resolve(repository, target, null))
+        assertEquals("其他视频的预取不受影响", otherResult, PlaybackPrefetcher.resolve(repository, other, null))
+    }
 }

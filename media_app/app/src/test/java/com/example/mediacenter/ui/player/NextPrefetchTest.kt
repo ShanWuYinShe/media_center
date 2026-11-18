@@ -35,4 +35,21 @@ class NextPrefetchTest {
     fun `非 bilibili 多P不拼后缀`() {
         assertEquals("yt-video-id", nextPrefetchTargetId("yt-video-id", "youtube", PlaybackNext.Page(0)))
     }
+
+    @Test
+    fun `多P下一页按当前档位预取`() {
+        assertEquals(1080, nextPrefetchQn(PlaybackNext.Page(1), 1080))
+    }
+
+    @Test
+    fun `合集下一集用 qn=null 预取`() {
+        // 合集切集会先把 currentQn 置 null,预取 key 必须一致才命中。
+        assertNull(nextPrefetchQn(PlaybackNext.Episode(video("BV2y")), 1080))
+    }
+
+    @Test
+    fun `无下一集时不关心档位`() {
+        assertNull(nextPrefetchQn(null, null))
+        assertEquals(720, nextPrefetchQn(null, 720))
+    }
 }
