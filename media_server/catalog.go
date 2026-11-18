@@ -127,6 +127,12 @@ CREATE INDEX IF NOT EXISTS idx_members_cat_status ON category_members(category_i
 -- provider 过滤搜索与分类归属查询(provider+status)。
 CREATE INDEX IF NOT EXISTS idx_members_provider_cat_status ON category_members(provider, category_id, status);
 CREATE INDEX IF NOT EXISTS idx_members_provider_status ON category_members(provider, status);
+-- 合集队列(video collection)按 (provider, native_id) 反查某视频属于哪个合集,
+-- 再用 EXISTS 判断成员是否 approved。上面的索引都以 category_id 或 category_id
+-- 组合为前缀,这个相关子查询只能退化为 (provider,status) 扫描 + 逐条回表比较
+-- native_id;30 万审核行 + 200 集的本地基准从 3.5s 降到 1ms(见第二轮审计 #5)。
+-- 存量库在下次打开时自动补建。
+CREATE INDEX IF NOT EXISTS idx_members_provider_native ON category_members(provider, native_id, status);
 -- 合集(如 B 站 ugc_season):由外部采集工具经 /internal/catalog/collections 写入,
 -- 只存分组关系,不引入新内容;公开队列只返回其中已审核(approved)的视频。
 CREATE TABLE IF NOT EXISTS collections (

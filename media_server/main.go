@@ -304,6 +304,9 @@ func (s *mediaServer) serveAPI(w http.ResponseWriter, r *http.Request) {
 			// 缓存命中/上游调用计数:部署后验证缓存是否真正命中(见 cache_stats.go)。
 			"cache": s.cacheStats.snapshot(),
 		}
+		// App 更新通道状态:ok(清单+APK 可读)/missing(未发布过更新)/error
+		// (清单损坏、sha256 非法、APK 缺失——此时检查更新返回 503 UPDATE_UNAVAILABLE)。
+		payload["appUpdate"] = s.appUpdateHealth()
 		// YouTube 实时通道的熔断状态:上游(cookies 过期/风控/extractor 挂掉)
 		// 故障时这里会变成 open,可直接从探针/监控看出"是全站故障而非视频问题"。
 		if s.yt != nil && s.yt.vodExtractorURL != "" {
