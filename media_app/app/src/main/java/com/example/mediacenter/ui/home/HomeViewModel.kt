@@ -19,6 +19,7 @@ import com.example.mediacenter.ui.update.UpdateDialogState
 import com.example.mediacenter.update.AppUpdateHolder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -536,17 +537,22 @@ class HomeViewModel(
         if (candidates.isEmpty()) return
         categoryPrefetchJob?.cancel()
         categoryPrefetchJob = viewModelScope.launch {
-            val provider = repository.currentProvider
-            for (categoryId in candidates) {
-                if (repository.currentProvider != provider) return@launch
-                val job = viewModelScope.launch { prefetchCategory(categoryId, provider) }
-                prefetchInFlight[categoryId] = job
-                try {
-                    job.join()
-                } finally {
-                    // 父任务被取消(切源/再次切类)时也要清理,否则该分类会被
-                    // 永久标记为"预热在途",之后再也预热不到它。
-                    prefetchInFlight.remove(categoryId)
+            // 内层任务必须是本 job 的子协程(旧实现用 viewModelScope.launch,
+            // 父任务被取消后内层仍在飞,却已被 finally 清掉 in-flight 标记 →
+            // 切类/切源后同一分类会被重复预热;这里用 coroutineScope 让取消级联。
+            coroutineScope {
+                val provider = repository.currentProvider
+                for (categoryId in candidates) {
+                    if (repository.currentProvider != provider) return@coroutineScope
+                    val job = launch { prefetchCategory(categoryId, provider) }
+                    prefetchInFlight[categoryId] = job
+                    try {
+                        job.join()
+                    } finally {
+                        // 父任务被取消(切源/再次切类)时也要清理,否则该分类会被
+                        // 永久标记为"预热在途",之后再也预热不到它。
+                        prefetchInFlight.remove(categoryId)
+                    }
                 }
             }
         }

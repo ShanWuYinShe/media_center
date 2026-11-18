@@ -74,6 +74,10 @@ internal fun ControlsOverlay(
     collection: PlaybackCollection?,
     positionMs: Long,
     durationMs: Long,
+    // 是否真的有上一集/下一集:没有时不要显示对应按键提示,否则按了没反应
+    // 用户会以为遥控器/App 坏了(多P第 1 页、合集第 1/最后一集都很常见)。
+    hasPrevious: Boolean,
+    hasNext: Boolean,
     onOptionsClick: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -178,10 +182,14 @@ internal fun ControlsOverlay(
                 KeyHint("←", "快退 10 秒")
                 Spacer(Modifier.width(20.dp))
                 KeyHint("→", "快进 10 秒")
-                Spacer(Modifier.width(20.dp))
-                KeyHint("↑", "上一集")
-                Spacer(Modifier.width(20.dp))
-                KeyHint("↓", "下一集")
+                if (hasPrevious) {
+                    Spacer(Modifier.width(20.dp))
+                    KeyHint("↑", "上一集")
+                }
+                if (hasNext) {
+                    Spacer(Modifier.width(20.dp))
+                    KeyHint("↓", "下一集")
+                }
                 Spacer(Modifier.width(20.dp))
                 KeyHint("OK", "播放/暂停")
             }
