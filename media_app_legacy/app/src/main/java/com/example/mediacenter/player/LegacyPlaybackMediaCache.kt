@@ -120,6 +120,31 @@ internal object LegacyPlaybackMediaCache {
         prefetchJobs.clear()
     }
 
+    /** 当前缓存占用字节(诊断弹窗显示用);失败返回 -1。 */
+    fun cacheSizeBytes(context: Context): Long {
+        val cache = cache(context) ?: return -1
+        return runCatching { cache.cacheSpace }.getOrDefault(-1L)
+    }
+
+    /**
+     * 清空全部媒体缓存(诊断弹窗「清除媒体缓存」入口,用户主动自救用;老盒子
+     * 磁盘更紧张,128MB 占比更高)。预取去重记录一并清空;返回清除的资源数,
+     * 失败返回 -1。
+     */
+    fun clearAll(context: Context): Int {
+        val cache = cache(context) ?: return -1
+        return runCatching {
+            var removed = 0
+            cache.getKeys().toList().forEach { key ->
+                runCatching { cache.removeResource(key) }
+                    .onSuccess { removed++ }
+            }
+            prefetchedAt.clear()
+            AppLog.i("Player", "legacy playback cache cleared: $removed resources")
+            removed
+        }.getOrDefault(-1)
+    }
+
     // ---------- 纯逻辑(JVM 可测) ----------
 
     /** 一个待预取区间:tag 用于日志区分 head/tail。 */

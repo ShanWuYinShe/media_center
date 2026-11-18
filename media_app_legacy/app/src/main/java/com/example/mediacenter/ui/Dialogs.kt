@@ -12,6 +12,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.Window
 import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.core.graphics.ColorUtils
 import androidx.core.view.doOnLayout
 import androidx.lifecycle.lifecycleScope
@@ -196,6 +197,33 @@ internal fun MainActivity.showSystemInfoDialog() {
             row("系统时间", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
             row("最近错误", currentState.error ?: "无")
             row("可用内存", "${availMemMb}MB / ${totalMemMb}MB")
+
+            // 播放媒体缓存占用与清除:老盒子磁盘紧张时的自救入口。
+            val cacheBytesMb = com.example.mediacenter.player.LegacyPlaybackMediaCache
+                .cacheSizeBytes(this@showSystemInfoDialog) / (1024 * 1024)
+            row("播放缓存占用", if (cacheBytesMb >= 0) "${cacheBytesMb}MB" else "不可用")
+
+            var clearBtn: TextView = TextView(activity)
+            clearBtn = pill(
+                text = if (cacheBytesMb > 0) "清除媒体缓存 (${cacheBytesMb}MB)" else "清除媒体缓存",
+                selected = false,
+                heightDp = 48,
+                horizontalPaddingDp = 28,
+                onClick = {
+                    val removed = com.example.mediacenter.player.LegacyPlaybackMediaCache
+                        .clearAll(this@showSystemInfoDialog)
+                    // 反馈:更新按钮文案;弹窗内其他行不动。
+                    clearBtn.text = when {
+                        removed < 0 -> "清除失败，请重试"
+                        removed == 0 -> "缓存已是空的"
+                        else -> "已清除 $removed 项"
+                    }
+                },
+            )
+            card.addView(
+                clearBtn,
+                LinearLayout.LayoutParams(match(), dp(48)).withTopMargin(dp(16)),
+            )
 
             val close = pill("关闭", selected = true, heightDp = 48, horizontalPaddingDp = 28) { dismiss() }
             card.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(20)))
