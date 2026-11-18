@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/subtle"
 	"log"
 	"net/http"
@@ -20,7 +21,7 @@ import (
 // 触发网络恢复重试。503 能明确暴露故障并让客户端重试。
 // provider=youtube 且实时通道可用时不拦:bilibili 目录故障不应连带 YouTube 实时分区。
 func (s *mediaServer) rejectIfCatalogUnavailable(w http.ResponseWriter, provider string) bool {
-	if s.catalogErr == nil {
+	if s.catalogErrorMessage() == nil {
 		return false
 	}
 	if provider == "youtube" && s.youtubeRealtimeEnabled() {
@@ -35,14 +36,14 @@ func (s *mediaServer) rejectIfCatalogUnavailable(w http.ResponseWriter, provider
 	return true
 }
 
-func (s *mediaServer) handleProviders(w http.ResponseWriter) {
+func (s *mediaServer) handleProviders(w http.ResponseWriter, r *http.Request) {
 	if s.rejectIfCatalogUnavailable(w, "") {
 		return
 	}
 	// 目录数据变化低频(审核后更新),60s 缓存显著减少 App 启动/回首页的重复拉取;
 	// 凭证等敏感接口不在此列。
 	w.Header().Set("Cache-Control", "public, max-age=60")
-	items, err := s.providersList()
+	items, err := s.providersList(r.Context())
 	if err != nil {
 		s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"})
 		log.Printf("list providers: %v", err)
@@ -53,10 +54,10 @@ func (s *mediaServer) handleProviders(w http.ResponseWriter) {
 
 // providersList 计算 App 可选的视频源列表(不写响应),供 /providers 与
 // /providers/{provider}/bootstrap 聚合端点共用。
-func (s *mediaServer) providersList() ([]ProviderInfo, error) {
+func (s *mediaServer) providersList(ctx context.Context) ([]ProviderInfo, error) {
 	items := []ProviderInfo{}
-	if s.catalog != nil {
-		providerIDs, err := s.catalog.DistinctProviders()
+	if s.catalogHandle() != nil {
+		providerIDs, err := s.catalogHandle().DistinctProvidersContext(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -151,11 +152,11 @@ func (s *mediaServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// 延迟 30s 对搜索场景无感;providers 用 60s,搜索更新感知更敏感故减半)。
 	// 429/503/400 不带缓存头,只有成功响应可缓存。
 	w.Header().Set("Cache-Control", "public, max-age=30")
-	if s.catalog == nil {
+	if s.catalogHandle() == nil {
 		s.writeJSON(w, http.StatusOK, SearchResponse{Query: query, Total: 0, Items: []VideoSummary{}})
 		return
 	}
-	items, total, searchErr := s.catalog.SearchApproved(query, strings.TrimSpace(r.URL.Query().Get("provider")), page, pageSize)
+	items, total, searchErr := s.catalogHandle().SearchApprovedContext(r.Context(), query, strings.TrimSpace(r.URL.Query().Get("provider")), page, pageSize)
 	if searchErr != nil {
 		log.Printf("search %q: %v", query, searchErr)
 		s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"})
@@ -210,11 +211,11 @@ func (s *mediaServer) handleVideoCollection(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	resp := VideoCollectionResponse{CurrentIndex: -1, Items: []VideoSummary{}}
 	videoID = strings.TrimSpace(videoID)
-	if s.catalog == nil || videoID == "" {
+	if s.catalogHandle() == nil || videoID == "" {
 		s.writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	queue, ok, err := s.catalog.CollectionForVideo(provider, videoID)
+	queue, ok, err := s.catalogHandle().CollectionForVideoContext(r.Context(), provider, videoID)
 	if err != nil {
 		log.Printf("collection for video provider=%s id=%s: %v", provider, videoID, err)
 		s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"})
@@ -244,7 +245,7 @@ func (s *mediaServer) handleProviderCategories(w http.ResponseWriter, r *http.Re
 		return
 	}
 	w.Header().Set("Cache-Control", "public, max-age=60")
-	items, err := s.categoriesForProvider(provider)
+	items, err := s.categoriesForProvider(r.Context(), provider)
 	if err != nil {
 		s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"})
 		log.Printf("list categories for provider %s: %v", provider, err)
@@ -255,7 +256,7 @@ func (s *mediaServer) handleProviderCategories(w http.ResponseWriter, r *http.Re
 
 // categoriesForProvider 计算某 provider 的分类列表(不写响应),供 /categories
 // 与 /providers/{provider}/bootstrap 聚合端点共用。
-func (s *mediaServer) categoriesForProvider(provider string) ([]PublicCategory, error) {
+func (s *mediaServer) categoriesForProvider(ctx context.Context, provider string) ([]PublicCategory, error) {
 	// YouTube 内容只存在于实时搜索,不在 catalog;分类由服务端内置映射。
 	if provider == "youtube" {
 		if s.youtubeRealtimeEnabled() {
@@ -263,10 +264,10 @@ func (s *mediaServer) categoriesForProvider(provider string) ([]PublicCategory, 
 		}
 		return []PublicCategory{}, nil
 	}
-	if s.catalog == nil {
+	if s.catalogHandle() == nil {
 		return []PublicCategory{}, nil
 	}
-	categoryIDs, err := s.catalog.CategoriesForProvider(provider)
+	categoryIDs, err := s.catalogHandle().CategoriesForProviderContext(ctx, provider)
 	if err != nil {
 		return nil, err
 	}
@@ -310,13 +311,13 @@ func (s *mediaServer) handleProviderBootstrap(w http.ResponseWriter, r *http.Req
 		return
 	}
 	w.Header().Set("Cache-Control", "public, max-age=60")
-	providers, err := s.providersList()
+	providers, err := s.providersList(r.Context())
 	if err != nil {
 		s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"})
 		log.Printf("bootstrap providers: %v", err)
 		return
 	}
-	categories, err := s.categoriesForProvider(provider)
+	categories, err := s.categoriesForProvider(r.Context(), provider)
 	if err != nil {
 		s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"})
 		log.Printf("bootstrap categories for provider %s: %v", provider, err)
@@ -355,14 +356,14 @@ func (s *mediaServer) handleProviderCategoryVideos(w http.ResponseWriter, r *htt
 		s.writeError(w, &apiError{Status: http.StatusNotFound, Code: "NOT_FOUND", Message: "未找到分类。"})
 		return
 	}
-	if s.catalog == nil {
+	if s.catalogHandle() == nil {
 		s.writeJSON(w, http.StatusOK, VideosResponse{
 			Category: &PublicCategory{ID: category.ID, Title: category.Title, Description: category.Description},
 			Page:     page, PageSize: pageSize, Total: 0, Items: []VideoSummary{},
 		})
 		return
 	}
-	items, total, catErr := s.catalog.ApprovedPageForProviderFiltered(provider, categoryID, page, pageSize, bounds)
+	items, total, catErr := s.catalogHandle().ApprovedPageForProviderFilteredContext(r.Context(), provider, categoryID, page, pageSize, bounds)
 	if catErr != nil {
 		s.writeError(w, &apiError{Status: http.StatusInternalServerError, Code: "INTERNAL_ERROR", Message: "服务端内部错误。"})
 		log.Printf("list videos provider=%s category=%s: %v", provider, categoryID, catErr)

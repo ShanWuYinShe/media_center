@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -116,6 +117,12 @@ VALUES (?, ?, ?, ?)`, provider, item.ID, nativeID, position); err != nil {
 // CollectionForVideo 查询某视频所在合集及“已审核”剧集队列。
 // 未找到合集返回 (zero,false,nil);当前视频不在队列中时 CurrentIndex=-1。
 func (c *Catalog) CollectionForVideo(provider, videoID string) (VideoCollectionQueue, bool, error) {
+	return c.CollectionForVideoContext(context.Background(), provider, videoID)
+}
+
+// CollectionForVideoContext 是请求上下文版本:合集队列的 EXISTS 子查询依赖
+// (provider,native_id) 索引,但大合集仍可能扫多行;超时/断开后可取消。
+func (c *Catalog) CollectionForVideoContext(ctx context.Context, provider, videoID string) (VideoCollectionQueue, bool, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	videoID = strings.TrimSpace(videoID)
 	if c == nil || provider == "" || videoID == "" {
@@ -124,7 +131,7 @@ func (c *Catalog) CollectionForVideo(provider, videoID string) (VideoCollectionQ
 	// 兼容存量 "bvid_pN" 分P条:合集关系按 base bvid 存。
 	videoID = stripPageSuffix(provider, videoID)
 	var collectionID, title string
-	err := c.db.QueryRow(`
+	err := c.db.QueryRowContext(catalogRequestContext(ctx), `
 SELECT cm.collection_id, COALESCE(c.title, '')
 FROM collection_members cm
 LEFT JOIN collections c ON c.provider = cm.provider AND c.collection_id = cm.collection_id
@@ -136,7 +143,7 @@ LIMIT 1`, provider, videoID).Scan(&collectionID, &title)
 	if err != nil {
 		return VideoCollectionQueue{}, false, fmt.Errorf("find collection for video: %w", err)
 	}
-	rows, err := c.db.Query(`
+	rows, err := c.db.QueryContext(catalogRequestContext(ctx), `
 SELECT v.provider, v.native_id, v.title, v.description, v.creators, v.duration_sec, v.year, v.thumbnail_url, v.source_url
 FROM collection_members cm
 JOIN videos v ON v.provider = cm.provider AND v.native_id = cm.native_id

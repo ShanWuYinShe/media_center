@@ -36,7 +36,7 @@
 | 503 | `SERVICE_BUSY` | 并发满载：catalog 搜索闸门，或 youtube 实时端点排队等不到 vod_extractor 并发槽（带 `Retry-After`，稍后重试即可） |
 | 503 | `RESOLVE_UNAVAILABLE` / `UPSTREAM_UNAVAILABLE` | youtube 实时通道**基础设施类**故障（cookies 失效/风控/extractor 不可达/超时/配置错误）：带 `Retry-After`，可安全重试；不按视频负缓存，连续失败会触发进程级熔断（见 `/healthz` 的 `youtube` 字段） |
 | 503 | `CONTENT_PREPARING` | youtube 分类端点 12s 服务端预算内未拿到结果（冷缓存）：带 `Retry-After: 5`，后台单飞会继续填充缓存，稍后重试直接命中 |
-| 503 | `CATALOG_UNAVAILABLE` | 配置了 catalog DB 但打开失败（启动期故障）：目录相关端点返回 503（`no-store`）而不是 200 空目录，客户端可重试，`/healthz` 显示 `catalog=error` |
+| 503 | `CATALOG_UNAVAILABLE` | catalog 暂不可用（启动打开失败等）：目录相关端点返回 503（`no-store`）而不是 200 空目录，客户端可重试；服务端会后台退避重开（成功后自动恢复、无需重启进程），`/healthz` 显示 `catalog=error` 与具体原因 |
 | 503 | `UPDATE_UNAVAILABLE` | App 更新清单损坏（JSON/sha256 非法）或 APK 缺失：更新检查返回 503 而不是静默 204，`/healthz` 显示 `appUpdate=error` |
 | 410 | `APK_VERSION_GONE` | APK 下载的版本令牌 `v` 与当前 manifest 不匹配（发版后旧地址）：客户端应重新检查更新，不再返回当前 APK |
 | 503 | `TIMEOUT` | 单个 API 请求超过服务端 75s 硬超时（防慢查询/卡住 handler 拖垮服务；超时响应为同一 JSON 包络，可安全重试） |
@@ -105,7 +105,7 @@ type VideoSummary = {
 `resolveLastMs`/`resolveAvgMs`/`resolveCount` 为真实上游解析的最近/平均/累计耗时（毫秒），
 `searchLastMs` 为最近一次上游搜索（含分类预热）耗时——用于判断"慢在解析还是慢在缓存失效"。
 
-`catalog` 取值：`ok`（数据库已打开）、`disabled`（未配置 DB）、`error`（配置了 DB 但打开失败）。`error` 时 HTTP 状态为 **503**，`status` 为 `degraded`——服务仍能响应空目录，但这是必须告警的故障态。
+`catalog` 取值：`ok`（数据库已打开）、`disabled`（未配置 DB）、`error`（配置了 DB 但打开失败）。`error` 时 HTTP 状态为 **503**，`status` 为 `degraded`，并附 `catalogError` 文字原因——服务仍能响应 503，但这是必须告警的故障态；服务端每 30s→5min 退避重开数据库，成功后自动恢复 `ok`，无需重启进程。
 
 `appUpdate` 是 App 更新通道状态：`ok`（清单与 APK 均可用）、`missing`（未发布过更新，检查更新返回 204）、`error`（清单损坏/sha256 非法/APK 缺失，检查更新返回 503 `UPDATE_UNAVAILABLE`）。
 

@@ -99,7 +99,7 @@ type internalImportItem struct {
 // handleInternalImport 把外部工具/AI 已收集并初筛的视频导入 catalog 待审列表。
 // 只写 pending 候选,绝不直接 approved;已存在的审校决定不会被覆盖。
 func (s *mediaServer) handleInternalImport(w http.ResponseWriter, r *http.Request) {
-	if s.catalog == nil {
+	if s.catalogHandle() == nil {
 		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "CATALOG_DISABLED", Message: "分类维护数据库未启用。"})
 		return
 	}
@@ -161,7 +161,7 @@ func (s *mediaServer) handleInternalImport(w http.ResponseWriter, r *http.Reques
 			Rank:   item.Rank,
 		})
 	}
-	updatedVideos, imported, approved, skipped, err := s.catalog.ImportPending(items, strings.TrimSpace(req.Reviewer))
+	updatedVideos, imported, approved, skipped, err := s.catalogHandle().ImportPending(items, strings.TrimSpace(req.Reviewer))
 	if err != nil {
 		s.writeError(w, fmt.Errorf("import catalog: %w", err))
 		return
@@ -186,8 +186,8 @@ type internalCategoryOverview struct {
 // catalog 未启用时计数为 0,仍返回分类列表。
 func (s *mediaServer) handleInternalOverview(w http.ResponseWriter, _ *http.Request) {
 	var counts map[string]CategoryStatusCounts
-	if s.catalog != nil {
-		c, err := s.catalog.OverviewCounts()
+	if s.catalogHandle() != nil {
+		c, err := s.catalogHandle().OverviewCounts()
 		if err != nil {
 			s.writeError(w, fmt.Errorf("overview counts: %w", err))
 			return
@@ -203,8 +203,8 @@ func (s *mediaServer) handleInternalOverview(w http.ResponseWriter, _ *http.Requ
 		cats = append(cats, ov)
 	}
 	collectionCount := 0
-	if s.catalog != nil {
-		n, err := s.catalog.CountCollections()
+	if s.catalogHandle() != nil {
+		n, err := s.catalogHandle().CountCollections()
 		if err != nil {
 			s.writeError(w, fmt.Errorf("count collections: %w", err))
 			return
@@ -212,7 +212,7 @@ func (s *mediaServer) handleInternalOverview(w http.ResponseWriter, _ *http.Requ
 		collectionCount = n
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
-		"catalogEnabled": s.catalog != nil,
+		"catalogEnabled": s.catalogHandle() != nil,
 		"categories":     cats,
 		"collections":    collectionCount,
 	})
@@ -257,7 +257,7 @@ func toInternalReviewItem(it PendingReviewItem) internalReviewItem {
 
 // handleInternalItems 列出某分类(可选某状态)的成员,供审校界面分页/筛选展示。
 func (s *mediaServer) handleInternalItems(w http.ResponseWriter, r *http.Request) {
-	if s.catalog == nil {
+	if s.catalogHandle() == nil {
 		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "CATALOG_DISABLED", Message: "分类维护数据库未启用。"})
 		return
 	}
@@ -273,12 +273,12 @@ func (s *mediaServer) handleInternalItems(w http.ResponseWriter, r *http.Request
 		limit = 1000
 	}
 	offset := positiveInt(q.Get("offset"), 0)
-	total, err := s.catalog.CountMembers(category, status)
+	total, err := s.catalogHandle().CountMembers(category, status)
 	if err != nil {
 		s.writeError(w, fmt.Errorf("count members: %w", err))
 		return
 	}
-	items, err := s.catalog.ListMembers(category, status, limit, offset)
+	items, err := s.catalogHandle().ListMembers(category, status, limit, offset)
 	if err != nil {
 		s.writeError(w, fmt.Errorf("list members: %w", err))
 		return
@@ -307,7 +307,7 @@ type internalReviewRequest struct {
 
 // handleInternalReview 对单个 (分类,视频) 成员应用审校变更(approve/reject/置顶/排序)。
 func (s *mediaServer) handleInternalReview(w http.ResponseWriter, r *http.Request) {
-	if s.catalog == nil {
+	if s.catalogHandle() == nil {
 		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "CATALOG_DISABLED", Message: "分类维护数据库未启用。"})
 		return
 	}
@@ -326,7 +326,7 @@ func (s *mediaServer) handleInternalReview(w http.ResponseWriter, r *http.Reques
 	if reviewer == "" {
 		reviewer = "admin"
 	}
-	affected, err := s.catalog.ReviewMember(req.CategoryID, req.Provider, req.NativeID, req.Status, req.Pinned, rankArg, reviewer)
+	affected, err := s.catalogHandle().ReviewMember(req.CategoryID, req.Provider, req.NativeID, req.Status, req.Pinned, rankArg, reviewer)
 	if err != nil {
 		// 校验类错误(validationError)是可安全返回的业务消息;
 		// 底层 SQL/DB 错误不泄露细节。
@@ -356,7 +356,7 @@ type internalDeleteRequest struct {
 // handleInternalDelete 硬删除某分类下的一个视频成员(增删改查的"删")。区别于 review 的软
 // reject:这里把成员行真正从库中移除;若该视频不再被任何分类引用,连带清理 videos 元数据。
 func (s *mediaServer) handleInternalDelete(w http.ResponseWriter, r *http.Request) {
-	if s.catalog == nil {
+	if s.catalogHandle() == nil {
 		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "CATALOG_DISABLED", Message: "分类维护数据库未启用。"})
 		return
 	}
@@ -369,7 +369,7 @@ func (s *mediaServer) handleInternalDelete(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "BAD_REQUEST", Message: "categoryId/provider/nativeId 不能为空。"})
 		return
 	}
-	deleted, videoDeleted, err := s.catalog.DeleteMember(req.CategoryID, req.Provider, req.NativeID)
+	deleted, videoDeleted, err := s.catalogHandle().DeleteMember(req.CategoryID, req.Provider, req.NativeID)
 	if err != nil {
 		s.writeError(w, fmt.Errorf("delete member: %w", err))
 		return
@@ -385,7 +385,7 @@ func (s *mediaServer) handleInternalDelete(w http.ResponseWriter, r *http.Reques
 // 返回的每条 item 与导入接口字段兼容(含 status/pinned/rank),把该 JSON 原样 POST 到另一处
 // media_server 的 /internal/catalog/import 即可忠实重建分类数据(approved 项一步上线)。
 func (s *mediaServer) handleInternalExport(w http.ResponseWriter, r *http.Request) {
-	if s.catalog == nil {
+	if s.catalogHandle() == nil {
 		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "CATALOG_DISABLED", Message: "分类维护数据库未启用。"})
 		return
 	}
@@ -403,7 +403,7 @@ func (s *mediaServer) handleInternalExport(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	// limit=0 表示不限:一次性导出全部成员。
-	members, err := s.catalog.ListMembers(category, status, 0, 0)
+	members, err := s.catalogHandle().ListMembers(category, status, 0, 0)
 	if err != nil {
 		s.writeError(w, fmt.Errorf("export members: %w", err))
 		return
@@ -418,7 +418,7 @@ func (s *mediaServer) handleInternalExport(w http.ResponseWriter, r *http.Reques
 	}
 	// 合集是派生分组元数据,不按 category/status 过滤:备份时一并带走,
 	// 恢复后可用 /internal/catalog/collections 原样回放(或重新跑同步脚本)。
-	collections, err := s.catalog.Collections("")
+	collections, err := s.catalogHandle().Collections("")
 	if err != nil {
 		s.writeError(w, fmt.Errorf("export collections: %w", err))
 		return

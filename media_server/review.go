@@ -20,7 +20,7 @@ type ReviewOptions struct {
 // runCatalogReview 是 -catalog-review 子命令入口:遍历(指定)分类,交互式逐条把 pending
 // 候选审校成 approved/rejected。每条决定立即落库,中断不丢已审。
 func (s *mediaServer) runCatalogReview(ctx context.Context, opts ReviewOptions) error {
-	if s.catalog == nil {
+	if s.catalogHandle() == nil {
 		return fmt.Errorf("catalog review: catalog not opened")
 	}
 	reviewer := strings.TrimSpace(opts.Reviewer)
@@ -41,7 +41,7 @@ func (s *mediaServer) runCatalogReview(ctx context.Context, opts ReviewOptions) 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		items, err := s.catalog.PendingReviews(PendingReviewsOptions{CategoryID: category.ID})
+		items, err := s.catalogHandle().PendingReviews(PendingReviewsOptions{CategoryID: category.ID})
 		if err != nil {
 			return fmt.Errorf("catalog review: load pending category=%s: %w", category.ID, err)
 		}
@@ -50,8 +50,8 @@ func (s *mediaServer) runCatalogReview(ctx context.Context, opts ReviewOptions) 
 			continue
 		}
 		fmt.Printf("\n=== 审校分类 %s: %d 条待审 ===\n", category.ID, len(items))
-		approved, rejected, skipped := reviewInteractive(os.Stdin, os.Stdout, items, opts, reviewer, s.catalog)
-		pending, _ := s.catalog.CountByStatus(category.ID, "pending")
+		approved, rejected, skipped := reviewInteractive(os.Stdin, os.Stdout, items, opts, reviewer, s.catalogHandle())
+		pending, _ := s.catalogHandle().CountByStatus(category.ID, "pending")
 		log.Printf("catalog review: category=%s approved=%d rejected=%d skipped=%d dry-run=%t pending=%d",
 			category.ID, approved, rejected, skipped, opts.DryRun, pending)
 	}
