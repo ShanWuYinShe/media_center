@@ -35,19 +35,24 @@ const crashReportPerMinuteLimit = 10
 // crashLogLock 串行化崩溃日志写入(多进程容器内同一路径追加)。
 var crashLogLock sync.Mutex
 
-// maxLimiterEntries 是限流表条目上限。走 Cloudflare 时 clientIP 是真实客户端
-// IPv6,攻击者可用海量源地址制造新 key;惰性清理只删过期条目,新鲜攻击 IP
-// 会让 entries 无界增长(容器 256M 内存可被 50 字节/条的 map 撬动)。超过上限
-// 后新 key 直接按限流拒绝(已有条目判定不受影响),与 workwork 仓库 admin
-// 侧 maxRateLimitEntries 同款守卫。
-const maxLimiterEntries = 100000
+// maxLimiterEntries 是单个限流表的条目上限。走 Cloudflare 时 clientIP 是真实
+// 客户端 IPv6,攻击者可用海量源地址制造新 key;新鲜攻击 IP 会让 entries 无界
+// 增长,所以按内存预算设硬上限。真实部署容器只有 64M(见
+// deploy/docker-compose.yml),而服务内有 5 个 ipWindowLimiter(崩溃/凭证/
+// 目录搜索/youtube 搜索/resolve),不能按「各 10 万条」设计:一条 map entry 含
+// IPv6 key 字符串(~40B)+窗口结构+map 开销约 100B,5×10 万条最坏 >40MB,再叠加
+// modernc SQLite 堆与 Go 运行时余量,会在 64M 容器里被 OOMKill。
+// 单表 16384 条(≈1.6MB/表,5 表 ≤8MB)对家用场景足够;表满后新 key 直接按
+// 限流拒绝(已有条目判定不受影响),IPv6 轮换攻击下内存仍有界。
+const maxLimiterEntries = 16384
 
-// ipWindowLimiter 是 per-IP 固定窗口限流器(崩溃上报/凭证端点共用)。
+// ipWindowLimiter 是 per-IP 固定窗口限流器(崩溃上报/凭证/搜索等端点共用)。
 type ipWindowLimiter struct {
-	mu      sync.Mutex
-	limit   int
-	window  time.Duration
-	entries map[string]*ipWindow
+	mu        sync.Mutex
+	limit     int
+	window    time.Duration
+	entries   map[string]*ipWindow
+	lastSweep time.Time
 }
 
 type ipWindow struct {
@@ -63,6 +68,16 @@ func (l *ipWindowLimiter) allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
+	// 周期性清理过期条目(每个窗口最多一次):正常流量下也保持稳态表体积,
+	// 不必等表满触发容量守卫才扫描(低流量时旧 IP 条目会长期占内存)。
+	if now.Sub(l.lastSweep) >= l.window {
+		for k, e := range l.entries {
+			if now.Sub(e.start) >= l.window {
+				delete(l.entries, k)
+			}
+		}
+		l.lastSweep = now
+	}
 	w, ok := l.entries[key]
 	if !ok || now.Sub(w.start) >= l.window {
 		// 容量守卫:表满时先清理过期条目,仍满则拒绝新 key(不影响已有

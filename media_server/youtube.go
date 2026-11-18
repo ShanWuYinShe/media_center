@@ -32,9 +32,11 @@ import (
 const (
 	youtubeSearchPerMinuteLimit  = 12
 	youtubeResolvePerMinuteLimit = 20
-	// resolve 响应(yt-dlp JSON)读取上限。完整 JSON 通常数百 KB(含全部格式
-	// 与清单),20MB 与 vod_extractor 的 VOD_EXTRACTOR_MAX_OUTPUT_BYTES 对齐。
-	maxYouTubeExtractBytes = 20 << 20
+	// resolve 响应(yt-dlp JSON)读取上限。完整 JSON 通常数百 KB、格式很多的长
+	// 视频也就 1~2MB;8MB 留 4 倍余量,并把 64M 容器里单请求最坏分配从 20MB
+	// 压到 8MB。与 vod_extractor 的 VOD_EXTRACTOR_MAX_OUTPUT_BYTES 默认值对齐
+	// (extractor 侧同步收紧到 8MB,超限时它自己先失败,不会产出被这里截断的响应)。
+	maxYouTubeExtractBytes = 8 << 20
 	// 解析 youtube 视频的 watch URL 前缀。
 	youtubeWatchURL = "https://www.youtube.com/watch?v="
 	// 搜索每页条数(TV 搜索每键即时出结果,单页足够)。
@@ -218,10 +220,15 @@ func (c *ytClient) postExtractor(ctx context.Context, path string, payload any, 
 		if err != nil {
 			return nil, fmt.Errorf("extractor request: %w", err)
 		}
-		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxYouTubeExtractBytes))
+		// 多读 1 字节用于识别超限:LimitReader 到上限即 EOF,读满上限时无法
+		// 区分"刚好读满"和"还有更多";超过上限必须报错,不能把截断 JSON 当成功。
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxYouTubeExtractBytes+1))
 		resp.Body.Close()
 		if readErr != nil {
 			return nil, fmt.Errorf("read extractor body: %w", readErr)
+		}
+		if len(raw) > maxYouTubeExtractBytes {
+			return nil, fmt.Errorf("extractor response exceeds %d bytes", maxYouTubeExtractBytes)
 		}
 		if resp.StatusCode == http.StatusOK {
 			return raw, nil

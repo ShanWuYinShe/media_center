@@ -28,7 +28,9 @@ API 约定见仓库根 AGENTS.md「API 约定」：业务接口规范前缀 `/ap
      YouTube 解析硬前提，过期需重新导出）。
 5. **启动**：`cp .env.example .env && $EDITOR .env && make build && make up nginx media_server vod_extractor bgutil_pot`。
    `bgutil_pot` 是 YouTube PO Token provider，只走 backend 内网；`vod_extractor`
-   内置 Deno + yt-dlp-ejs，并把内存上限设为 768M（签名求解需要）。
+   内置 Deno + yt-dlp-ejs，并把内存上限设为 768M（签名求解需要）；`media_server`
+   限制 64M 并设 `GOMEMLIMIT=48MiB`（限流表/缓存/现代 SQLite 的堆预算按此收缩），
+   超时响应统一走 JSON 错误包络。
 6. **验证**：`curl -s https://media.chaoset.com/healthz`（应回
    `{"status":"ok","version":"..."}`）；App 侧以新基址
    `https://media.chaoset.com/api/v1` 拉一次 providers。
