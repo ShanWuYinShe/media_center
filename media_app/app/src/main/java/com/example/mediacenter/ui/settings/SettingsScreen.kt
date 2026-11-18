@@ -91,6 +91,15 @@ fun SettingsScreen(onBack: () -> Unit) {
         serverVersion = MediaRepositoryHolder.updateApi.serverVersion() ?: "无法获取"
     }
 
+    // ── 播放媒体缓存占用 ──
+    // 「清除播放缓存」入口显示当前占用(-1 表示不可用),清除后刷新。
+    var mediaCacheBytes by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(Unit) {
+        mediaCacheBytes = withContext(Dispatchers.IO) {
+            PlaybackMediaCache.cacheSizeBytes(context)
+        }
+    }
+
     fun checkForUpdate() {
         if (checkingUpdate) return
         checkingUpdate = true
@@ -130,6 +139,10 @@ fun SettingsScreen(onBack: () -> Unit) {
                 removed < 0 -> "清除播放缓存失败，请重试"
                 removed == 0 -> "播放缓存已是空的"
                 else -> "已清除 $removed 条播放缓存"
+            }
+            // 刷新入口上的占用显示(清除后应变 0)
+            mediaCacheBytes = withContext(Dispatchers.IO) {
+                PlaybackMediaCache.cacheSizeBytes(context)
             }
         }
     }
@@ -273,8 +286,10 @@ fun SettingsScreen(onBack: () -> Unit) {
                         )
                     },
                 )
+                val sizeLabel = mediaCacheBytes?.takeIf { bytes -> bytes > 0 }
+                    ?.let { bytes -> " (${bytes / 1024 / 1024}MB)" } ?: ""
                 ActionRow(
-                    label = "清除播放缓存",
+                    label = "清除播放缓存$sizeLabel",
                     onClick = {
                         confirmAction = ConfirmAction(
                             title = "清除播放缓存",
