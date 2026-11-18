@@ -322,8 +322,10 @@ class BilibiliApi(
             continuation.invokeOnCancellation { call.cancel() }
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
+                    // 原始 socket 异常(英文 dial tcp/timeout 串)不能直接展示给用户:
+                    // 详情页/错误层会原样显示。统一转成分类中文文案,原始异常留作 cause。
                     if (continuation.isActive) {
-                        continuation.resumeWithException(e)
+                        continuation.resumeWithException(IOException(friendlyNetworkMessage(e), e))
                     }
                 }
 
