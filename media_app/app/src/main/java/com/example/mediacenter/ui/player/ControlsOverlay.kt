@@ -34,6 +34,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.geometry.Offset
@@ -215,7 +217,15 @@ private fun PlaybackProgress(positionMs: Long, durationMs: Long) {
     } else {
         0f
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        // 读屏(TalkBack)下进度条本身没有可读文本;整行合并成一个语义节点,
+        // 播报「播放进度 12:34 / 45:00」而不是四个独立数字。
+        modifier = Modifier.semantics(mergeDescendants = true) {
+            contentDescription =
+                "播放进度 ${formatDuration(positionMs)} / ${formatDuration(durationMs)}"
+        },
+    ) {
         Text(
             text = formatDuration(positionMs),
             color = TextPrimary,

@@ -46,6 +46,13 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -642,11 +649,40 @@ internal fun PlayerContent(
         if (next) onNext() else onPrevious()
     }
 
+    // 读屏状态文案:播放页没有可见的状态文字,靠语义节点告诉辅助功能当前状态。
+    val playbackStateLabel = when {
+        isBuffering -> "缓冲中"
+        isPlaying -> "播放中"
+        else -> "已暂停"
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .focusRequester(playerFocus)
             .focusable()
+            // TalkBack/读屏:根节点声明页面与状态,并提供播放/快进/快退的自定义操作
+            // (旧实现根节点无语义、glyph contentDescription=null,读屏只能读出"焦点")。
+            .semantics {
+                contentDescription = "播放页：$videoTitle"
+                stateDescription = playbackStateLabel
+                customActions = listOf(
+                    CustomAccessibilityAction("播放/暂停") {
+                        togglePlayback()
+                        true
+                    },
+                    CustomAccessibilityAction("快进 10 秒") {
+                        seekBy(SEEK_STEP_MS)
+                        revealControls()
+                        true
+                    },
+                    CustomAccessibilityAction("快退 10 秒") {
+                        seekBy(-SEEK_STEP_MS)
+                        revealControls()
+                        true
+                    },
+                )
+            }
             .onPreviewKeyEvent { event ->
                 // 错误层显示时把按键让给覆盖层内的"重试"按钮:根节点在隧穿阶段
                 // 无条件消费 OK/方向键会让焦点按钮收不到 OK,用户只能退出重进。
@@ -769,9 +805,16 @@ internal fun PlayerContent(
                     }
                 },
         )
-        // 缓冲指示：画面未停但流没跟上时给出“正在加载”反馈
+        // 缓冲指示：画面未停但流没跟上时给出“正在加载”反馈;读屏按 polite 播报。
         if (isBuffering) {
-            LoadingIndicator(modifier = Modifier.fillMaxSize())
+            LoadingIndicator(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .semantics {
+                        contentDescription = "正在缓冲"
+                        liveRegion = LiveRegionMode.Polite
+                    },
+            )
         }
         // 播放失败自动恢复期间的文案:旧实现只有一圈无文案 spinner,用户无法
         // 判断是在重试、已卡死还是按键失灵。
@@ -856,7 +899,10 @@ private fun PlaybackStateGlyph(
         visible = visible,
         enter = fadeIn(),
         exit = fadeOut(),
-        modifier = modifier,
+        // 读屏没有画面:中央暂停/播放图标必须有文字语义(旧实现 contentDescription=null)。
+        modifier = modifier.semantics {
+            contentDescription = if (isPlaying) "播放中" else "已暂停"
+        },
     ) {
         Box(
             modifier = Modifier
