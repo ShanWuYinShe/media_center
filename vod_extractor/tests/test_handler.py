@@ -153,9 +153,13 @@ class DoPostErrorMappingTest(unittest.TestCase):
         _, sent = self._post_search_raising(ValueError("query is required"))
         self.assertEqual(sent, [(400, {"error": "query is required"})])
 
-    def test_busy_returns_503(self):
+    def test_busy_returns_503_with_retryable_reason(self):
+        # reason=busy 是 media_server 判定"短退避重试 / 503 SERVICE_BUSY"的契约;
+        # 缺了它 busy 会被当成普通上游失败(502 视频受限),误导用户。
         _, sent = self._post_search_raising(server.ExtractorBusyError("extractor is busy"))
-        self.assertEqual(sent, [(503, {"error": "extractor is busy"})])
+        self.assertEqual(
+            sent, [(503, {"error": "extractor is busy", "reason": "busy"})]
+        )
 
     def test_config_error_returns_503_not_400(self):
         # 服务端自身配置问题(cookies 缺失)必须是 503,不能误报成客户端 400
@@ -206,6 +210,14 @@ class DoGetTest(unittest.TestCase):
         self.assertIn("cookies", payload)
         self.assertIn("failures", payload)
         self.assertIn("version", payload)
+        # 并发/超时配置对外可见:排查"第三台电视 503"时先确认是槽位排队超时,
+        # 而不是视频/账号问题。
+        concurrency = payload["concurrency"]
+        self.assertEqual(concurrency["max"], server.MAX_CONCURRENT)
+        self.assertEqual(concurrency["queue_timeout_ms"], server.QUEUE_TIMEOUT_MS)
+        self.assertEqual(
+            concurrency["search_timeout_ms"], server.SEARCH_TIMEOUT_SECONDS * 1000
+        )
 
     def test_unknown_path_returns_404(self):
         sent = self._get("/extract")
