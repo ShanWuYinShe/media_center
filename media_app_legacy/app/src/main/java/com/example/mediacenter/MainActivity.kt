@@ -108,6 +108,9 @@ class MainActivity : ComponentActivity() {
     internal var playerErrorOverlay: View? = null
     internal lateinit var appUpdateManager: AppUpdateManager
     internal var pendingUpdateApk: File? = null
+    // 更新已下载完但用户正在播放/看详情:先记下,回到首页再弹安装提示。
+    // 旧实现不分页面直接弹框,会盖在播放画面上并抢走遥控器焦点。
+    internal var pendingUpdatePrompt: AppUpdateResult.ReadyToInstall? = null
     // “播放已稳定”计时器:STATE_READY 后延迟触发;只有同一地址连续顺畅播放超过窗口
     // 才把 ViewModel 的恢复额度清零,防止“就绪即失败”的流陷入无限恢复循环。
     internal var playbackStabilityRunnable: Runnable? = null
@@ -175,7 +178,7 @@ class MainActivity : ComponentActivity() {
             when (val result = appUpdateManager.checkAndDownload()) {
                 AppUpdateResult.NoUpdate -> Unit
                 is AppUpdateResult.Failed -> showUpdateMessage(result.message)
-                is AppUpdateResult.ReadyToInstall -> promptInstallUpdate(result)
+                is AppUpdateResult.ReadyToInstall -> presentUpdatePrompt(result)
             }
         }
         registerNetworkRestore()
@@ -291,8 +294,27 @@ class MainActivity : ComponentActivity() {
                 releasePlayer()
                 resetPlayerOrientationToDefault()
                 renderHome(state)
+                // 播放/详情期间被推迟的更新安装提示:回到首页后再弹,避免在播放画面上
+                // 抢焦点(习惯性按 OK 可能误触"安装更新")。
+                pendingUpdatePrompt?.let { pending ->
+                    pendingUpdatePrompt = null
+                    root.post { if (!isFinishing) promptInstallUpdate(pending) }
+                }
             }
         }
+    }
+
+    /**
+     * 弹出更新安装框前的页面判断:播放/详情/搜索层可见时先记下来,回首页再提示。
+     * 更新包已下载完,推迟只影响"何时提示",不影响安装流程。
+     */
+    private fun presentUpdatePrompt(result: AppUpdateResult.ReadyToInstall) {
+        if (currentState.playing != null || currentState.selected != null || searchVisible) {
+            pendingUpdatePrompt = result
+            AppLog.i("Update", "install prompt deferred: content screen visible")
+            return
+        }
+        promptInstallUpdate(result)
     }
 
     private fun updateHomeInPlaceIfPossible(previous: MediaUiState, state: MediaUiState): Boolean {
