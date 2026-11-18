@@ -807,12 +807,17 @@ internal fun PlayerContent(
                 )
             }
         } else if (showControls) {
+            // ↑ 上一集在两个维度可用:多P 当前不在第 1 页,或合集队列存在前一集。
+            val canGoPrevious = playbackResult.pages.currentPage > 0 ||
+                (collection?.currentIndex ?: -1) > 0
             ControlsOverlay(
                 videoTitle = videoTitle,
                 playbackResult = playbackResult,
                 collection = collection,
                 positionMs = positionMs,
                 durationMs = durationMs,
+                hasPrevious = canGoPrevious,
+                hasNext = hasAutoNext,
                 onOptionsClick = { showOptions = true },
                 onBack = onBack,
                 modifier = Modifier.fillMaxSize(),

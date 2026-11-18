@@ -18,6 +18,18 @@ import java.time.Duration
 class BilibiliApiException(override val message: String) : Exception(message)
 
 /**
+ * B 站 HTTP 非 2xx 的用户可读原因:原始响应体可能是一整页 HTML,直接展示
+ * (旧实现取前 200 字符)既难看也无法操作;原始 body 只进日志。
+ */
+private fun biliHttpMessage(statusCode: Int): String = when (statusCode) {
+    403, 412 -> "B 站暂时限制访问，请稍后重试"
+    404 -> "视频不存在或已下架"
+    429 -> "请求过于频繁，请稍后重试"
+    in 500..599 -> "B 站服务暂不可用，请稍后重试"
+    else -> statusCode.toFriendlyHttpMessage()
+}
+
+/**
  * 拼装 B 站业务错误的用户可见文案:优先透出响应里的 message(风控 -352/-412/-403
  * 的真实原因就在这个字段),缺失时回退到裸 code。
  */
@@ -282,7 +294,8 @@ class BilibiliApi(
             response.use {
                 val text = it.body.string()
                 if (!it.isSuccessful) {
-                    throw BilibiliApiException("B 站 API ${it.code}: ${text.take(200)}")
+                    AppLog.w("BilibiliApi", "http ${it.code} body=${text.take(200)}")
+                    throw BilibiliApiException(biliHttpMessage(it.code))
                 }
                 text
             }
