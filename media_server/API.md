@@ -33,7 +33,7 @@
 | 429 | `RATE_LIMITED` | 触发 per-IP 限流 |
 | 500 | `INTERNAL_ERROR` | 服务端内部错误 |
 | 502 | `UPSTREAM_ERROR` / `RESOLVE_FAILED` | youtube 实时端点：vod_extractor(yt-dlp) 上游失败 |
-| 503 | `SERVICE_BUSY` | 搜索端点并发满载（保护目录浏览主链路，稍后重试） |
+| 503 | `SERVICE_BUSY` | 并发满载：catalog 搜索闸门，或 youtube 实时端点排队等不到 vod_extractor 并发槽（带 `Retry-After`，稍后重试即可） |
 | 503 | `NOT_CONFIGURED` | youtube 实时端点：服务端未配置 API key / 解析服务 |
 
 ## 数据模型
@@ -87,7 +87,7 @@ type VideoSummary = {
 
 `cache` 是进程内缓存命中/上游调用计数（阶段 0 观测）：`resolveMemoryHits`/`resolveDiskHits`
 为 YouTube 播放解析的内存/磁盘缓存命中次数，`resolveUpstreams` 为真实调用 vod_extractor 的次数，
-`searchHits`/`categoryHits` 为 YouTube 实时搜索/分类快照缓存命中，`warmRuns` 为后台预热成功轮数。
+`searchHits`/`categoryHits` 为 YouTube 实时搜索/分类快照缓存命中；`warmRuns` 为后台预热真实完成的上游刷新次数（缓存命中或加入用户在飞请求不计）——预热会强制打上游续期，该计数是「缓存是否被持续保温」的直接证据。
 进程重启归零，仅用于验证缓存是否在用户路径生效。
 `resolveLastMs`/`resolveAvgMs`/`resolveCount` 为真实上游解析的最近/平均/累计耗时（毫秒），
 `searchLastMs` 为最近一次上游搜索（含分类预热）耗时——用于判断"慢在解析还是慢在缓存失效"。
@@ -136,7 +136,7 @@ App 首页启动聚合端点：一次返回 providers 与指定 provider 的分�
 
 `minDurationSeconds` / `maxDurationSeconds` 为可选的时长筛选（单位秒，**含边界**），用于「短片/中片/长片」等档位；两者可单独使用。启用筛选时时长缺失的视频会被排除，`total` 为筛选后的总数。参数非数字、负数或 `min > max` 返回 400 `BAD_REQUEST`。
 
-`provider=youtube` 时该端点把分类映射为一次实时 ytsearch：需要 `X-App-Token`，与 YouTube 搜索共用每 IP 每分钟 12 次限流；只支持第 1 页（`page=2` 返回空页），`total` 为本次返回条数，时长筛选参数被忽略。
+`provider=youtube` 时该端点把分类映射为一次实时 ytsearch：需要 `X-App-Token`，与 YouTube 搜索共用每 IP 每分钟 12 次限流，但**缓存命中不计数**（翻回刚看过的分类不会 429）；只支持第 1 页（`page=2` 返回空页），`total` 为本次返回条数，时长筛选参数被忽略。分类限流的文案是"分类加载过于频繁"（与搜索区分）；yt-dlp 并发槽满时同样映射 503 `SERVICE_BUSY` + `Retry-After`。
 
 ```json
 {
@@ -196,7 +196,7 @@ App 首页启动聚合端点：一次返回 providers 与指定 provider 的分�
 
 YouTube **实时搜索**：经 vod_extractor 的 yt-dlp `ytsearch`（flat 模式抓搜索结果页）。与观众浏览器走同一条 YouTube 公开前端，**无 Data API 每日配额**；代价是单次搜索耗时秒级。flat 列表页不触发播放风控，**无 cookies 仍可用**（2026-10-12 线上实测）；播放解析才必须带 cookies。结果不写 catalog，仅供 App 即时展示与播放——审核关卡只约束进入分类列表的 catalog 数据，此端点不绕过它（不产生任何入库）。
 
-**鉴权/限流**：同凭证接口的 `X-App-Token` 要求；同一 IP 每分钟 12 次。单页固定 20 条，无翻页令牌（TV 搜索每键即时出结果，够用）。
+**鉴权/限流**：同凭证接口的 `X-App-Token` 要求；同一 IP 每分钟 12 次，但**只对真正要打 yt-dlp 的未命中请求计数**——缓存命中的热词搜索是纯内存操作，不会因反复点击而被 429。单页固定 20 条，无翻页令牌（TV 搜索每键即时出结果，够用）。vod_extractor 并发槽满时服务端会先排队/短退避重试，仍不可用返回 503 `SERVICE_BUSY` + `Retry-After: 10`（App 显示"服务繁忙"而不是"视频受限"）。
 
 ```json
 {
@@ -235,7 +235,7 @@ YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返�
 
 - `options` 按清晰度从高到低排列，App 取首项播放；`mimeType` 为 `application/x-mpegurl` 时按 HLS 加载。
 - `audioUrl` 存在时代表音视频分离：`url` 是视频轨、`audioUrl` 是音轨，`audioMimeType` 为音轨容器（`audio/mp4`/`audio/webm`），App 必须合流播放。
-- 未配置 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 返回 503 `NOT_CONFIGURED`；解析失败（视频受限、cookies 失效、无可用格式）返回 502 `RESOLVE_FAILED`。
+- 未配置 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 返回 503 `NOT_CONFIGURED`；解析失败（视频受限、cookies 失效、无可用格式）返回 502 `RESOLVE_FAILED`；vod_extractor 并发槽满（排队+短退避重试后仍无槽）返回 503 `SERVICE_BUSY` + `Retry-After: 10`——这是瞬时容量问题，不是该视频不可播，App 应提示"服务繁忙，稍后重试"且可安全重试（busy 不进负缓存）。
 - **部署硬前提**：`deploy/data/vod/youtube-cookies.txt`（容器内只读挂载为 `/config/youtube-cookies.txt`）必须存在，否则 YouTube 对数据中心 IP 的播放解析一律返回 bot 检测失败；搜索（flat 列表页）不受影响。路径与过期重导出运维以 `vod_extractor/AGENTS.md` 为准。
 
 ### `GET /api/app/update?versionCode=1&variant=normal`

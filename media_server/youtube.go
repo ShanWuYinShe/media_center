@@ -45,8 +45,24 @@ const (
 // 生成冷启动实测 25–30s),留 10s 余量给网络与 JSON 解析。
 const youtubeResolveTimeout = 70 * time.Second
 
-// search 端到端超时:yt-dlp flat 模式抓搜索结果页通常数秒,30s 覆盖慢网。
-const youtubeSearchTimeout = 30 * time.Second
+// search 端到端超时:yt-dlp flat 模式抓搜索结果页通常数秒;最坏路径是
+// "排队 3s + busy 重试 3s + 排队 3s + 上游 20s"=29s(vod_extractor 的搜索
+// 超时单独收紧到 20s),35s 留足网络余量。旧值 30s 会在这条路径上先于
+// 上游放弃,而 extractor 侧进程仍在跑、继续占槽。
+const youtubeSearchTimeout = 35 * time.Second
+
+// extractor 并发满时的排队与重试:
+// vod_extractor 满槽不再立刻 503,而是排队等待(默认 3s);等不到才回
+// busy(503, reason=busy)。media_server 对 busy 再做一次短退避重试,
+// 短突发(前一个解析刚好结束)时第三台电视能等到槽位起播,而不是直接报
+// "解析失败,该视频可能受限"(误导用户以为视频问题)。
+const (
+	extractorBusyRetries = 1
+	extractorBusyReason  = "busy"
+)
+
+// 退避时长做成变量:测试里改成毫秒级,避免单测真的等 3s。
+var extractorBusyBackoff = 3 * time.Second
 
 // ytClient 封装 vod_extractor 的 HTTP 调用(搜索与播放解析同源)。
 // http.Client 不设总超时,由每个请求的 context 控制。
@@ -99,28 +115,12 @@ func bestThumbnailURL(e ytdlpEntry) string {
 // 结果不写 catalog,仅供 App 即时展示与播放;调用方负责把内部错误转成日志 +
 // 固定文案。
 func (c *ytClient) searchVideos(ctx context.Context, query string) ([]VideoSummary, error) {
-	payload, err := json.Marshal(map[string]any{"query": query, "limit": youtubeSearchLimit})
+	raw, err := c.postExtractor(ctx, "/search", map[string]any{
+		"query": query,
+		"limit": youtubeSearchLimit,
+	}, youtubeSearchTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("encode search request: %w", err)
-	}
-	ctx, cancel := context.WithTimeout(ctx, youtubeSearchTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.vodExtractorURL+"/search", bytes.NewReader(payload))
-	if err != nil {
-		return nil, fmt.Errorf("build search request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("search request: %w", err)
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxYouTubeExtractBytes))
-	if err != nil {
-		return nil, fmt.Errorf("read search body: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("search status %d reason=%s: %s", resp.StatusCode, upstreamFailureReason(raw), truncateBody(raw))
+		return nil, err
 	}
 	var result ytdlpSearchResult
 	if err := json.Unmarshal(raw, &result); err != nil {
@@ -190,6 +190,92 @@ func (e *upstreamError) Error() string {
 
 // ---- vod_extractor(yt-dlp)解析代理 ----
 
+// postExtractor 向 vod_extractor 发 POST 并读取 JSON 响应;遇到"并发槽已满"
+// (503 reason=busy)时做一次短退避重试——这是多端同时播放时第三台电视能等到
+// 前一个解析结束起播、而不是直接拿到 502 的关键。返回 200 响应体;非 200 统一
+// 转成 *upstreamError(保留 status/reason,供负缓存与 handler 映射)。
+// timeout 是该端点端到端预算;调用方取消/到期会提前中断。
+func (c *ytClient) postExtractor(ctx context.Context, path string, payload any, timeout time.Duration) ([]byte, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode extractor request: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var lastErr error
+	for attempt := 0; attempt <= extractorBusyRetries; attempt++ {
+		if attempt > 0 {
+			if err := sleepContext(ctx, extractorBusyBackoff); err != nil {
+				return nil, err
+			}
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.vodExtractorURL+path, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("build extractor request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("extractor request: %w", err)
+		}
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxYouTubeExtractBytes))
+		resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("read extractor body: %w", readErr)
+		}
+		if resp.StatusCode == http.StatusOK {
+			return raw, nil
+		}
+		lastErr = &upstreamError{
+			status: resp.StatusCode,
+			reason: upstreamFailureReason(raw),
+			body:   truncateBody(raw),
+		}
+		if !isExtractorBusy(lastErr) {
+			return nil, lastErr
+		}
+		log.Printf(
+			"extractor %s busy (attempt %d/%d), retry in %s",
+			path, attempt+1, extractorBusyRetries+1, extractorBusyBackoff,
+		)
+	}
+	return nil, lastErr
+}
+
+// isExtractorBusy 判断错误是否为 extractor 并发槽已满(可重试的瞬时错误)。
+// reason=busy 是新版 extractor 返回的结构化字段;body 关键字兜底兼容旧版本。
+func isExtractorBusy(err error) bool {
+	var ue *upstreamError
+	if !errors.As(err, &ue) || ue.status != http.StatusServiceUnavailable {
+		return false
+	}
+	return ue.reason == extractorBusyReason ||
+		strings.Contains(strings.ToLower(ue.body), extractorBusyReason)
+}
+
+// sleepContext 是可被 ctx 取消的 sleep。
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// writeYouTubeBusy 把 extractor 繁忙映射为 503 + Retry-After:这是瞬时容量
+// 问题,不是"视频受限";App 对 5xx 显示"服务暂时繁忙,请稍后重试",语义正确。
+func (s *mediaServer) writeYouTubeBusy(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "10")
+	s.writeError(w, &apiError{
+		Status:  http.StatusServiceUnavailable,
+		Code:    "SERVICE_BUSY",
+		Message: "YouTube 服务繁忙，请稍后重试。",
+	})
+}
+
 // ---- resolve 结果缓存:削 yt-dlp 进程峰值、防同 ID 重试风暴 ----
 //
 // 成功缓存 TTL 15min:YouTube 直链时效约 6h,15min 内复用安全;App 反复进出
@@ -206,32 +292,11 @@ const (
 // resolveVideo 调 vod_extractor 解析视频,返回可播放的完整结果(流选项+清晰度列表)。
 // 请求体为 JSON {"url": ...}(见 vod_extractor/README.md)。
 func (c *ytClient) resolveVideo(ctx context.Context, videoID string) (PlaybackResultResponse, error) {
-	payload, err := json.Marshal(map[string]string{"url": youtubeWatchURL + videoID})
+	raw, err := c.postExtractor(ctx, "/extract", map[string]string{
+		"url": youtubeWatchURL + videoID,
+	}, youtubeResolveTimeout)
 	if err != nil {
-		return PlaybackResultResponse{}, fmt.Errorf("encode extractor request: %w", err)
-	}
-	ctx, cancel := context.WithTimeout(ctx, youtubeResolveTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.vodExtractorURL+"/extract", bytes.NewReader(payload))
-	if err != nil {
-		return PlaybackResultResponse{}, fmt.Errorf("build extractor request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return PlaybackResultResponse{}, fmt.Errorf("extractor request: %w", err)
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxYouTubeExtractBytes))
-	if err != nil {
-		return PlaybackResultResponse{}, fmt.Errorf("read extractor body: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return PlaybackResultResponse{}, &upstreamError{
-			status: resp.StatusCode,
-			reason: upstreamFailureReason(raw),
-			body:   truncateBody(raw),
-		}
+		return PlaybackResultResponse{}, err
 	}
 	var info ytdlpInfo
 	if err := json.Unmarshal(raw, &info); err != nil {
@@ -298,10 +363,6 @@ func (s *mediaServer) handleYouTubeSearch(w http.ResponseWriter, r *http.Request
 	if !s.requireAppToken(w, r) {
 		return
 	}
-	if !s.youtubeSearchLimiter.allow(clientIPFromRequest(r)) {
-		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "搜索过于频繁,请稍后再试。"})
-		return
-	}
 	if s.yt == nil || s.yt.vodExtractorURL == "" {
 		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "NOT_CONFIGURED", Message: "服务端未启用视频解析服务,搜索不可用。"})
 		return
@@ -315,9 +376,29 @@ func (s *mediaServer) handleYouTubeSearch(w http.ResponseWriter, r *http.Request
 		s.writeError(w, &apiError{Status: http.StatusBadRequest, Code: "QUERY_TOO_LONG", Message: "搜索关键词过长。"})
 		return
 	}
+	// 缓存命中是纯内存操作,不应消耗 per-IP 限流配额:旧顺序(先限流后查缓存)
+	// 让热词搜索在配额用尽后仍然 429——用户只是反复点同一个热词,却被
+	// "搜索过于频繁"拦住。只有真正要打 yt-dlp 的未命中请求才配给限额。
+	if items, ok := s.peekYouTubeSearch(query); ok {
+		s.cacheStats.searchHits.Add(1)
+		s.writeJSON(w, http.StatusOK, SearchResponse{
+			Query: query,
+			Total: int64(len(items)),
+			Items: items,
+		})
+		return
+	}
+	if !s.youtubeSearchLimiter.allow(clientIPFromRequest(r)) {
+		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "搜索过于频繁,请稍后再试。"})
+		return
+	}
 	items, err := s.cachedYouTubeSearch(r.Context(), query)
 	if err != nil {
 		log.Printf("youtube search %q: %v", query, err)
+		if isExtractorBusy(err) {
+			s.writeYouTubeBusy(w)
+			return
+		}
 		s.writeError(w, &apiError{Status: http.StatusBadGateway, Code: "UPSTREAM_ERROR", Message: "YouTube 搜索暂不可用,请稍后再试。"})
 		return
 	}
@@ -409,6 +490,12 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 				reason:    ue.reason,
 				expiresAt: time.Now().Add(resolveNegativeCacheTTL),
 			})
+		}
+		// 容量繁忙 ≠ 视频受限:返回 503 + Retry-After,让 App 提示"服务繁忙"
+		// 而不是误导用户以为该视频不可播。
+		if isExtractorBusy(err) {
+			s.writeYouTubeBusy(w)
+			return
 		}
 		s.writeError(w, &apiError{Status: http.StatusBadGateway, Code: "RESOLVE_FAILED", Message: "播放地址解析失败,该视频可能受限或稍后再试。"})
 		return

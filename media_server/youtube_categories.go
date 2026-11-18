@@ -60,10 +60,6 @@ func (s *mediaServer) handleYouTubeCategoryVideos(w http.ResponseWriter, r *http
 	if !s.requireAppToken(w, r) {
 		return
 	}
-	if !s.youtubeSearchLimiter.allow(clientIPFromRequest(r)) {
-		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "搜索过于频繁,请稍后再试。"})
-		return
-	}
 	if !s.youtubeRealtimeEnabled() {
 		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "NOT_CONFIGURED", Message: "服务端未启用视频解析服务,搜索不可用。"})
 		return
@@ -82,9 +78,31 @@ func (s *mediaServer) handleYouTubeCategoryVideos(w http.ResponseWriter, r *http
 		})
 		return
 	}
+	// 同搜索:缓存命中是内存操作,不消耗 per-IP 配额;只有真正打 yt-dlp 的
+	// 未命中请求才计数。旧顺序下连点同一个分类也会被"搜索过于频繁"拦住。
+	if items, ok := s.peekYouTubeCategory(category); ok {
+		s.cacheStats.categoryHits.Add(1)
+		w.Header().Set("Cache-Control", "public, max-age=60")
+		s.writeJSON(w, http.StatusOK, VideosResponse{
+			Category: &public,
+			Page:     1,
+			PageSize: pageSize,
+			Total:    len(items),
+			Items:    items,
+		})
+		return
+	}
+	if !s.youtubeSearchLimiter.allow(clientIPFromRequest(r)) {
+		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "分类加载过于频繁，请稍后再试。"})
+		return
+	}
 	items, err := s.cachedYouTubeCategory(r.Context(), category)
 	if err != nil {
 		log.Printf("youtube category %s search %q: %v", category.ID, category.Query, err)
+		if isExtractorBusy(err) {
+			s.writeYouTubeBusy(w)
+			return
+		}
 		s.writeError(w, &apiError{Status: http.StatusBadGateway, Code: "UPSTREAM_ERROR", Message: "YouTube 搜索暂不可用,请稍后再试。"})
 		return
 	}
