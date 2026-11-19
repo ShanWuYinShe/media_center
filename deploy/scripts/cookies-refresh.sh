@@ -12,6 +12,8 @@ cd "$(dirname "$0")/.."
 # 命令分隔符执行；只按行提取所需变量原文，不做 shell 求值。
 VOD_EXTRACTOR_EXTRACTOR_ARGS="$(grep -E '^VOD_EXTRACTOR_EXTRACTOR_ARGS=' .env 2>/dev/null | head -1 | cut -d= -f2- || true)"
 
+SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+
 URL="${1:-https://www.youtube.com/watch?v=jNQXAC9IVRw}"
 COOKIE="data/vod/youtube-cookies.txt"
 TMP="data/vod/cookies-refresh.tmp"
@@ -23,7 +25,9 @@ CID="$(docker compose --env-file versions.env --env-file .env ps -q vod_extracto
 [ -n "$CID" ] || { echo "vod_extractor 容器未运行"; exit 1; }
 NET="$(docker inspect "$CID" --format '{{range $k,$_ := .NetworkSettings.Networks}}{{$k}}{{end}}')"
 IMG="$(docker inspect "$CID" --format {{.Config.Image}})"
-cp "$COOKIE" "$TMP"
+# cookie 文件常带受限属主/权限（如 640 非本用户），读取需提权
+$SUDO cp "$COOKIE" "$TMP"
+$SUDO chown "$(id -u):$(id -g)" "$TMP"
 chmod 600 "$TMP"
 
 ARGS=()
@@ -36,7 +40,6 @@ docker run --rm --user 0:0 --network "$NET" -v "$(pwd)/data/vod":/work -w /work 
   > /dev/null 2>/tmp/cookies-refresh.err \
   || { echo "刷新失败( cookies 可能已彻底失效，需浏览器重新导出):"; tail -5 /tmp/cookies-refresh.err; exit 1; }
 
-SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
 $SUDO install -o "${OWNER%%:*}" -g "${OWNER##*:}" -m "$MODE" "$TMP" "$COOKIE"
 rm -f "$TMP" /tmp/cookies-refresh.err
 echo "cookies 已刷新并回写: $COOKIE (属主/权限保持 $OWNER $MODE)；备份保留在 data/vod/cookies.bak.*.txt"
