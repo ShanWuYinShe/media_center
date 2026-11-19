@@ -8,9 +8,9 @@
 #   默认 URL 为已知的短测试视频；需在 deploy/ 目录的宿主机上执行（make cookies-refresh）。
 set -euo pipefail
 cd "$(dirname "$0")/.."
-set -a; # shellcheck disable=SC1091
-[ -f .env ] && . ./.env
-set +a
+# .env 的值可能含分号（extractor-args 的两个键值对），直接 source 会被 bash 当成
+# 命令分隔符执行；只按行提取所需变量原文，不做 shell 求值。
+VOD_EXTRACTOR_EXTRACTOR_ARGS="$(grep -E '^VOD_EXTRACTOR_EXTRACTOR_ARGS=' .env 2>/dev/null | head -1 | cut -d= -f2- || true)"
 
 URL="${1:-https://www.youtube.com/watch?v=jNQXAC9IVRw}"
 COOKIE="data/vod/youtube-cookies.txt"
