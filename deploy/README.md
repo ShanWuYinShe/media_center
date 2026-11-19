@@ -62,6 +62,7 @@ media_server/Dockerfile 与 `.github/workflows/ci.yml` 的同名字段仍一致
   ytsearch flat 列表页，无 cookies 仍然可用（2026-10-12 线上实测）。
   告警口径：看 **`failures_window.counts`（近 5 分钟）** 的 `bot_check` 是否为非零/持续增长——累计 `failures.total` 只增不减，无法区分"仍在失败"与"已恢复"；`active`(in_flight/waiting) 可区分"槽位排队"与视频问题，`successes.last_at` 可确认恢复时间。
   可由外部监控定时打内网 /health，或在 media_server 侧观察 resolve 的 503 `RESOLVE_UNAVAILABLE` 率（基础设施类失败）与 `/healthz` 的 `youtube.circuit`。
+- **cookies 会话自续期**：cookies 过期前无需浏览器重新导出——`make cookies-refresh` 用现有 cookies 以同款 extractor-args 完成一次真实解析，yt-dlp 把回发的新会话 token 原子写回 cookie 文件（保留原属主/权限，备份 `cookies.bak.*`）。仅当刷新解析本身报 `bot_check`（会话彻底失效）才需人工重新导出。
 
 ## 边缘缓存（可选）
 
