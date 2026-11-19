@@ -43,4 +43,4 @@ docker run --rm --user 0:0 --network "$NET" -v "$(pwd)/data/vod":/work -w /work 
 $SUDO install -o "${OWNER%%:*}" -g "${OWNER##*:}" -m "$MODE" "$TMP" "$COOKIE"
 rm -f "$TMP" /tmp/cookies-refresh.err
 echo "cookies 已刷新并回写: $COOKIE (属主/权限保持 $OWNER $MODE)；备份保留在 data/vod/cookies.bak.*.txt"
-echo "验证: docker exec $$(docker compose --env-file versions.env ps -q vod_extractor) wget -qO- http://127.0.0.1:8790/health | grep cookies"
+echo '验证: cd deploy && make ps，并用 /health 的 cookies/age_seconds/解析成功率确认。'
