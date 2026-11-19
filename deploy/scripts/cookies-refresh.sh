@@ -19,7 +19,7 @@ TMP="data/vod/cookies-refresh.tmp"
 [ -f "$COOKIE" ] || { echo "cookies 不存在: $COOKIE"; exit 1; }
 OWNER="$(stat -c %u:%g "$COOKIE")"
 MODE="$(stat -c %a "$COOKIE")"
-CID="$(docker compose --env-file versions.env ps -q vod_extractor)"
+CID="$(docker compose --env-file versions.env --env-file .env ps -q vod_extractor)"
 [ -n "$CID" ] || { echo "vod_extractor 容器未运行"; exit 1; }
 NET="$(docker inspect "$CID" --format '{{range $k,$_ := .NetworkSettings.Networks}}{{$k}}{{end}}')"
 IMG="$(docker inspect "$CID" --format {{.Config.Image}})"
