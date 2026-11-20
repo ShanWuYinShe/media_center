@@ -12,18 +12,32 @@ import org.junit.Test
  * 解析/排序错了会一直用一个坏 IP，兜底失败会让 App 完全连不上服务端。
  */
 class PreferredIpPoolTest {
+    private val target = PreferredIpPool.DEFAULT_TARGET_HOST
+
     @Test
     fun `只接管目标域名及其子域`() {
-        assertTrue(PreferredIpPool.matchesHost("media.chaoset.com"))
-        assertTrue(PreferredIpPool.matchesHost("MEDIA.Chaoset.COM"))
-        assertTrue(PreferredIpPool.matchesHost("media.chaoset.com."))
-        assertTrue(PreferredIpPool.matchesHost("cdn.media.chaoset.com"))
+        assertTrue(PreferredIpPool.matchesHost("media.chaoset.com", target))
+        assertTrue(PreferredIpPool.matchesHost("MEDIA.Chaoset.COM", target))
+        assertTrue(PreferredIpPool.matchesHost("media.chaoset.com.", target))
+        assertTrue(PreferredIpPool.matchesHost("cdn.media.chaoset.com", target))
         // 其它域名必须原样交给系统 DNS:劫持会直接造成连错站点/403。
-        assertFalse(PreferredIpPool.matchesHost("i.ytimg.com"))
-        assertFalse(PreferredIpPool.matchesHost("www.bilibili.com"))
-        assertFalse(PreferredIpPool.matchesHost("chaoset.com"))
-        assertFalse(PreferredIpPool.matchesHost("notmedia.chaoset.com"))
-        assertFalse(PreferredIpPool.matchesHost(""))
+        assertFalse(PreferredIpPool.matchesHost("i.ytimg.com", target))
+        assertFalse(PreferredIpPool.matchesHost("www.bilibili.com", target))
+        assertFalse(PreferredIpPool.matchesHost("chaoset.com", target))
+        assertFalse(PreferredIpPool.matchesHost("notmedia.chaoset.com", target))
+        assertFalse(PreferredIpPool.matchesHost("", target))
+        // 目标为空时必须拒绝，否则 endsWith(".") 会误匹配一切。
+        assertFalse(PreferredIpPool.matchesHost("media.chaoset.com", ""))
+    }
+
+    @Test
+    fun `按服务端基址解析启用域名`() {
+        // 默认部署启用。
+        assertEquals("media.chaoset.com", PreferredIpPool.resolveTargetHost("https://media.chaoset.com/api/v1"))
+        // 不在白名单:自建/测试域名一律不启用，避免把本 zone 的 IP 套到别处。
+        assertEquals(null, PreferredIpPool.resolveTargetHost("https://example.com/api/v1"))
+        assertEquals(null, PreferredIpPool.resolveTargetHost(""))
+        assertEquals(null, PreferredIpPool.resolveTargetHost("not-a-url"))
     }
 
     @Test

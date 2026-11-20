@@ -3,16 +3,12 @@ package com.example.mediacenter.net
 import android.content.Context
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.util.BackgroundWork
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.util.concurrent.atomic.AtomicReference
-import javax.net.ssl.SNIHostName
-import javax.net.ssl.SSLSocket
-import javax.net.ssl.SSLSocketFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.Dns
+import okhttp3.Request
 
 /**
  * 客户端自测速的 Cloudflare 优选 IP。
@@ -29,7 +25,7 @@ import okhttp3.Dns
  * **策略**(全部后台执行，不占启动首帧):
  *  1. 先用手上缓存(SharedPreferences)立刻可用，再后台拉新池 + 重新测速;
  *  2. 对每个候选做一次 TLS 握手(SNI = 目标域名)，握手耗时即 RTT 排序依据;
- *  3. 只对 [PreferredIpPool.TARGET_HOST] 生效:OkHttp 的 [Dns] 按 host 分发，
+ *  3. 只对配置的服务端域名生效(白名单校验):OkHttp 的 [Dns] 按 host 分发，
  *     其它域名原样交给系统解析，零副作用;
  *  4. 没有测速结果时用内置兜底池;兜底池也构造不出地址时退回系统 DNS——
  *     优选只是加速手段，任何一步失败都必须保持原有可用性。
@@ -50,6 +46,9 @@ internal object PreferredIpStore {
     /** 候选池并发测速上限:低端盒子线程与 fd 都紧张，分批跑。 */
     private const val PROBE_PARALLELISM = 6
 
+    /** 单次测速任务的等待上限:略大于握手超时，避免个别线程卡死拖住整轮刷新。 */
+    private const val PROBE_FUTURE_TIMEOUT_MS = PROBE_TIMEOUT_MS + 2_000L
+
     /** 服务端候选池端点(与业务同一 api 前缀，由 MediaApi 拼接)。 */
     internal const val POOL_PATH = "preferred-ips"
 
@@ -65,9 +64,16 @@ internal object PreferredIpStore {
      */
     @Volatile private var poolFetcher: (suspend () -> List<String>?)? = null
 
+    /**
+     * 真正生效的目标 host(来自 BuildConfig.MEDIA_SERVER_URL)。
+     * null 表示不启用优选(域名不在白名单，例如自建部署)——此时 Dns 完全透传。
+     */
+    @Volatile private var targetHost: String? = null
+
     /** 给 OkHttp 用的 Dns:只接管目标域名，其余原样交给系统。 */
     val dns: Dns = Dns { hostname ->
-        if (!PreferredIpPool.matchesHost(hostname)) {
+        val target = targetHost
+        if (target == null || !PreferredIpPool.matchesHost(hostname, target)) {
             Dns.SYSTEM.lookup(hostname)
         } else {
             val addresses = PreferredIpPool.toAddresses(effectiveOrder())
@@ -89,11 +95,17 @@ internal object PreferredIpStore {
      * Application 启动时调用:[loadCached] 读本地缓存立刻可用，随后后台刷新。
      * 幂等，重复调用只生效一次。
      */
-    fun initAsync(context: Context, fetcher: suspend () -> List<String>?) {
+    fun initAsync(context: Context, baseUrl: String, fetcher: suspend () -> List<String>?) {
         if (refreshStarted) return
         refreshStarted = true
         appContext = context.applicationContext
         poolFetcher = fetcher
+        targetHost = PreferredIpPool.resolveTargetHost(baseUrl)
+        if (targetHost == null) {
+            // 不在白名单(自建/测试域名):不接管任何 DNS，保持改造前行为。
+            AppLog.i("PrefIp", "disabled: host of the configured server url is not whitelisted")
+            return
+        }
         loadCached()
         BackgroundWork.scope.launch { refresh() }
     }
@@ -151,45 +163,64 @@ internal object PreferredIpStore {
             .getOrNull()
     }
 
-    /** 并发(分批)对候选 IP 做 TLS 握手测速。 */
+    /**
+     * 并发(分批)对候选 IP 做 TLS 握手测速。
+     *
+     * 用固定线程池 + Future 而不是 CompletableFuture:后者要求 API 24，
+     * 本项目 minSdk 23(lint NewApi 会直接判红)。
+     */
     private suspend fun probeAll(candidates: List<String>): List<PreferredIpPool.Probe> =
         withContext(Dispatchers.IO) {
             val results = ArrayList<PreferredIpPool.Probe>(candidates.size)
-            for (chunk in candidates.chunked(PROBE_PARALLELISM)) {
-                val futures = chunk.map { ip ->
-                    java.util.concurrent.CompletableFuture.supplyAsync { probeOne(ip) }
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(PROBE_PARALLELISM)
+            try {
+                for (chunk in candidates.chunked(PROBE_PARALLELISM)) {
+                    val futures = chunk.map { ip ->
+                        pool.submit(java.util.concurrent.Callable { probeOne(ip) })
+                    }
+                    for (future in futures) {
+                        val probe = runCatching {
+                            future.get(PROBE_FUTURE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+                        }.getOrNull()
+                        if (probe != null) results.add(probe)
+                    }
                 }
-                for (future in futures) {
-                    runCatching { future.get(10, java.util.concurrent.TimeUnit.SECONDS) }
-                        .getOrNull()?.let(results::add)
-                }
+            } finally {
+                // 池子必须回收:测速是一次性任务，常驻线程池会白占老盒子的线程。
+                pool.shutdownNow()
             }
             results.ifEmpty { candidates.map { PreferredIpPool.Probe(it, Long.MAX_VALUE, false) } }
         }
 
     /**
-     * 对一个 IP 做一次 TLS 握手(SNI = 目标域名)。握手成功即可达:
-     * 握手耗时已能反映国内到该 anycast 节点的真实 RTT，不必再发 HTTP 请求。
+     * 对一个 IP 测速:用它访问本服务的轻量端点，整个请求耗时即排序依据。
+     *
+     * 用 OkHttp 而不是裸 SSLSocket 手写握手:显式设置 SNI 需要 SNIHostName，
+     * 那是 API 24 的类(minSdk 23 会 lint 报错)。OkHttp 会按 URL 的 host 自动
+     * 加 SNI、完成证书校验，还顺带验证了「这个 IP 真的能服务本域名」。
      */
     private fun probeOne(ip: String): PreferredIpPool.Probe {
         val startedAt = System.nanoTime()
-        val socket = Socket()
+        val client = AppHttpClient.newBuilder()
+            .callTimeout(java.time.Duration.ofMillis(PROBE_FUTURE_TIMEOUT_MS))
+            // URL 仍是域名，只把 DNS 换成本次要测的 IP:SNI/证书校验因此仍按域名走，
+            // 与真实业务请求完全同一个栈，测出的耗时才有可比性。
+            .dns { listOf(java.net.InetAddress.getByName(ip)) }
+            .build()
+        val request = Request.Builder()
+            .url("https://${targetHost ?: PreferredIpPool.DEFAULT_TARGET_HOST}/healthz")
+            .get()
+            .build()
         return try {
-            socket.soTimeout = PROBE_TIMEOUT_MS
-            socket.connect(InetSocketAddress(ip, 443), PROBE_TIMEOUT_MS)
-            val factory = SSLSocketFactory.getDefault() as SSLSocketFactory
-            val ssl = factory.createSocket(socket, PreferredIpPool.TARGET_HOST, 443, true) as SSLSocket
-            ssl.useClientMode = true
-            ssl.sslParameters = ssl.sslParameters.apply {
-                // SNI 必须显式设置:直连 IP 时 JSSE 默认不做 SNI，Cloudflare 会回错证书。
-                serverNames = listOf(SNIHostName(PreferredIpPool.TARGET_HOST))
+            client.newCall(request).execute().use { response ->
+                PreferredIpPool.Probe(
+                    ip = ip,
+                    latencyMs = (System.nanoTime() - startedAt) / 1_000_000,
+                    reachable = response.isSuccessful,
+                )
             }
-            ssl.startHandshake()
-            PreferredIpPool.Probe(ip, (System.nanoTime() - startedAt) / 1_000_000, true)
         } catch (error: Exception) {
             PreferredIpPool.Probe(ip, Long.MAX_VALUE, false)
-        } finally {
-            runCatching { socket.close() }
         }
     }
 

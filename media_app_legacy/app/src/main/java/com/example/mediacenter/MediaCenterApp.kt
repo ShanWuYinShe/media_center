@@ -63,7 +63,10 @@ class MediaCenterApp : MultiDexApplication() {
         val api = com.example.mediacenter.data.MediaApi(
             com.example.mediacenter.BuildConfig.MEDIA_SERVER_URL,
         )
-        com.example.mediacenter.net.PreferredIpStore.initAsync(this) { api.preferredIps() }
+        com.example.mediacenter.net.PreferredIpStore.initAsync(
+            this,
+            com.example.mediacenter.BuildConfig.MEDIA_SERVER_URL,
+        ) { api.preferredIps() }
     }
 
     private fun installCrashHandler() {

@@ -2,12 +2,7 @@ package com.example.mediacenter.net
 
 import android.content.Context
 import com.example.mediacenter.log.AppLog
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.util.concurrent.atomic.AtomicReference
-import javax.net.ssl.SNIHostName
-import javax.net.ssl.SSLSocket
-import javax.net.ssl.SSLSocketFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -53,12 +48,16 @@ internal object PreferredIpStore {
     /** 候选池拉取入口，由 Application 注入(生产实现走 MediaApi)。 */
     @Volatile private var poolFetcher: (suspend () -> List<String>?)? = null
 
+    /** 真正生效的目标 host;null 表示不启用优选(域名不在白名单)。 */
+    @Volatile private var targetHost: String? = null
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** 给 OkHttp 用的 Dns:只接管目标域名，其余原样交给系统。 */
     val dns: Dns = object : Dns {
         override fun lookup(hostname: String): List<java.net.InetAddress> {
-            if (!PreferredIpPool.matchesHost(hostname)) {
+            val target = targetHost
+            if (target == null || !PreferredIpPool.matchesHost(hostname, target)) {
                 return Dns.SYSTEM.lookup(hostname)
             }
             val current = ranked.get()
@@ -68,11 +67,17 @@ internal object PreferredIpStore {
     }
 
     /** Application 启动时调用(幂等):先用手上缓存，再后台拉池 + 测速。 */
-    fun initAsync(context: Context, fetcher: suspend () -> List<String>?) {
+    fun initAsync(context: Context, baseUrl: String, fetcher: suspend () -> List<String>?) {
         if (refreshStarted) return
         refreshStarted = true
         appContext = context.applicationContext
         poolFetcher = fetcher
+        targetHost = PreferredIpPool.resolveTargetHost(baseUrl)
+        if (targetHost == null) {
+            // 不在白名单(自建/测试域名):不接管任何 DNS，保持改造前行为。
+            AppLog.i("PrefIp", "disabled: configured server url host is not whitelisted")
+            return
+        }
         loadCached()
         scope.launch { refresh() }
     }
@@ -136,26 +141,37 @@ internal object PreferredIpStore {
             results
         }
 
-    /** 对一个 IP 做一次 TLS 握手(SNI = 目标域名)，握手耗时即 RTT。 */
+    /**
+     * 对一个 IP 测速:用它访问本服务的轻量端点，整个请求耗时即排序依据。
+     *
+     * 用 OkHttp 而不是裸 SSLSocket 手写握手:显式设置 SNI 需要 SNIHostName，
+     * 那是 API 24 的类(legacy minSdk 19 会 lint 报错)。OkHttp 3.12 会按 URL
+     * 的 host 自动加 SNI、用本 App 的 Conscrypt 栈完成证书校验，还顺带验证了
+     * 「这个 IP 真的能服务本域名」。
+     */
     private fun probeOne(ip: String): PreferredIpPool.Probe {
         val startedAt = System.nanoTime()
-        val socket = Socket()
+        val client = AppHttpClient.newBuilder()
+            .connectTimeout(PROBE_TIMEOUT_MS.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
+            .readTimeout(PROBE_TIMEOUT_MS.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
+            // URL 仍是域名，只把 DNS 换成本次要测的 IP:SNI/证书校验因此仍按域名走，
+            // 与真实业务请求完全同一个栈，测出的耗时才有可比性。
+            .dns(PreferredIpPool.singleAddressDns(ip))
+            .build()
+        val request = okhttp3.Request.Builder()
+            .url("https://" + (targetHost ?: PreferredIpPool.DEFAULT_TARGET_HOST) + "/healthz")
+            .get()
+            .build()
         return try {
-            socket.soTimeout = PROBE_TIMEOUT_MS
-            socket.connect(InetSocketAddress(ip, 443), PROBE_TIMEOUT_MS)
-            val factory = SSLSocketFactory.getDefault() as SSLSocketFactory
-            val ssl = factory.createSocket(socket, PreferredIpPool.TARGET_HOST, 443, true) as SSLSocket
-            ssl.useClientMode = true
-            val params = ssl.sslParameters
-            // SNI 必须显式设置:直连 IP 时 JSSE 默认不做 SNI，Cloudflare 会回错证书。
-            runCatching { params.serverNames = listOf(SNIHostName(PreferredIpPool.TARGET_HOST)) }
-            ssl.sslParameters = params
-            ssl.startHandshake()
-            PreferredIpPool.Probe(ip, (System.nanoTime() - startedAt) / 1_000_000, true)
+            client.newCall(request).execute().use { response ->
+                PreferredIpPool.Probe(
+                    ip,
+                    (System.nanoTime() - startedAt) / 1_000_000,
+                    response.isSuccessful,
+                )
+            }
         } catch (error: Exception) {
             PreferredIpPool.Probe(ip, Long.MAX_VALUE, false)
-        } finally {
-            runCatching { socket.close() }
         }
     }
 

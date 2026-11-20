@@ -15,8 +15,17 @@ import java.net.InetAddress
  * 持久化见 [PreferredIpStore]。
  */
 internal object PreferredIpPool {
-    /** 优选 IP 只对这个域名生效,其它域名一律退回系统 DNS(零副作用)。 */
-    const val TARGET_HOST = "media.chaoset.com"
+    /**
+     * 默认启用优选 IP 的域名。
+     *
+     * 真正生效的目标 host 由 [PreferredIpStore] 按 `BuildConfig.MEDIA_SERVER_URL`
+     * 的实际 host 注入:只有命中白名单才启用，避免把「针对本 zone 的 IP 池」
+     * 套到别的域名上(那会连到不服务该域名的节点，比加速更糟)。
+     */
+    const val DEFAULT_TARGET_HOST = "media.chaoset.com"
+
+    /** 允许启用优选 IP 的 host 白名单:换域名部署时改这里，其它 host 一律不接管。 */
+    val ALLOWED_HOSTS: Set<String> = setOf(DEFAULT_TARGET_HOST)
 
     /** 候选池上限:测速是启动期后台任务,池子太大只会拖长首次可用时间。 */
     const val MAX_CANDIDATES = 24
@@ -82,9 +91,26 @@ internal object PreferredIpPool {
     }
 
     /** 是否为需要走优选 IP 的目标 host(含同名子域)。 */
-    fun matchesHost(host: String): Boolean {
+    fun matchesHost(host: String, targetHost: String): Boolean {
         val normalized = host.trim().trimEnd('.').lowercase()
-        return normalized == TARGET_HOST || normalized.endsWith(".$TARGET_HOST")
+        val target = targetHost.trim().trimEnd('.').lowercase()
+        if (target.isEmpty()) return false
+        return normalized == target || normalized.endsWith(".$target")
+    }
+
+    /**
+     * 按服务端基址判断是否启用优选 IP。
+     *
+     * 只允许白名单 host:候选池是「针对 Cloudflare 上本站 zone」的节点，套到
+     * 其它域名会连到不服务它的节点(证书不匹配/403)。返回 null 表示不启用，
+     * 此时客户端完全走系统 DNS，行为与改造前一致。
+     */
+    fun resolveTargetHost(baseUrl: String): String? {
+        val host = runCatching { java.net.URI(baseUrl).host }
+            .getOrNull()?.trim()?.trimEnd('.')?.lowercase()
+            ?: return null
+        if (host.isEmpty()) return null
+        return if (host in ALLOWED_HOSTS) host else null
     }
 
     /** 已测速 IP 的一条结果:延迟毫秒 + 是否可用。 */

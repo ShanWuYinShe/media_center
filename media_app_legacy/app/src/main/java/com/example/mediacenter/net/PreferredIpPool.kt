@@ -12,8 +12,15 @@ import java.util.regex.Pattern
  * 收益不抵复杂度。
  */
 internal object PreferredIpPool {
-    /** 优选 IP 只对这个域名生效,其它域名一律退回系统 DNS(零副作用)。 */
-    const val TARGET_HOST = "media.chaoset.com"
+    /**
+     * 默认启用优选 IP 的域名。真正生效的目标 host 由 [PreferredIpStore] 按
+     * BuildConfig.MEDIA_SERVER_URL 的实际 host 注入(白名单校验)，避免把针对本
+     * zone 的候选套到别的域名上。
+     */
+    const val DEFAULT_TARGET_HOST = "media.chaoset.com"
+
+    /** 允许启用优选 IP 的 host 白名单:换域名部署时改这里，其它 host 一律不接管。 */
+    val ALLOWED_HOSTS: Set<String> = setOf(DEFAULT_TARGET_HOST)
 
     /** 候选池上限:老盒子线程/fd 紧张，测速批量不宜过大。 */
     const val MAX_CANDIDATES = 16
@@ -72,9 +79,25 @@ internal object PreferredIpPool {
     }
 
     /** 是否为需要走优选 IP 的目标 host(含同名子域)。 */
-    fun matchesHost(host: String): Boolean {
+    fun matchesHost(host: String, targetHost: String): Boolean {
         val normalized = host.trim().trimEnd('.').lowercase()
-        return normalized == TARGET_HOST || normalized.endsWith("." + TARGET_HOST)
+        val target = targetHost.trim().trimEnd('.').lowercase()
+        if (target.isEmpty()) return false
+        return normalized == target || normalized.endsWith("." + target)
+    }
+
+    /**
+     * 按服务端基址判断是否启用优选 IP。白名单外的 host(自建/测试部署)返回
+     * null，表示完全不接管 DNS，保持改造前行为。
+     */
+    fun resolveTargetHost(baseUrl: String): String? {
+        val host = try {
+            java.net.URI(baseUrl).host
+        } catch (error: Exception) {
+            null
+        }?.trim()?.trimEnd('.')?.lowercase() ?: return null
+        if (host.isEmpty()) return null
+        return if (ALLOWED_HOSTS.contains(host)) host else null
     }
 
     /** 已测速 IP 的一条结果:延迟毫秒 + 是否可用。 */
@@ -100,4 +123,15 @@ internal object PreferredIpPool {
 
     /** 把候选 IP 列表序列化成 SharedPreferences 里的存储形态(每行一个)。 */
     fun encode(ips: List<String>): String = ips.joinToString("\n")
+
+    /**
+     * 只解析成单个 IP 的 Dns(测速专用):让 OkHttp 把该 host 连到指定 IP，
+     * 同时仍按域名做 SNI 与证书校验——这样测出的耗时与真实业务请求可比。
+     *
+     * OkHttp 3.12 的 [okhttp3.Dns] 是单方法接口，用匿名对象实现(API 19 可用)。
+     */
+    fun singleAddressDns(ip: String): okhttp3.Dns = object : okhttp3.Dns {
+        override fun lookup(hostname: String): List<InetAddress> =
+            listOfNotNull(toAddresses(listOf(ip)).firstOrNull())
+    }
 }

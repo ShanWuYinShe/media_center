@@ -96,7 +96,7 @@ class MediaCenterApp : Application(), ImageLoaderFactory {
      * 任何失败都静默退回内置池/系统 DNS，不影响启动与播放。
      */
     private fun installPreferredIps() {
-        AppHttpClient.initPreferredIps(this) {
+        AppHttpClient.initPreferredIps(this, BuildConfig.MEDIA_SERVER_URL) {
             com.example.mediacenter.data.MediaRepositoryHolder.updateApi.preferredIps().items
         }
     }
