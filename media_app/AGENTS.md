@@ -42,6 +42,7 @@ TV 交互与视觉约定见 skill media-app-tv-ui。
 - 默认清晰度：自动选档按「屏幕物理高度与设备档位取小」收敛（`data/PlaybackTuning`，低端机 ≤720P），手动切清晰度不受限；带 qn 重试/切页时同样按已选档重排（`PlaybackTuning.preferOption`），避免服务端降序结果把清晰度重置成最高档。离开播放页后播放服务保活 20s（`player/PlaybackServiceKeepAlive`），快速回看不重建服务/播放器。
 - 播放页存活期间设置 `KEEP_SCREEN_ON`（播放器/MediaSession 自身不持屏），避免长视频无人操作时被电视屏保或节能策略熄屏。
 - 服务端地址：默认 `https://media.chaoset.com/api/v1`；如需覆盖，设置 `MEDIA_SERVER_URL`。
+- 国内访问加速（Cloudflare 优选 IP）：服务端在 CF 后面，国内运营商 DNS 常把 media 域名解析到绕路/被 QoS 的 anycast 节点（实测 15 次里 8 次连不上、成功时首字节 3.7s；绑定优选 IP 后 15/15 成功、首字节 1.0s）。`net/PreferredIpStore.kt` 从 `/api/v1/preferred-ips` 拉候选池、后台 TLS 握手测速排序、结果持久化，经 OkHttp `Dns` **只接管 `media.chaoset.com`**，其它域名仍走系统 DNS。降级链：服务端池 → 内置兜底池 → 系统 DNS，任何一步失败都不影响可用性。legacy 变体（`media_app_legacy`）有同语义实现，改动时两端一起改。
 
 ## 代码结构约定
 

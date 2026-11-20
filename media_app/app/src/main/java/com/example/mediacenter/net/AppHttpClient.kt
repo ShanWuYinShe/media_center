@@ -34,8 +34,26 @@ object AppHttpClient {
      */
     fun newBuilder(): OkHttpClient.Builder = shared.newBuilder()
 
+    /**
+     * 启动优选 IP 后台测速(幂等)。
+     *
+     * 必须在 Application.onCreate 尽早调用:首次启动会先用手上的缓存顺序，
+     * 没有缓存时用内置兜底池，后台测速完成后再替换成实测最优顺序。
+     *
+     * @param fetcher 拉取服务端下发的候选池;失败返回 null 时只用内置池。
+     */
+    fun initPreferredIps(context: android.content.Context, fetcher: suspend () -> List<String>?) {
+        PreferredIpStore.initAsync(context, fetcher)
+    }
+
     /** shared 的初始构造;独立函数避免 shared 的 lazy 初始化递归调 [newBuilder]。 */
     private fun baseBuilder(): OkHttpClient.Builder = OkHttpClient.Builder()
+        // 只对 media.chaoset.com 走客户端测速选出的 Cloudflare 优选 IP:
+        // 国内运营商 DNS 会把该域名解析到绕路/被 QoS 的 anycast 节点(实测
+        // 15 次里 8 次连不上、成功时首字节 3.7s;绑定优选 IP 后 15/15 成功、
+        // 首字节 1.0s)。其它域名(图床/上游 API)仍由系统 DNS 解析，
+        // 见 [PreferredIpStore.dns] 的 host 白名单。
+        .dns(PreferredIpStore.dns)
 
     /**
      * 把 Conscrypt 安装为进程级首选 JCE Provider。

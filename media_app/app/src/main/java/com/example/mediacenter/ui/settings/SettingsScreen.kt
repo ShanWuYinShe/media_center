@@ -91,6 +91,14 @@ fun SettingsScreen(onBack: () -> Unit) {
         serverVersion = MediaRepositoryHolder.updateApi.serverVersion() ?: "无法获取"
     }
 
+    // ── 网络加速状态 ──
+    // 优选 IP 的排障入口:国内连 Cloudflare 走系统 DNS 时命中坏节点会表现为
+    // "一直转圈",这里直接显示当前生效的首选节点与最近测速时间。
+    var preferredIpStatus by remember { mutableStateOf("未启用") }
+    LaunchedEffect(Unit) {
+        preferredIpStatus = com.example.mediacenter.net.PreferredIpStore.statusText()
+    }
+
     // ── 播放媒体缓存占用 ──
     // 「清除播放缓存」入口显示当前占用(-1 表示不可用),清除后刷新。
     var mediaCacheBytes by remember { mutableStateOf<Long?>(null) }
@@ -240,6 +248,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 InfoRow("视频源", providerDisplayName(MediaRepositoryHolder.repository.currentProvider))
                 InfoRow("服务端", BuildConfig.MEDIA_SERVER_URL)
                 InfoRow("服务端版本", serverVersion)
+                InfoRow("网络加速", preferredIpStatus)
             }
             item {
                 SectionTitle("版本更新")

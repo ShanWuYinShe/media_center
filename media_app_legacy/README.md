@@ -34,6 +34,8 @@ B 站单视频（bvid）可能包含多个分 P（如 P1/P2/P3）。App 自动�
 
 `MEDIA_SERVER_URL` 是 App 唯一需要的服务端配置；可以是服务根地址，也可以直接带 API 路径。API 契约由 `../media_server/API.md` 维护。
 
+**国内访问加速（Cloudflare 优选 IP）**：服务端在 Cloudflare 后面，国内运营商 DNS 常把 media 域名解析到绕路/被 QoS 的 anycast 节点（线上实测：走系统 DNS 15 次请求 8 次连不上、成功时首字节 3.7s；绑定优选 IP 后 15/15 成功、首字节 1.0s）。`net/PreferredIpStore.kt` 从 `/api/v1/preferred-ips` 拉候选池、后台做 TLS 握手测速并按延迟排序、结果落 SharedPreferences，经 OkHttp `Dns` **只接管 `media.chaoset.com`**，B 站图床/上游 API 等其它域名仍走系统 DNS。降级链：服务端池 → 内置兜底池 → 系统 DNS，任何一步失败都不影响可用性。
+
 首页会从服务端读取内容分类，默认展示服务端返回的第一个分类；当前分类加载完成后会后台预热左右相邻分类第一页（仅目录型 provider，YouTube 实时分类不预热），遥控器切 chip 直接命中 10 分钟分类缓存。一级专区以服务端下发为准（见 `../media_server/src/contentCategories.json`）。App 只消费服务端返回的统一 opaque 视频 ID、opaque 播放选项 ID、`videoKind=vod` 和点播播放地址，并原样播放服务端返回的图片/播放 URL；不处理直播、视频来源、网页播放、外部打开或代理 URL 签名。
 
 弱网/服务端不可达时，首页最多等待约 20s 就落错误态并停止自动重试（此前最多 3 轮 × 单请求重试，可能让用户盯着“自动重试中”好几分钟）；网络恢复后由网络回调自动重试。

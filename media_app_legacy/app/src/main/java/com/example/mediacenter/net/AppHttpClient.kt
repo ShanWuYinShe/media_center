@@ -157,6 +157,11 @@ object AppHttpClient {
         awaitInit()
         buildTls()
         val builder = OkHttpClient.Builder()
+        // 只对 media.chaoset.com 走客户端测速选出的 Cloudflare 优选 IP:国内运营商
+        // DNS 会把该域名解析到绕路/被 QoS 的 anycast 节点(线上实测 15 次里 8 次
+        // 连不上、成功时首字节 3.7s;绑定优选 IP 后 15/15 成功、首字节 1.0s)。
+        // 其它域名(图床/上游 API)仍由系统 DNS 解析，见 [PreferredIpStore.dns]。
+        builder.dns(PreferredIpStore.dns)
         tls?.let { t ->
             builder.sslSocketFactory(t.socketFactory, t.trustManager)
             // 平台降级路径需要补 ECDSA CBC 套件白名单;Conscrypt 路径用 OkHttp 默认

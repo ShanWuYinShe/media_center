@@ -34,6 +34,7 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 - `review.go`：交互式审校命令（`-catalog-review`）
 - `app_update.go`：Android TV App 更新发布检查与 APK 下载
 - `types.go`：类型定义（VideoSummary、ProviderInfo、PublicCategory 等）
+- `preferred_ips.go`：Cloudflare 优选 IP 候选池（后台拉公共源 + 种子兜底，`GET /api/preferred-ips` 下发；测速由客户端做）
 
 ## 路由
 
@@ -54,6 +55,7 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 | GET | `/api/providers/credentials` | Provider 凭证下发(需 X-App-Token,限流 30/min/IP) |
 | GET | `/api/providers/youtube/search?q=` | YouTube 实时搜索(需 X-App-Token,限流 12/min/IP) |
 | GET | `/api/providers/youtube/resolve?id=` | YouTube 播放解析(需 X-App-Token,限流 20/min/IP) |
+| GET | `/api/preferred-ips` | Cloudflare 优选 IP 候选池(公开、无鉴权;客户端自测速排序,见 `preferred_ips.go`) |
 | GET | `/api/app/update?versionCode=N&variant=` | App 更新检查(variant: normal/legacy) |
 | GET | `/api/app/download?variant=` | App APK 下载 |
 | POST | `/api/crash/report` | App 崩溃上报(限流 10/min/IP) |

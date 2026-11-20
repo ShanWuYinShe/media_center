@@ -86,6 +86,19 @@ class MediaRepository(
     // 没有互斥时两条请求都会穿透。
     private val credentialsMutex = Mutex()
 
+    /**
+     * 拉取 Cloudflare 优选 IP 候选池。这是纯加速辅助数据:任何失败都返回 null，
+     * 由调用方退回内置池/系统 DNS，绝不影响目录与播放。
+     */
+    override suspend fun fetchPreferredIps(): List<String>? = try {
+        api.preferredIps().items
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (error: Exception) {
+        AppLog.w("PrefIp", "fetch preferred ips failed: ${error.message}")
+        null
+    }
+
     override suspend fun refreshCredentials() = credentialsMutex.withLock {
         val now = System.currentTimeMillis()
         if (now - lastCredentialsRefreshMs < CREDENTIALS_REFRESH_TTL_MS) return@withLock

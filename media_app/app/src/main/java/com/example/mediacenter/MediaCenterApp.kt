@@ -54,6 +54,11 @@ class MediaCenterApp : Application(), ImageLoaderFactory {
         // Media3 DefaultHttpDataSource 统一走 BoringSSL,解决老系统自带 SSL 不支持目标
         // 站点 TLS 握手的问题。须在任何网络请求前。
         AppHttpClient.installConscryptProvider()
+        // Cloudflare 优选 IP:国内运营商 DNS 会把 media 域名解析到绕路/被 QoS 的
+        // anycast 节点(实测 15 次里 8 次连不上)。这里启动后台测速,只对
+        // media.chaoset.com 生效;没有测速结果前用内置兜底池,再不行退回系统 DNS。
+        // 候选池由服务端下发(服务端在墙外能稳定拉取公共优选源)。
+        installPreferredIps()
         installCrashHandler()
         uploadPendingCrashReport()
         warmProcessSingletons()
@@ -80,6 +85,19 @@ class MediaCenterApp : Application(), ImageLoaderFactory {
                 .onFailure { AppLog.w("App", "warm repository failed: ${it.message}", it) }
             runCatching { Coil.imageLoader(this@MediaCenterApp) }
                 .onFailure { AppLog.w("App", "warm image loader failed: ${it.message}", it) }
+        }
+    }
+
+    /**
+     * 启动优选 IP 后台测速。
+     *
+     * 候选池拉取走独立 MediaApi(与业务同一个 OkHttp 栈，因此也复用同一条
+     * 优选 IP 连接):服务端下发候选 → 本机测速排序 → 只对 media 域名生效。
+     * 任何失败都静默退回内置池/系统 DNS，不影响启动与播放。
+     */
+    private fun installPreferredIps() {
+        AppHttpClient.initPreferredIps(this) {
+            com.example.mediacenter.data.MediaRepositoryHolder.updateApi.preferredIps().items
         }
     }
 

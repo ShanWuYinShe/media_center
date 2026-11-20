@@ -262,6 +262,43 @@ YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返�
 - 未配置 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 返回 503 `NOT_CONFIGURED`。
 - **部署硬前提**：`deploy/data/vod/youtube-cookies.txt`（容器内只读挂载为 `/config/youtube-cookies.txt`）必须存在，否则 YouTube 对数据中心 IP 的播放解析一律返回 bot 检测失败；搜索（flat 列表页）不受影响。路径与过期重导出运维以 `vod_extractor/AGENTS.md` 为准。
 
+### `GET /api/preferred-ips`
+
+下发 Cloudflare 优选 IP 候选池，供客户端自己测速后选择最快节点。
+
+**为什么需要**：服务端挂在 Cloudflare 后面，国内运营商 DNS 常把 `media.chaoset.com`
+解析到绕路或被 QoS 的 anycast 节点。实测同一域名走系统 DNS：15 次请求 8 次建立
+不了连接、成功时首字节 3.7s；绑定一个优选 IP 后 15/15 成功、首字节 1.0s。
+
+**职责划分**：**测速必须由客户端做**——只有客户端知道自己到各节点的真实 RTT，
+TV 所在网络与服务器出口完全不是一回事。服务端只提供候选池（服务端在墙外，能稳定
+拉取公共优选源；公共源在境内直连普遍超时/被污染），这样换 IP 不需发版。
+
+响应：
+
+```json
+{
+  "items": ["103.31.4.1", "104.26.0.1", "..."],
+  "updatedAt": "2026-11-20T14:00:00Z",
+  "cacheSeconds": 3600
+}
+```
+
+- `items`：候选 IPv4 列表（纯字面量，不含端口/协议）。顺序仅供参考，**客户端必须
+  自己测速排序**，不要直接取第一个当最优。
+- `updatedAt`：候选池最近一次成功刷新的时间（RFC3339）；缺失表示仍在用内置种子池。
+- `cacheSeconds`：客户端可缓存时长，正常每天最多请求一两次。
+
+特性与约束：
+
+- 无鉴权、不含敏感信息；带 `Cache-Control: public, max-age=1800`，边缘/客户端可缓存。
+- 候选池由服务端后台每小时从公共优选源刷新（失败保留旧池，最终兜底为内置种子池），
+  因此 **`items` 永远非空**。
+- 仅 IPv4。客户端只应把该池用于 `media.chaoset.com` 这一个域名的 DNS 覆盖，
+  其它域名必须回落到系统 DNS（否则会劫持图床/上游 API）。
+- 这是**纯加速辅助端点**：任何失败都不应影响 App 的目录浏览与播放，客户端必须保留
+  「取不到候选 → 用内置池 → 再不行用系统 DNS」的降级链。
+
 ### `GET /api/app/update?versionCode=1&variant=normal`
 
 返回 Android TV App 的最新发布版本。已是最新返回 `204 No Content`。

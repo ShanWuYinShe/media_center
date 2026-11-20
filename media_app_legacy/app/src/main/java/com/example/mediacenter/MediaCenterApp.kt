@@ -45,8 +45,25 @@ class MediaCenterApp : MultiDexApplication() {
         // 预热,不占冷启动首帧;首个网络客户端/首次播放会同步等待就绪
         // (AppHttpClient.newBuilder/awaitInit、LegacyPlaybackMediaCache.cache 的锁)。
         AppHttpClient.initAsync(this)
+        // Cloudflare 优选 IP:国内运营商 DNS 会把 media 域名解析到绕路/被 QoS 的
+        // anycast 节点(线上实测 15 次里 8 次连不上)。后台拉服务端候选池 + 本机
+        // 测速排序，只对 media.chaoset.com 生效;失败退回内置池/系统 DNS。
+        installPreferredIps()
         LegacyPlaybackMediaCache.prewarmAsync(this)
         installCrashHandler()
+    }
+
+    /**
+     * 启动优选 IP 后台测速(幂等)。
+     *
+     * 候选池拉取用独立 MediaApi(与业务同一 OkHttp 栈，共用同一条优选 IP 连接)。
+     * 任何失败都静默退回内置池/系统 DNS，不影响启动与播放。
+     */
+    private fun installPreferredIps() {
+        val api = com.example.mediacenter.data.MediaApi(
+            com.example.mediacenter.BuildConfig.MEDIA_SERVER_URL,
+        )
+        com.example.mediacenter.net.PreferredIpStore.initAsync(this) { api.preferredIps() }
     }
 
     private fun installCrashHandler() {
