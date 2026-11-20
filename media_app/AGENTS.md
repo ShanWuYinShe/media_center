@@ -56,4 +56,5 @@ TV 交互与视觉约定见 skill media-app-tv-ui。
 - 焦点恢复：首页用 `rememberSaveable` 记录最后聚焦的卡片，经 `PagedVideoGrid(initialFocusItemId/onItemFocused)` 在从详情/播放/搜索返回时恢复到该卡片（无记录则回当前分类标签，焦点不会丢给顶栏）；搜索页同样恢复结果卡，且返回时不再重新弹出输入法。
 - 搜索是**提交式**：输入框 `onQueryChange` 只更新文本，不发起请求；只有显式提交（IME 搜索键 / 热词 / 历史 chip / 重试，统一走 `SearchViewModel.submit`）才真正搜索。TV 上边输入边搜会把每个按键都变成一次请求，且用户没输完就看到半截结果。
 - B 站搜索走**全站**实时通道（服务端 `/api/v1/providers/bilibili/search`，见 `bilibili_search.go`）：目录搜索只覆盖已审核条目，搜全站视频会大面积搜不到。结果按页返回（每页 20 条，bvid 可直接播放）。
+- B 站搜索**热词面向全站语义**：用演员名/片名/曲艺类名词（周星驰/京剧/相声…），不用泛类型词（动作/爱情…实测会命中擦边内容，家庭场景不合适）。改热词时 normal（`SearchScreen.kt`）与 legacy（`theme/FocusTargets.kt`）两端一起改。
 - 焦点导航：首页分类标签按 **UP** 直接进入顶栏按钮区（落到「设置」，左键视频源、右键搜索）；此前 UP 被吞掉，只能一路右移到最右侧才够到顶栏。内容区按 UP 回分类标签的链路保持不变。
