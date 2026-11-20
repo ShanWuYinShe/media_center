@@ -187,6 +187,12 @@ func TestBilibiliSearchVideosUpstreamError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "-412") {
 		t.Fatalf("expected upstream error -412, got %v", err)
 	}
+	// 失败计数必须生效:/health 的 bilibiliSearch 观测块依赖它。
+	if got := client.snapshot(); got.FailuresTotal != 1 || !strings.Contains(got.LastFailure, "-412") {
+		t.Fatalf("snapshot = %+v", got)
+	}
+	// 成功后不清零累计值(总失败数是单调计数,便于监控画趋势)。
+	client.failuresTotal.Add(0)
 }
 
 func TestHandleBilibiliSearchRequiresToken(t *testing.T) {

@@ -94,6 +94,11 @@ type VideoSummary = {
     "consecutiveFailures": 0,
     "lastReason": "",
     "retryAfterSeconds": 0
+  },
+  "bilibiliSearch": {
+    "failuresTotal": 0,
+    "lastFailure": "",
+    "lastFailureAt": ""
   }
 }
 ```
@@ -106,6 +111,8 @@ type VideoSummary = {
 `searchLastMs` 为最近一次上游搜索（含分类预热）耗时——用于判断"慢在解析还是慢在缓存失效"。
 
 `catalog` 取值：`ok`（数据库已打开）、`disabled`（未配置 DB）、`error`（配置了 DB 但打开失败）。`error` 时 HTTP 状态为 **503**，`status` 为 `degraded`，并附 `catalogError` 文字原因——服务仍能响应 503，但这是必须告警的故障态；服务端每 30s→5min 退避重开数据库，成功后自动恢复 `ok`，无需重启进程。
+
+`bilibiliSearch` 是 B 站全站实时搜索的失败观测：`failuresTotal` 为单调累计失败次数（nav 密钥获取、签名、上游 403 风控、接口改版都计入），`lastFailure`/`lastFailureAt` 为最近一次失败原因与时间（UTC）。正常使用时不变或缓慢增长；**持续快速增长意味着 B 站风控升级或接口改版**，搜索端点会持续 502——此时应升级 yt-dlp 相关组件或临时下线 B 站搜索入口。
 
 `appUpdate` 是 App 更新通道状态：`ok`（清单与 APK 均可用）、`missing`（未发布过更新，检查更新返回 204）、`error`（清单损坏/sha256 非法/APK 缺失，检查更新返回 503 `UPDATE_UNAVAILABLE`）。
 
@@ -247,6 +254,7 @@ YouTube 缩略图代理：服务端代取 `i.ytimg.com` 图片并返回字节（
 - `quality`：`hq`（480px，所有视频必有）/ `sd`（640px，缺失时回退 hq）/ `maxres`（1280px，缺失时依次回退 sd → hq）。
 - 响应 `image/jpeg`，带 `Cache-Control: public, max-age=7d, immutable`（URL 以 .jpg 结尾，Cloudflare 默认静态缓存生效）；服务端另有进程内 LRU（96 条）避免反复回源。
 - 全部候选缺失返回 404（`no-store`）。无鉴权——URL 形态固定、不能代理任意地址，不是开放代理。
+- 带 per-IP 限流（150/min/IP，超出 429 + `Retry-After`）：每个缓存 miss 都是一次服务端到 googlevideo 的回源，限流防止本端点被当免费图片 CDN 刷爆带宽。
 
 **youtube 实时搜索/分类结果里的 `thumbnailUrl`（hq）与 `thumbnailUrlLarge`（maxres）已自动改写为本端点地址**（配置了 `MEDIA_SERVER_PUBLIC_URL` 时），App 无需发版即可修复封面裂图；未配置公网基址时保持原始地址（本地开发）。
 

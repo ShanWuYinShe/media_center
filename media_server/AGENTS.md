@@ -35,7 +35,7 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 - `app_update.go`：Android TV App 更新发布检查与 APK 下载
 - `types.go`：类型定义（VideoSummary、ProviderInfo、PublicCategory 等）
 - `preferred_ips.go`：Cloudflare 优选 IP 候选池（后台拉公共源 + 种子兜底，`GET /api/preferred-ips` 下发；测速由客户端做）
-- `bilibili_search.go`：B 站**全站**实时搜索（WBI 签名代理官方接口，`GET /api/providers/bilibili/search`；结果不写 catalog，要求 X-App-Token）
+- `bilibili_search.go`：B 站**全站**实时搜索（WBI 签名代理官方接口，`GET /api/providers/bilibili/search`；结果不写 catalog，要求 X-App-Token；失败计数经 `/health` 的 `bilibiliSearch` 块暴露，用于发现 B 站风控升级/接口改版）
 - `youtube_thumb.go`：YouTube 缩略图代理（国内直连 i.ytimg.com 不可达；`GET /api/providers/youtube/thumb/{id}/{quality}.jpg`，搜索结果封面 URL 自动改写，公开无鉴权 + LRU 缓存）
 - `youtube_stream.go`：YouTube 播放流中转（国内直连 googlevideo.com 不可达；resolve 时直链登记随机 token 并改写播放地址，`GET /api/providers/youtube/stream/{token}` 透传字节；绕过 API 超时包裹，token TTL 6h）
 
@@ -59,7 +59,7 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 | GET | `/api/providers/bilibili/search?q=&page=` | B 站全站实时搜索(需 X-App-Token,限流 20/min/IP;结果不写 catalog) |
 | GET | `/api/providers/youtube/search?q=` | YouTube 实时搜索(需 X-App-Token,限流 12/min/IP) |
 | GET | `/api/providers/youtube/resolve?id=` | YouTube 播放解析(需 X-App-Token,限流 20/min/IP) |
-| GET | `/api/providers/youtube/thumb/{id}/{quality}.jpg` | YouTube 缩略图代理(公开无鉴权;hq/sd/maxres 缺失自动回退;LRU + 长缓存) |
+| GET | `/api/providers/youtube/thumb/{id}/{quality}.jpg` | YouTube 缩略图代理(公开无鉴权,限流 150/min/IP;hq/sd/maxres 缺失自动回退;LRU + 长缓存) |
 | GET | `/api/providers/youtube/stream/{token}` | YouTube 播放流中转(公开但 token 不可猜测,由 resolve 改写下发;绕过 API 超时;Range 透传) |
 | GET | `/api/preferred-ips` | Cloudflare 优选 IP 候选池(公开、无鉴权;客户端自测速排序,见 `preferred_ips.go`) |
 | GET | `/api/app/update?versionCode=N&variant=` | App 更新检查(variant: normal/legacy) |
