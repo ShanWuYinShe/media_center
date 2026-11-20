@@ -54,3 +54,6 @@ TV 交互与视觉约定见 skill media-app-tv-ui。
 - 起播优化：解析成功后 `PlaybackWarmup` 在后台用平台 `HttpURLConnection` 预热直链 CDN 连接（`Range: bytes=0-1023`，同一路径 60s 一次，失败静默）；播放页拉首段时复用已建立的连接——媒体预取走 `PlaybackMediaCache` 自己的数据源栈，连接池与 Media3 拉流不共享，两者互补。日志 `Perf: media warmup <host> in Nms (http=code)`。
 - 首页由 `HomeViewModel` 一次只加载当前分类（10 分钟缓存 + 分页；冷启动先用 `filesDir` 快照 SWR 渲染，缓存过期也先展示旧内容再后台刷新），分类切换由 `HomeCategoryTabs` 焦点触发；当前分类加载完成后会后台预热左右相邻分类的第一页（youtube 实时通道不预热），左右键切类直接命中缓存；「继续观看」读本地 `WatchHistory`。UI 不做磁盘 IO。
 - 焦点恢复：首页用 `rememberSaveable` 记录最后聚焦的卡片，经 `PagedVideoGrid(initialFocusItemId/onItemFocused)` 在从详情/播放/搜索返回时恢复到该卡片（无记录则回当前分类标签，焦点不会丢给顶栏）；搜索页同样恢复结果卡，且返回时不再重新弹出输入法。
+- 搜索是**提交式**：输入框 `onQueryChange` 只更新文本，不发起请求；只有显式提交（IME 搜索键 / 热词 / 历史 chip / 重试，统一走 `SearchViewModel.submit`）才真正搜索。TV 上边输入边搜会把每个按键都变成一次请求，且用户没输完就看到半截结果。
+- B 站搜索走**全站**实时通道（服务端 `/api/v1/providers/bilibili/search`，见 `bilibili_search.go`）：目录搜索只覆盖已审核条目，搜全站视频会大面积搜不到。结果按页返回（每页 20 条，bvid 可直接播放）。
+- 焦点导航：首页分类标签按 **UP** 直接进入顶栏按钮区（落到「设置」，左键视频源、右键搜索）；此前 UP 被吞掉，只能一路右移到最右侧才够到顶栏。内容区按 UP 回分类标签的链路保持不变。

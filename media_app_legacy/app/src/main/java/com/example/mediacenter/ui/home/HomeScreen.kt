@@ -404,7 +404,15 @@ internal fun MainActivity.homeTopBar(
                 setOnKeyListener { _, keyCode, event ->
                     if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
                     when (keyCode) {
-                        KeyEvent.KEYCODE_DPAD_UP -> true
+                        KeyEvent.KEYCODE_DPAD_UP -> {
+                            // 分类栏向上直接进入顶栏按钮区(设置):此前 UP 被吞掉,
+                            // 用户必须一路右移到最右侧才能向上够到顶栏,很难发现。
+                            // 落到「设置」后左键到视频源、右键到搜索,形成导航枢纽。
+                            cancelPendingCategorySelect()
+                            homeFocusArea = HomeFocusArea.Search
+                            requestHomeFocus(HomeFocusTarget.Settings)
+                            true
+                        }
                         KeyEvent.KEYCODE_DPAD_DOWN -> {
                             // 分类栏直接进入下方网格首个视频；没有 Hero/筛选行，
                             // 老人按一次下键就能开始选片。
@@ -477,7 +485,12 @@ internal fun MainActivity.homeTopBar(
                             }
                             true
                         }
-                        KeyEvent.KEYCODE_DPAD_UP -> true
+                        KeyEvent.KEYCODE_DPAD_UP -> {
+                            // 占位 chip 同样向上进入顶栏(与真实分类 chip 一致)。
+                            homeFocusArea = HomeFocusArea.Search
+                            requestHomeFocus(HomeFocusTarget.Settings)
+                            true
+                        }
                         else -> false
                     }
                 }

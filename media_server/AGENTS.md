@@ -35,6 +35,7 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 - `app_update.go`：Android TV App 更新发布检查与 APK 下载
 - `types.go`：类型定义（VideoSummary、ProviderInfo、PublicCategory 等）
 - `preferred_ips.go`：Cloudflare 优选 IP 候选池（后台拉公共源 + 种子兜底，`GET /api/preferred-ips` 下发；测速由客户端做）
+- `bilibili_search.go`：B 站**全站**实时搜索（WBI 签名代理官方接口，`GET /api/providers/bilibili/search`；结果不写 catalog，要求 X-App-Token）
 
 ## 路由
 
@@ -53,6 +54,7 @@ HTTP 服务监听 `PORT`（容器内默认 8787）。
 | GET | `/api/providers/{provider}/videos/{id}/collection` | 某视频所在合集的已审核剧集队列(自动连播用) |
 | GET | `/api/search?q=&provider=` | approved 目录关键词搜索(分页,限流 30/min/IP,并发满载 503) |
 | GET | `/api/providers/credentials` | Provider 凭证下发(需 X-App-Token,限流 30/min/IP) |
+| GET | `/api/providers/bilibili/search?q=&page=` | B 站全站实时搜索(需 X-App-Token,限流 20/min/IP;结果不写 catalog) |
 | GET | `/api/providers/youtube/search?q=` | YouTube 实时搜索(需 X-App-Token,限流 12/min/IP) |
 | GET | `/api/providers/youtube/resolve?id=` | YouTube 播放解析(需 X-App-Token,限流 20/min/IP) |
 | GET | `/api/preferred-ips` | Cloudflare 优选 IP 候选池(公开、无鉴权;客户端自测速排序,见 `preferred_ips.go`) |

@@ -84,9 +84,9 @@ fun SearchScreen(
 
     BackHandler(onBack = onBack)
 
-    // 断网自动恢复:网络恢复且上次搜索失败时自动重发(触发防抖搜索)。
+    // 断网自动恢复:网络恢复且上次搜索失败时重发一次(用户已经提交过这个关键词)。
     NetworkRestoreEffect(onRestored = {
-        if (state.error != null && state.query.length >= 2) viewModel.search(state.query)
+        if (state.error != null && state.query.length >= 2) viewModel.submit(state.query)
     })
 
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = ScreenHorizontalPadding, vertical = 24.dp)) {
@@ -162,10 +162,11 @@ fun SearchScreen(
         }
         OutlinedTextField(
             value = state.query,
+            // 只更新文本，不搜索:TV 上边输入边搜会把每个按键都变成一次请求
+            // (遥控器逐字输入往往十几键)，而且用户还没输完就看到半截结果。
             onValueChange = {
-                // 用户手动输入时不再等热词结果抢焦点
                 focusResultsAfterHotWord = false
-                viewModel.search(it)
+                viewModel.onQueryChange(it)
             },
             modifier = Modifier
                 .fillMaxWidth()
@@ -198,11 +199,24 @@ fun SearchScreen(
             },
             textStyle = MaterialTheme.typography.titleLarge,
             singleLine = true,
+            // 键盘"搜索"键是唯一的提交入口之一(与右侧搜索按钮等价)。
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { viewModel.search(state.query) }),
+            keyboardActions = KeyboardActions(
+                onSearch = {
+                    keyboardController?.hide()
+                    focusResultsAfterHotWord = true
+                    viewModel.submit(state.query)
+                },
+            ),
             trailingIcon = {
                 if (state.query.isNotEmpty()) {
-                    TvIconButton(onClick = { viewModel.search("") }, contentDescription = "清除搜索") {
+                    TvIconButton(
+                        onClick = {
+                            viewModel.clear()
+                            searchFocus.requestFocus()
+                        },
+                        contentDescription = "清除搜索",
+                    ) {
                         Icon(Icons.Default.Close, contentDescription = null, tint = TextSecondary)
                     }
                 }
@@ -245,7 +259,7 @@ fun SearchScreen(
             state.error != null -> ErrorView(
                 message = state.error!!,
                 modifier = Modifier.fillMaxSize(),
-                onRetry = { viewModel.search(state.query) },
+                onRetry = { viewModel.submit(state.query) },
                 autoFocusRetry = true,
             )
             state.query.length < 2 -> Column(modifier = Modifier.fillMaxSize()) {
@@ -276,7 +290,9 @@ fun SearchScreen(
                                     onClick = {
                                         keyboardController?.hide()
                                         focusResultsAfterHotWord = true
-                                        viewModel.search(word)
+                                        // 热词就是一次显式提交:顺便把文本同步到输入框。
+                                        viewModel.onQueryChange(word)
+                                        viewModel.submit(word)
                                     },
                                     modifier = if (rowIndex == 0 && index == 0) {
                                         Modifier.focusRequester(firstHotFocus)
@@ -308,7 +324,9 @@ fun SearchScreen(
                                 onClick = {
                                     keyboardController?.hide()
                                     focusResultsAfterHotWord = true
-                                    viewModel.search(word)
+                                    // 热词就是一次显式提交:顺便把文本同步到输入框。
+                                    viewModel.onQueryChange(word)
+                                    viewModel.submit(word)
                                 },
                                 // 有最近搜索时首焦点给最近搜索,热词不再抢焦点。
                                 modifier = if (rowIndex == 0 && index == 0 && state.history.isEmpty()) {
@@ -325,7 +343,7 @@ fun SearchScreen(
                 message = "没有找到相关视频",
                 detail = "换个关键词或视频源再试试",
                 actionLabel = "清空搜索",
-                onAction = { viewModel.search("") },
+                onAction = { viewModel.clear() },
             )
             else -> Column(modifier = Modifier.fillMaxSize()) {
                 Row(

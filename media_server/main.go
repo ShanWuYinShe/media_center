@@ -65,6 +65,11 @@ type mediaServer struct {
 	youtubeCategoryCache *youtubeResultCache
 	youtubeCategoryGroup *youtubeFlightGroup
 
+	// B 站全站实时搜索通道(见 bilibili_search.go):App 的 B 站搜索走真实全站
+	// 搜索而非目录过滤;nil 时端点返回 NOT_CONFIGURED。
+	bilibiliSearch        *bilibiliSearchClient
+	bilibiliSearchLimiter *ipWindowLimiter
+
 	// Cloudflare 优选 IP 候选池(见 preferred_ips.go):服务端在墙外拉公共优选源，
 	// 客户端拿到候选后自己测速挑最快节点。nil 时端点回落到内置种子池。
 	preferredIPs *preferredIPPool
@@ -168,6 +173,8 @@ func main() {
 		youtubeSearchLimiter:  newIPWindowLimiter(youtubeSearchPerMinuteLimit, time.Minute),
 		youtubeResolveLimiter: newIPWindowLimiter(youtubeResolvePerMinuteLimit, time.Minute),
 		preferredIPs:          newPreferredIPPool(),
+		bilibiliSearch:        newBilibiliSearchClient(),
+		bilibiliSearchLimiter: newIPWindowLimiter(bilibiliSearchPerMinuteLimit, time.Minute),
 	}
 	// 后台刷新优选 IP 候选池(公共源在境外，由服务器拉取后下发；失败保留种子池)。
 	server.preferredIPs.start(context.Background())

@@ -89,6 +89,23 @@ class MediaApi(
     suspend fun categories(provider: String): CategoriesResponse =
         get(listOf("providers", provider, "categories"))
 
+    /**
+     * B 站**全站**实时搜索(GET /providers/bilibili/search)。
+     *
+     * 与目录搜索(/search 只查已审核 catalog)不同:这里走服务端的 B 站官方
+     * 搜索通道，能搜到全站视频。要求 X-App-Token(与 youtube 实时端点同一令牌)。
+     */
+    suspend fun bilibiliSearch(query: String, page: Int = 1): SearchResponse =
+        get(
+            listOf("providers", "bilibili", "search"),
+            query = mapOf(
+                "q" to query,
+                "page" to page.toString(),
+            ),
+            // 与 youtube 实时端点同一鉴权:全站搜索也是真实上游调用。
+            headers = appTokenHeaders(),
+        )
+
     suspend fun categoryVideos(
         provider: String,
         categoryId: String,

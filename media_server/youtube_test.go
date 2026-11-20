@@ -511,13 +511,15 @@ func TestResolveSingleflightCoalescesConcurrentCalls(t *testing.T) {
 }
 
 func TestYouTubeRoutesAreProviderScoped(t *testing.T) {
-	// 非 youtube provider 不应命中 search/resolve。
+	// 非 youtube provider 不应命中 youtube 的 search/resolve。
+	// 注:bilibili 现在有**自己的** search 实时端点(见 bilibili_search.go),
+	// 所以这里用 bilibili/resolve 检查 youtube 路由的 provider 隔离。
 	s := newYouTubeTestServer(t, "")
-	req := httptest.NewRequest(http.MethodGet, "/api/providers/bilibili/search?q=zoo", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/providers/bilibili/resolve?id=BV1kS8H6VERt", nil)
 	req.Header.Set("X-App-Token", "test-token")
 	rec := httptest.NewRecorder()
 	s.serveAPI(rec, req)
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("bilibili search should 404, got %d", rec.Code)
+		t.Fatalf("bilibili resolve should 404, got %d", rec.Code)
 	}
 }

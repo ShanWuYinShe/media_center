@@ -45,6 +45,9 @@ fun TopBar(
     searchFocusRequester: FocusRequester? = null,
     // 搜索键按下时优先落到 Hero 主按钮(2D 焦点搜索会优先选中横向更近的"详情")
     searchDownFocusRequester: FocusRequester? = null,
+    // 「设置」按钮的焦点入口:下方内容区按 UP 时落到它。顶栏在最上方,
+    // 若只靠 2D 焦点搜索,用户必须一路右移到最右侧才够得着(实际很难找到)。
+    settingsFocusRequester: FocusRequester? = null,
 ) {
     Row(
         modifier = modifier.fillMaxWidth().focusRestorer().padding(horizontal = ScreenHorizontalPadding, vertical = ScreenVerticalPadding),
@@ -101,6 +104,11 @@ fun TopBar(
             TvChip(
                 label = "设置",
                 onClick = onSettingsClick,
+                modifier = if (settingsFocusRequester != null) {
+                    Modifier.focusRequester(settingsFocusRequester)
+                } else {
+                    Modifier
+                },
                 leading = {
                     Icon(
                         Icons.Default.Settings,

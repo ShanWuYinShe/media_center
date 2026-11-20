@@ -99,6 +99,12 @@ fun HomeScreen(
     // 左右键即可换类，不需要精确瞄准某个卡片或图标。
     val selectedTabFocus = remember { FocusRequester() }
     val gridFirstFocus = remember { FocusRequester() }
+    // 顶栏「设置」按钮的焦点入口:分类栏/内容区按 UP 直接落到这里，
+    // 不必再一路右移到最右侧才够得着(见 HomeCategoryTabs 的 upFocusRequester)。
+    val topBarSettingsFocus = remember { FocusRequester() }
+    // 顶栏「搜索」按钮同样可被 UP 命中:焦点落在顶栏区后左右键在
+    // 视频源/设置/搜索之间移动即可。
+    val topBarSearchFocus = remember { FocusRequester() }
     // 记住离开首页前停在哪张卡片：从详情/播放/搜索返回时恢复到该卡片，
     // 不要把焦点丢给顶栏按钮(此前返回后会落在"设置/搜索"上，还要按方向键找回)。
     var lastFocusedVideoId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -163,6 +169,8 @@ fun HomeScreen(
                 null
             },
             searchDownFocusRequester = if (categoriesReady) selectedTabFocus else null,
+            searchFocusRequester = topBarSearchFocus,
+            settingsFocusRequester = topBarSettingsFocus,
         )
         HomeCategoryTabs(
             tabs = tabs,
@@ -171,6 +179,8 @@ fun HomeScreen(
             selectedFocusRequester = selectedTabFocus,
             firstCardDownFocusRequester = if (hasGridContent) gridFirstFocus else null,
             modifier = Modifier.fillMaxWidth(),
+            // 任意分类标签按 UP 都能进入顶栏(此前只能一路右移到最右侧)。
+            upFocusRequester = topBarSettingsFocus,
         )
         if (categoriesReady && pageTitle.isNotBlank()) {
             Row(

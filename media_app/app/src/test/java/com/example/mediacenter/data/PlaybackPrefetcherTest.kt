@@ -40,6 +40,8 @@ class PlaybackPrefetcherTest {
 
         override suspend fun youtubeSearch(query: String): SearchResponse = SearchResponse()
 
+    override suspend fun bilibiliSearch(query: String, page: Int): SearchResponse = SearchResponse()
+
         override suspend fun resolvePlayback(videoId: String, qn: Int?): PlaybackResult =
             PlaybackResult(
                 options = listOf(

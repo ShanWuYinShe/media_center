@@ -191,6 +191,9 @@ func (s *mediaServer) handleProviderRoute(w http.ResponseWriter, r *http.Request
 	// youtube 实时端点:搜索与播放解析(均代理 vod_extractor),见 youtube.go。
 	case provider == "youtube" && len(parts) == 2 && parts[1] == "search":
 		s.handleYouTubeSearch(w, r)
+	// bilibili 全站实时搜索(结果不写 catalog),见 bilibili_search.go。
+	case provider == "bilibili" && len(parts) == 2 && parts[1] == "search":
+		s.handleBilibiliSearch(w, r)
 	case provider == "youtube" && len(parts) == 2 && parts[1] == "resolve":
 		s.handleYouTubeResolve(w, r)
 	default:

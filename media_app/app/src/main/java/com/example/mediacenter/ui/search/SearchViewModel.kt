@@ -12,13 +12,10 @@ import com.example.mediacenter.data.friendlyLoadMessage
 import com.example.mediacenter.log.AppLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -54,30 +51,20 @@ data class SearchUiState(
  * - 失败直接给出错误 + 重试,不再维护"本地拉全目录再过滤"的回退缓存
  *   (server 已是目录唯一事实源,旧回退只为兼容无 /api/search 的旧服务端)。
  */
-@OptIn(FlowPreview::class)
 class SearchViewModel(
     private val repository: MediaRepositoryApi = MediaRepositoryHolder.repository,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(SearchUiState())
     val uiState: StateFlow<SearchUiState> = _uiState.asStateFlow()
 
-    // 输入防抖:遥控器/键盘连按时只触发一次搜索。
-    private val queryFlow = MutableStateFlow("")
-
     // 翻页请求:新关键词/新搜索开始时取消,避免旧页结果追加到新查询。
     private var loadMoreJob: Job? = null
-    // 同一关键词的显式重跑(错误重试/重复点热词):queryFlow 对相同值不发射,只能直接触发。
+    // 显式搜索任务:同一关键词重复提交(重试/再搜)也必须能重新发起请求。
     private var immediateSearchJob: Job? = null
 
     init {
         // 最近搜索从磁盘读:不能阻塞构造/首帧,放到 IO。
         viewModelScope.launch { loadHistory() }
-        viewModelScope.launch {
-            queryFlow
-                .debounce(SEARCH_DEBOUNCE_MS)
-                .distinctUntilChanged()
-                .collectLatest { query -> performSearch(query) }
-        }
     }
 
     private suspend fun loadHistory() {
@@ -96,9 +83,17 @@ class SearchViewModel(
         _uiState.update { it.copy(history = entries) }
     }
 
-    fun search(query: String) {
-        // 清空/过短时立即清结果,不等防抖。
+    /**
+     * 输入框文本变化:**只更新文本，不发起搜索**。
+     *
+     * TV 上与手机不同:边输入边搜会把每一次按键都变成一次请求(遥控器逐字输入
+     * 十几键就是十几次请求,既慢又容易撞服务端限流),而且用户还没输完就看到
+     * 半截关键词的结果。所以只有显式提交([submit])才真正搜索。
+     */
+    fun onQueryChange(query: String) {
+        if (query == _uiState.value.query) return
         if (query.trim().length < 2) {
+            // 清空/过短:直接回到空态，不发请求。
             loadMoreJob?.cancel()
             immediateSearchJob?.cancel()
             _uiState.value = _uiState.value.copy(
@@ -114,23 +109,38 @@ class SearchViewModel(
                 page = 1,
                 completedQuery = null,
             )
-            queryFlow.value = query
             return
         }
-        val sameQuery = query == _uiState.value.query
-        // 立即进入加载态:600ms 防抖窗口内 UI 不会把旧结果/空结果误判为
-        // "没有找到相关视频"(此前会闪一下错误结论)。
-        _uiState.value = _uiState.value.copy(query = query, isSearching = true, error = null)
-        if (sameQuery) {
-            // StateFlow 对相同值不发射,queryFlow 不会触发防抖搜索:
-            // 显式重跑一次,修复"失败后点重试无反应 / 重复点同一个热词无反应"。
-            immediateSearchJob?.cancel()
-            immediateSearchJob = viewModelScope.launch { performSearch(query) }
-        } else {
-            // 新关键词:取消可能还在跑的"同词重试",避免旧结果覆盖新查询。
-            immediateSearchJob?.cancel()
-            queryFlow.value = query
+        // 保留旧结果继续展示(不闪骨架)，等用户按搜索键再替换。
+        _uiState.value = _uiState.value.copy(query = query, error = null)
+    }
+
+    /**
+     * 显式提交搜索:IME 搜索键 / 搜索按钮 / 热词 / 重试都走这里。
+     *
+     * @param query 为空时用输入框当前文本(搜索按钮与 IME 的常见调用方式)。
+     */
+    fun submit(query: String = _uiState.value.query) {
+        val keyword = query.trim()
+        if (keyword.length < 2) {
+            // 不足 2 字符:留在空态，不发请求。
+            onQueryChange(query)
+            return
         }
+        if (keyword != _uiState.value.query) {
+            _uiState.value = _uiState.value.copy(query = keyword)
+        }
+        immediateSearchJob?.cancel()
+        loadMoreJob?.cancel()
+        _uiState.value = _uiState.value.copy(isSearching = true, error = null)
+        // 直接起协程而不是走"变化才触发"的流:同一关键词重复提交(重试/再搜)
+        // 也必须重新发起请求。
+        immediateSearchJob = viewModelScope.launch { performSearch(keyword) }
+    }
+
+    /** 清空搜索(输入框清除按钮 / 空态「清空搜索」)。 */
+    fun clear() {
+        onQueryChange("")
     }
 
     private suspend fun performSearch(query: String) {
@@ -161,6 +171,22 @@ class SearchViewModel(
                     page = 1,
                     paged = false,
                     noMore = true,
+                    completedQuery = query,
+                )
+                recordHistory(query)
+            } else if (provider == "bilibili") {
+                // B 站走**全站**实时搜索(服务端代理 B 站官方接口):目录搜索只覆盖
+                // 已审核条目，用户搜全站视频会大面积搜不到(线上反馈的核心问题)。
+                val response = repository.bilibiliSearch(query, page = 1)
+                val items = response.items.orEmpty()
+                val noMore = items.size >= response.total || items.isEmpty()
+                _uiState.value = _uiState.value.copy(
+                    isSearching = false,
+                    results = items,
+                    total = response.total,
+                    page = 1,
+                    paged = !noMore,
+                    noMore = noMore,
                     completedQuery = query,
                 )
                 recordHistory(query)
@@ -227,7 +253,12 @@ class SearchViewModel(
         _uiState.update { it.copy(isLoadingMore = true, loadMoreFailed = false) }
         loadMoreJob = viewModelScope.launch {
             try {
-                val response = repository.search(query, nextPage, SEARCH_PAGE_SIZE)
+                val response = if (provider == "bilibili") {
+                    // B 站全站搜索按页翻(每页 20 条，服务端代理)。
+                    repository.bilibiliSearch(query, nextPage)
+                } else {
+                    repository.search(query, nextPage, SEARCH_PAGE_SIZE)
+                }
                 _uiState.update { current ->
                     // 期间改了关键词/provider:丢弃旧页。
                     if (current.query != query || repository.currentProvider != provider) {
@@ -267,7 +298,6 @@ class SearchViewModel(
     }
 
     private companion object {
-        const val SEARCH_DEBOUNCE_MS = 600L
         // 与服务端 pageSize 上限(40)留余量,兼顾首屏速度。
         const val SEARCH_PAGE_SIZE = 30
         // 目录搜索(本地解析 provider)总预算;YouTube 实时搜索有服务端 35s 预算,
