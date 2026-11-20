@@ -250,6 +250,15 @@ YouTube 缩略图代理：服务端代取 `i.ytimg.com` 图片并返回字节（
 
 **youtube 实时搜索/分类结果里的 `thumbnailUrl`（hq）与 `thumbnailUrlLarge`（maxres）已自动改写为本端点地址**（配置了 `MEDIA_SERVER_PUBLIC_URL` 时），App 无需发版即可修复封面裂图；未配置公网基址时保持原始地址（本地开发）。
 
+### `GET /api/providers/youtube/stream/{token}`
+
+YouTube 播放流中转：resolve 返回的 googlevideo 直链在国内不可达，resolve 响应里的 `options[].url`/`audioUrl` 已自动改写为本端点（随机 32 hex token → 原始直链的内存映射，TTL 6 小时）。播放器按原逻辑对该地址发 Range 请求，服务端代取 googlevideo 并透传字节（206/Content-Range 原样透传）。
+
+- resolve 与取流都发生在服务端（同一出口 IP），满足 googlevideo 直链的 IP 绑定要求；客户端不接触 googlevideo。
+- 该路径**绕过 75s API 超时包裹**（长视频流式传输），按客户端断开取消。
+- token 失效（过期/服务重启）返回 404，App 按"播放失败重新解析"处理即可。
+- `Cache-Control: no-store`；HLS（m3u8）选项在代理模式下不出现在 resolve 结果中（分片逐段代理不在本端点职责内，DASH 直链 + 音轨合并已覆盖主要清晰度）。
+
 ### `GET /api/providers/youtube/resolve?id=<11字符视频ID>`
 
 YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返回该视频全部可播放清晰度档位（按高度降序）。App 端一次拿到全部档位，切清晰度在播放器内本地换源，不需要重新解析。

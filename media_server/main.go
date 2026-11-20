@@ -74,6 +74,11 @@ type mediaServer struct {
 	// 服务端代取图片并把搜索结果里的封面 URL 改写为本代理。nil 时端点 503。
 	youtubeThumb *youtubeThumbProxy
 
+	// YouTube 播放流中转(见 youtube_stream.go):国内直连 googlevideo.com 同样
+	// 不可达,resolve 时把直链登记为随机 token 并改写播放地址,拉流由服务端
+	// 中转。nil 时端点 503。
+	youtubeStream *youtubeStreamProxy
+
 	// Cloudflare 优选 IP 候选池(见 preferred_ips.go):服务端在墙外拉公共优选源，
 	// 客户端拿到候选后自己测速挑最快节点。nil 时端点回落到内置种子池。
 	preferredIPs *preferredIPPool
@@ -180,6 +185,7 @@ func main() {
 		bilibiliSearch:        newBilibiliSearchClient(),
 		bilibiliSearchLimiter: newIPWindowLimiter(bilibiliSearchPerMinuteLimit, time.Minute),
 		youtubeThumb:          newYouTubeThumbProxy(),
+		youtubeStream:         newYouTubeStreamProxy(),
 	}
 	// YouTube 实时结果的封面 URL 改写为本机代理地址(需公网基址;未配置时
 	// 保持 i.ytimg.com 原始地址,即本地开发行为不变)。
@@ -313,6 +319,12 @@ func (s *mediaServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 的 APK 下载既没必要又浪费内存,且超时会截断传输。优先匹配后直接交给 handler。
 	if r.Method == http.MethodGet && r.URL.Path == "/api/app/download" {
 		s.handleAppDownload(w, r)
+		return
+	}
+	// YouTube 播放流中转同样绕过超时包裹:75s 的 apiTimeout 会砍断长视频。
+	// 流式转发按客户端断开取消,不需要整体超时(见 youtube_stream.go)。
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/providers/youtube/stream/") {
+		s.handleYouTubeStream(w, r, strings.TrimPrefix(r.URL.Path, "/api/providers/youtube/stream/"))
 		return
 	}
 	newAPITimeoutHandler(apiTimeout, http.HandlerFunc(s.serveAPI)).ServeHTTP(w, r)
