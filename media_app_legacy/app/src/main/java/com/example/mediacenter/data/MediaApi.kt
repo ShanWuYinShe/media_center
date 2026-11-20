@@ -25,6 +25,14 @@ import java.security.cert.CertificateNotYetValidException
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
 
+/** /preferred-ips 响应:Cloudflare 优选 IP 候选池(排序由客户端测速决定)。 */
+@Serializable
+data class PreferredIpsResponse(
+    val items: List<String> = emptyList(),
+    val updatedAt: String? = null,
+    val cacheSeconds: Int = 0,
+)
+
 class MediaApi(
     val baseUrl: String,
     private val client: OkHttpClient = AppHttpClient.newBuilder()
@@ -118,6 +126,22 @@ class MediaApi(
         }
         pathSegments.forEach(builder::addPathSegment)
         return builder.build().toString()
+    }
+
+    /**
+     * Cloudflare 优选 IP 候选池(GET /preferred-ips)。
+     *
+     * 服务端在墙外拉公共优选源后下发;客户端拿到再自己测速排序(见
+     * [com.example.mediacenter.net.PreferredIpStore])。纯加速辅助数据，
+     * 失败返回空(调用方退回内置池 → 系统 DNS)。
+     */
+    suspend fun preferredIps(): List<String> = try {
+        get<PreferredIpsResponse>(listOf("preferred-ips")).items
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        AppLog.w("PrefIp", "fetch preferred ips failed: " + error.message)
+        emptyList()
     }
 
     private suspend inline fun <reified T> get(

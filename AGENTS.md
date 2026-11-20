@@ -59,6 +59,17 @@ App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部�
 - 播放解析（跨端契约）：App 端按 provider 处理——bilibili 用 `BilibiliApi`（WBI 签名 + view + playurl）本地解析；youtube 走 server 端解析（`/api/v1/providers/youtube/resolve` 代理 `vod_extractor`，App 拿到全部清晰度档后在播放器内本地换源）。解析集中在服务端的原因：YouTube 风控对抗依赖 yt-dlp 及时更新，服务器容器重建即可全端生效，TV App 无需发版。
 - 部署：独立站 `deploy/`（compose，三服务自洽）。
 
+## 国内访问加速（Cloudflare 优选 IP）
+
+服务端在 Cloudflare 后面，国内运营商 DNS 常把 `media.chaoset.com` 解析到绕路或被 QoS 的 anycast 节点，客户端表现为「一直转圈」。实测（联通线路）：走系统 DNS 15 次请求 8 次建立不了连接、成功时首字节 3.7s；绑定一个优选 IP 后 15/15 成功、首字节 1.0s。
+
+分工与链路（两端实现见 `media_server/preferred_ips.go`、`media_app`/`media_app_legacy` 的 `net/PreferredIpStore.kt`）：
+
+- **服务端只提供候选池**（`GET /api/v1/preferred-ips`，见 API.md）：服务端在墙外，能稳定拉公共优选源；公共源在境内直连普遍超时/被污染，由服务器拉取后下发，换 IP 不需发版。
+- **测速必须客户端做**：只有客户端知道自己到各节点的真实 RTT，TV 网络与服务器出口完全无关。客户端对候选做 TLS 握手测速后按延迟排序，结果持久化。
+- **只对 `media.chaoset.com` 生效**：OkHttp 的 `Dns` 按 host 拦截，其它域名（图床/上游 API）仍走系统 DNS，避免劫持。
+- **降级链不可省**：取不到候选 → 内置兜底池 → 系统 DNS。优选是加速手段，任何一步失败都不能影响目录浏览与播放。
+
 ## API 约定
 
 以本仓库 `media_server/API.md` 为准。业务接口规范前缀 `/api/v1`（如 `/api/v1/providers`），旧 `/api/*` 为过渡期废弃别名，两者行为一致。App 侧目录数据消费 providers/{provider}/bootstrap（首页启动聚合：providers + 该源分类一次返回）、providers、providers/{provider}/categories、providers/{provider}/categories/{catID}/videos 接口；另消费 App 更新接口 `/api/v1/app/update`、`/api/v1/app/download`、凭证接口 `/api/v1/providers/credentials`；youtube provider 额外消费实时端点 `/api/v1/providers/youtube/search` 与 `/api/v1/providers/youtube/resolve`（均要求 `X-App-Token`，见 `media_server/youtube.go` 与 API.md）。`GET /healthz` 为无版本前缀的存活探针。

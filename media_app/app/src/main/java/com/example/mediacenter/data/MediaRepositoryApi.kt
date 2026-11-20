@@ -40,4 +40,10 @@ interface MediaRepositoryApi {
     suspend fun youtubeSearch(query: String): SearchResponse
 
     suspend fun resolvePlayback(videoId: String, qn: Int? = null): PlaybackResult
+
+    /**
+     * Cloudflare 优选 IP 候选池(服务端下发，客户端自己测速排序)。
+     * 默认返回 null:单测 fake 不必实现;拉取失败也不影响任何功能(退回内置池)。
+     */
+    suspend fun fetchPreferredIps(): List<String>? = null
 }

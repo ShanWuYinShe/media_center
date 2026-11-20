@@ -65,6 +65,10 @@ type mediaServer struct {
 	youtubeCategoryCache *youtubeResultCache
 	youtubeCategoryGroup *youtubeFlightGroup
 
+	// Cloudflare 优选 IP 候选池(见 preferred_ips.go):服务端在墙外拉公共优选源，
+	// 客户端拿到候选后自己测速挑最快节点。nil 时端点回落到内置种子池。
+	preferredIPs *preferredIPPool
+
 	// YouTube 基础设施失败的进程级熔断(cookies 失效/风控/extractor 挂掉):
 	// 连续失败后快失败,避免所有电视换视频重试把 extractor 槽位打满(见
 	// youtube_failure.go)。懒初始化,youtubeBreakerOnce 保护构造。
@@ -163,7 +167,10 @@ func main() {
 		yt:                    newYTClient(config.VODExtractorURL),
 		youtubeSearchLimiter:  newIPWindowLimiter(youtubeSearchPerMinuteLimit, time.Minute),
 		youtubeResolveLimiter: newIPWindowLimiter(youtubeResolvePerMinuteLimit, time.Minute),
+		preferredIPs:          newPreferredIPPool(),
 	}
+	// 后台刷新优选 IP 候选池(公共源在境外，由服务器拉取后下发；失败保留种子池)。
+	server.preferredIPs.start(context.Background())
 	if config.VODExtractorURL != "" {
 		log.Printf("youtube resolve enabled (vod extractor at %s)", config.VODExtractorURL)
 		// 后台轮流预热分类/热词,让分类页与热词搜索走缓存;不阻塞启动。
@@ -344,6 +351,8 @@ func (s *mediaServer) serveAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleProviderCredentials(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/providers/"):
 		s.handleProviderRoute(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/preferred-ips":
+		s.handlePreferredIPs(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/search":
 		s.handleSearch(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/app/update":

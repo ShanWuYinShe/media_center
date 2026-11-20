@@ -20,6 +20,19 @@ import java.time.Duration
 @kotlinx.serialization.Serializable
 data class ServerHealth(val status: String? = null, val version: String? = null)
 
+/**
+ * /preferred-ips 响应:Cloudflare 优选 IP 候选池。
+ *
+ * 服务端只提供候选(且已剔除明显不可用的节点)，**真正的排序由客户端测速决定**
+ * ——TV 到各 anycast 节点的 RTT 与服务器出口完全是两回事。
+ */
+@kotlinx.serialization.Serializable
+data class PreferredIpsResponse(
+    val items: List<String> = emptyList(),
+    val updatedAt: String? = null,
+    val cacheSeconds: Int = 0,
+)
+
 class MediaApi(
     val baseUrl: String,
     cacheDir: File? = null,
@@ -107,6 +120,15 @@ class MediaApi(
      * 服务端版本(设置页展示用)。/health 为公开端点,无需令牌;
      * 失败返回 null(展示场景快速失败,不走重试放大延迟)。
      */
+    /**
+     * Cloudflare 优选 IP 候选池(GET /preferred-ips)。
+     *
+     * 服务端在墙外拉公共优选源后下发;客户端拿到再自己测速排序(见
+     * [com.example.mediacenter.net.PreferredIpStore])。响应带 Cache-Control，
+     * 磁盘缓存会命中，正常每天最多请求一两次。
+     */
+    suspend fun preferredIps(): PreferredIpsResponse = get(listOf("preferred-ips"))
+
     suspend fun serverVersion(): String? = try {
         get<ServerHealth>(pathSegments = listOf("health")).version
     } catch (e: kotlinx.coroutines.CancellationException) {
