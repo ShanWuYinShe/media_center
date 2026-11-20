@@ -42,8 +42,12 @@ object AppHttpClient {
      *
      * @param fetcher 拉取服务端下发的候选池;失败返回 null 时只用内置池。
      */
-    fun initPreferredIps(context: android.content.Context, fetcher: suspend () -> List<String>?) {
-        PreferredIpStore.initAsync(context, fetcher)
+    fun initPreferredIps(
+        context: android.content.Context,
+        baseUrl: String,
+        fetcher: suspend () -> List<String>?,
+    ) {
+        PreferredIpStore.initAsync(context, baseUrl, fetcher)
     }
 
     /** shared 的初始构造;独立函数避免 shared 的 lazy 初始化递归调 [newBuilder]。 */
