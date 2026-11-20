@@ -72,7 +72,8 @@ type mediaServer struct {
 
 	// YouTube 缩略图代理(见 youtube_thumb.go):国内直连 i.ytimg.com 不可达,
 	// 服务端代取图片并把搜索结果里的封面 URL 改写为本代理。nil 时端点 503。
-	youtubeThumb *youtubeThumbProxy
+	youtubeThumb        *youtubeThumbProxy
+	youtubeThumbLimiter *ipWindowLimiter
 
 	// YouTube 播放流中转(见 youtube_stream.go):国内直连 googlevideo.com 同样
 	// 不可达,resolve 时把直链登记为随机 token 并改写播放地址,拉流由服务端
@@ -185,6 +186,7 @@ func main() {
 		bilibiliSearch:        newBilibiliSearchClient(),
 		bilibiliSearchLimiter: newIPWindowLimiter(bilibiliSearchPerMinuteLimit, time.Minute),
 		youtubeThumb:          newYouTubeThumbProxy(),
+		youtubeThumbLimiter:   newIPWindowLimiter(youtubeThumbPerMinuteLimit, time.Minute),
 		youtubeStream:         newYouTubeStreamProxy(),
 	}
 	// YouTube 实时结果的封面 URL 改写为本机代理地址(需公网基址;未配置时
@@ -354,6 +356,10 @@ func (s *mediaServer) serveAPI(w http.ResponseWriter, r *http.Request) {
 		// 故障时这里会变成 open,可直接从探针/监控看出"是全站故障而非视频问题"。
 		if s.yt != nil && s.yt.vodExtractorURL != "" {
 			payload["youtube"] = s.youtubeCircuit().snapshot(time.Now())
+		}
+		// B 站全站搜索的失败观测(cookies 过期/风控/接口改版都体现为搜索失败)。
+		if s.bilibiliSearch != nil {
+			payload["bilibiliSearch"] = s.bilibiliSearch.snapshot()
 		}
 		switch health := s.catalogHealth(); health {
 		case "error":

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // youtube_thumb_test.go — YouTube 缩略图代理的纯逻辑与端点契约。
@@ -55,7 +56,34 @@ func newThumbTestServer(t *testing.T, upstream *httptest.Server) *mediaServer {
 		youtubeThumbUpstreamBase = upstream.URL + "/vi/"
 	}
 	t.Cleanup(func() { youtubeThumbUpstreamBase = "https://i.ytimg.com/vi/" })
-	return &mediaServer{youtubeThumb: newYouTubeThumbProxy()}
+	return &mediaServer{
+		youtubeThumb:        newYouTubeThumbProxy(),
+		youtubeThumbLimiter: newIPWindowLimiter(1000, time.Minute),
+	}
+}
+
+func TestHandleYouTubeThumbRateLimited(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("JPEGDATA"))
+	}))
+	defer upstream.Close()
+
+	s := newThumbTestServer(t, upstream)
+	// 覆盖成极小限额,验证 429 路径。
+	s.youtubeThumbLimiter = newIPWindowLimiter(1, time.Minute)
+	rec := httptest.NewRecorder()
+	s.handleYouTubeThumb(rec, httptest.NewRequest(http.MethodGet, "/api/providers/youtube/thumb/jNQXAC9IVRw/hq.jpg", nil), "jNQXAC9IVRw", "hq.jpg")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first request = %d, want 200", rec.Code)
+	}
+	rec2 := httptest.NewRecorder()
+	s.handleYouTubeThumb(rec2, httptest.NewRequest(http.MethodGet, "/api/providers/youtube/thumb/jNQXAC9IVRw/hq.jpg", nil), "jNQXAC9IVRw", "hq.jpg")
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request = %d, want 429", rec2.Code)
+	}
+	if ra := rec2.Header().Get("Retry-After"); ra == "" {
+		t.Fatalf("429 must carry Retry-After")
+	}
 }
 
 func TestHandleYouTubeThumbFallbackAndCache(t *testing.T) {

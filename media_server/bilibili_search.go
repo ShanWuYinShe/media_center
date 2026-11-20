@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -68,6 +69,8 @@ var wbiMixinKeyTable = [64]int{
 
 // bilibiliSearchClient 负责 WBI 密钥缓存与搜索调用。
 // 密钥有效期按 B 站约定取 10 分钟(与 App 端 BilibiliApi 一致)。
+// 失败计数(原子)供 /health 暴露:cookies 过期/B 站风控/接口改版都会体现为
+// 搜索失败,没有这个口径就只能靠用户反馈发现。
 type bilibiliSearchClient struct {
 	http *http.Client
 
@@ -77,6 +80,36 @@ type bilibiliSearchClient struct {
 
 	cacheMu sync.Mutex
 	cache   map[string]bilibiliSearchCacheEntry
+
+	failuresTotal atomic.Int64
+	lastFailure   atomic.Value // string: 最近一次失败原因(code+msg)
+	lastFailureAt atomic.Value // time.Time
+}
+
+// bilibiliSearchSnapshot 是 /health 的 bilibiliSearch 观测块。
+type bilibiliSearchSnapshot struct {
+	FailuresTotal int64  `json:"failuresTotal"`
+	LastFailure   string `json:"lastFailure,omitempty"`
+	LastFailureAt string `json:"lastFailureAt,omitempty"`
+}
+
+// recordFailure 记一次搜索失败(供 snapshot 暴露)。
+func (c *bilibiliSearchClient) recordFailure(reason string) {
+	c.failuresTotal.Add(1)
+	c.lastFailure.Store(reason)
+	c.lastFailureAt.Store(time.Now())
+}
+
+// snapshot 返回当前失败观测。
+func (c *bilibiliSearchClient) snapshot() bilibiliSearchSnapshot {
+	out := bilibiliSearchSnapshot{FailuresTotal: c.failuresTotal.Load()}
+	if reason, ok := c.lastFailure.Load().(string); ok {
+		out.LastFailure = reason
+	}
+	if at, ok := c.lastFailureAt.Load().(time.Time); ok && !at.IsZero() {
+		out.LastFailureAt = at.UTC().Format(time.RFC3339)
+	}
+	return out
 }
 
 type bilibiliSearchCacheEntry struct {
@@ -230,8 +263,14 @@ func (c *bilibiliSearchClient) getJSON(ctx context.Context, target string, param
 	return io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 }
 
-// searchVideos 按关键词全站搜索 B 站视频(单页)。
-func (c *bilibiliSearchClient) searchVideos(ctx context.Context, query string, page int) ([]VideoSummary, int64, error) {
+// searchVideos 按关键词全站搜索 B 站视频(单页)。任何错误都计入失败观测
+// (defer 统一记,覆盖 nav/签名/上游各阶段),供 /health 的 bilibiliSearch 暴露。
+func (c *bilibiliSearchClient) searchVideos(ctx context.Context, query string, page int) (items []VideoSummary, total int64, err error) {
+	defer func() {
+		if err != nil {
+			c.recordFailure(err.Error())
+		}
+	}()
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return []VideoSummary{}, 0, nil
@@ -265,7 +304,7 @@ func (c *bilibiliSearchClient) searchVideos(ctx context.Context, query string, p
 	if payload.Code != 0 {
 		return nil, 0, fmt.Errorf("bilibili search code=%d msg=%s", payload.Code, payload.Message)
 	}
-	items := make([]VideoSummary, 0, len(payload.Data.Result))
+	items = make([]VideoSummary, 0, len(payload.Data.Result))
 	for _, entry := range payload.Data.Result {
 		bvid := strings.TrimSpace(entry.BVID)
 		if bvid == "" {
@@ -280,7 +319,7 @@ func (c *bilibiliSearchClient) searchVideos(ctx context.Context, query string, p
 			DurationSeconds:   parseBilibiliDuration(entry.Duration),
 		})
 	}
-	total := payload.Data.NumResults
+	total = payload.Data.NumResults
 	if total <= 0 {
 		total = int64(len(items))
 	}

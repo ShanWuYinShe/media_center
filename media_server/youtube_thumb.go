@@ -40,6 +40,14 @@ const (
 // youtubeThumbUpstreamBase 可被单测覆盖(默认指向真实 i.ytimg.com)。
 var youtubeThumbUpstreamBase = "https://i.ytimg.com/vi/"
 
+// 每分钟每 IP 上限:正常 TV 浏览一屏 ~20 张封面,150/min 足够两台电视并行
+// 翻页;CF 边缘缓存吸收重复请求后,只有新 ID 才回源。
+const youtubeThumbPerMinuteLimit = 150
+
+// defaultYouTubeThumbLimiter 是进程级默认防线:main() 构造时已显式接线,
+// 这里仅作 nil 兜底(测试裸构造 mediaServer 时行为与生产一致)。
+var defaultYouTubeThumbLimiter = newIPWindowLimiter(youtubeThumbPerMinuteLimit, time.Minute)
+
 // qualityCandidates 返回该清晰度的取图候选序列(前面的 404 时依次回退;
 // hqdefault 对所有视频都存在,兜底必成)。
 func qualityCandidates(quality string) []string {
@@ -206,6 +214,8 @@ func youtubeThumbURL(publicBase, videoID, quality string) string {
 // handleYouTubeThumb 实现 GET /api/providers/youtube/thumb/{videoID}/{quality}.jpg
 //
 // 公开图片、无鉴权(URL 形态固定,不是开放代理);Responses 可被 CF/客户端长缓存。
+// 带 per-IP 限流:每个 miss 都是一次服务端到 googlevideo 的回源,无限流会把本端点
+// 当成免费图片 CDN 刷爆带宽(CF 只缓存被请求过的图,新 ID 全部回源)。
 func (s *mediaServer) handleYouTubeThumb(w http.ResponseWriter, r *http.Request, videoID, file string) {
 	quality, ok := isValidYouTubeThumbQuality(file)
 	if !ok || !isValidYouTubeVideoID(videoID) {
@@ -214,6 +224,15 @@ func (s *mediaServer) handleYouTubeThumb(w http.ResponseWriter, r *http.Request,
 	}
 	if s.youtubeThumb == nil {
 		s.writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "NOT_CONFIGURED", Message: "服务端未启用缩略图代理。"})
+		return
+	}
+	limiter := s.youtubeThumbLimiter
+	if limiter == nil {
+		limiter = defaultYouTubeThumbLimiter
+	}
+	if !limiter.allow(clientIPFromRequest(r)) {
+		w.Header().Set("Retry-After", "60")
+		s.writeError(w, &apiError{Status: http.StatusTooManyRequests, Code: "RATE_LIMITED", Message: "请求过于频繁,请稍后再试。"})
 		return
 	}
 	s.youtubeThumb.serve(w, r, videoID, quality)
