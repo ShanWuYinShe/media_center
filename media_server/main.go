@@ -70,6 +70,10 @@ type mediaServer struct {
 	bilibiliSearch        *bilibiliSearchClient
 	bilibiliSearchLimiter *ipWindowLimiter
 
+	// YouTube 缩略图代理(见 youtube_thumb.go):国内直连 i.ytimg.com 不可达,
+	// 服务端代取图片并把搜索结果里的封面 URL 改写为本代理。nil 时端点 503。
+	youtubeThumb *youtubeThumbProxy
+
 	// Cloudflare 优选 IP 候选池(见 preferred_ips.go):服务端在墙外拉公共优选源，
 	// 客户端拿到候选后自己测速挑最快节点。nil 时端点回落到内置种子池。
 	preferredIPs *preferredIPPool
@@ -175,7 +179,11 @@ func main() {
 		preferredIPs:          newPreferredIPPool(),
 		bilibiliSearch:        newBilibiliSearchClient(),
 		bilibiliSearchLimiter: newIPWindowLimiter(bilibiliSearchPerMinuteLimit, time.Minute),
+		youtubeThumb:          newYouTubeThumbProxy(),
 	}
+	// YouTube 实时结果的封面 URL 改写为本机代理地址(需公网基址;未配置时
+	// 保持 i.ytimg.com 原始地址,即本地开发行为不变)。
+	server.yt.publicBase = config.PublicBaseURL
 	// 后台刷新优选 IP 候选池(公共源在境外，由服务器拉取后下发；失败保留种子池)。
 	server.preferredIPs.start(context.Background())
 	if config.VODExtractorURL != "" {

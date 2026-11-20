@@ -239,6 +239,17 @@ B 站**全站**实时搜索：服务端代理 B 站官方搜索接口（WBI 签�
 
 响应结构同 `SearchResponse`：`total` 为 B 站返回的命中总数，`items` 为当前页（每页 20 条，`id` 为 bvid，可直接用于播放解析）；`title` 已去掉高亮标签并补上「UP主: 标题」前缀。结果**不写 catalog**（与 youtube 实时通道同一受控例外）。
 
+### `GET /api/providers/youtube/thumb/{videoID}/{quality}.jpg`
+
+YouTube 缩略图代理：服务端代取 `i.ytimg.com` 图片并返回字节（国内直连 YouTube 图床不可达，电视上封面会裂图）。
+
+- `videoID`：11 字符视频 ID（大小写敏感，与播放解析同一格式校验）。
+- `quality`：`hq`（480px，所有视频必有）/ `sd`（640px，缺失时回退 hq）/ `maxres`（1280px，缺失时依次回退 sd → hq）。
+- 响应 `image/jpeg`，带 `Cache-Control: public, max-age=7d, immutable`（URL 以 .jpg 结尾，Cloudflare 默认静态缓存生效）；服务端另有进程内 LRU（96 条）避免反复回源。
+- 全部候选缺失返回 404（`no-store`）。无鉴权——URL 形态固定、不能代理任意地址，不是开放代理。
+
+**youtube 实时搜索/分类结果里的 `thumbnailUrl`（hq）与 `thumbnailUrlLarge`（maxres）已自动改写为本端点地址**（配置了 `MEDIA_SERVER_PUBLIC_URL` 时），App 无需发版即可修复封面裂图；未配置公网基址时保持原始地址（本地开发）。
+
 ### `GET /api/providers/youtube/resolve?id=<11字符视频ID>`
 
 YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返回该视频全部可播放清晰度档位（按高度降序）。App 端一次拿到全部档位，切清晰度在播放器内本地换源，不需要重新解析。

@@ -70,7 +70,11 @@ var extractorBusyBackoff = 3 * time.Second
 // http.Client 不设总超时,由每个请求的 context 控制。
 type ytClient struct {
 	vodExtractorURL string
-	http            *http.Client
+	// publicBase 是本服务的公网基址(MEDIA_SERVER_PUBLIC_URL):非空时,
+	// 搜索/分类结果里的封面 URL 改写为服务端缩略图代理(见 youtube_thumb.go)——
+	// 国内直连 i.ytimg.com 不可达。空串保持原始地址(本地开发/未配置)。
+	publicBase string
+	http       *http.Client
 }
 
 func newYTClient(vodExtractorURL string) *ytClient {
@@ -113,6 +117,15 @@ func bestThumbnailURL(e ytdlpEntry) string {
 	return e.Thumbnail
 }
 
+// thumbURL 生成封面地址:配置了公网基址时返回服务端缩略图代理地址
+// (国内直连 i.ytimg.com 不可达,见 youtube_thumb.go);否则回退原始地址。
+func (c *ytClient) thumbURL(videoID, quality, fallback string) string {
+	if url := youtubeThumbURL(c.publicBase, videoID, quality); url != "" {
+		return url
+	}
+	return fallback
+}
+
 // searchVideos 调 vod_extractor 的 /search(yt-dlp ytsearch)做实时搜索。
 // 结果不写 catalog,仅供 App 即时展示与播放;调用方负责把内部错误转成日志 +
 // 固定文案。
@@ -144,8 +157,8 @@ func (c *ytClient) searchVideos(ctx context.Context, query string) ([]VideoSumma
 		summaries = append(summaries, VideoSummary{
 			ID:                e.ID,
 			Title:             title,
-			ThumbnailURL:      youtubeCardThumbnail(e),
-			ThumbnailURLLarge: bestThumbnailURL(e),
+			ThumbnailURL:      c.thumbURL(e.ID, youtubeThumbQualityHQ, youtubeCardThumbnail(e)),
+			ThumbnailURLLarge: c.thumbURL(e.ID, youtubeThumbQualityMaxres, bestThumbnailURL(e)),
 			DurationSeconds:   duration,
 		})
 	}

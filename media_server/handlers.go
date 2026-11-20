@@ -194,6 +194,9 @@ func (s *mediaServer) handleProviderRoute(w http.ResponseWriter, r *http.Request
 	// bilibili 全站实时搜索(结果不写 catalog),见 bilibili_search.go。
 	case provider == "bilibili" && len(parts) == 2 && parts[1] == "search":
 		s.handleBilibiliSearch(w, r)
+	// YouTube 缩略图代理(.jpg 后缀让 CF 默认静态缓存生效),见 youtube_thumb.go。
+	case provider == "youtube" && len(parts) == 4 && parts[1] == "thumb":
+		s.handleYouTubeThumb(w, r, parts[2], parts[3])
 	case provider == "youtube" && len(parts) == 2 && parts[1] == "resolve":
 		s.handleYouTubeResolve(w, r)
 	default:
