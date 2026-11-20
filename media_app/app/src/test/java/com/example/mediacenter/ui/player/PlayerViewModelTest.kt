@@ -61,6 +61,8 @@ class PlayerViewModelTest {
 
         override suspend fun search(query: String, page: Int, pageSize: Int): SearchResponse = SearchResponse()
         override suspend fun youtubeSearch(query: String): SearchResponse = SearchResponse()
+
+    override suspend fun bilibiliSearch(query: String, page: Int): SearchResponse = SearchResponse()
         override suspend fun resolvePlayback(videoId: String, qn: Int?): PlaybackResult {
             resolvedIds += videoId
             resolvedQns += qn

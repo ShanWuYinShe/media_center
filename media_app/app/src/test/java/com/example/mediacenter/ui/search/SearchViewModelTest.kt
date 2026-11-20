@@ -35,6 +35,9 @@ class SearchViewModelTest {
         var youtubeHandler: suspend (String) -> SearchResponse = { q ->
             SearchResponse(query = q, total = 0, items = emptyList())
         },
+        var bilibiliHandler: suspend (String, Int) -> SearchResponse = { q, _ ->
+            SearchResponse(query = q, total = 0, items = emptyList())
+        },
     ) : MediaRepositoryApi {
         override fun setProvider(provider: String) { currentProvider = provider }
         override suspend fun providers(): List<ProviderInfo> = emptyList()
@@ -47,6 +50,8 @@ class SearchViewModelTest {
         override suspend fun search(query: String, page: Int, pageSize: Int): SearchResponse =
             searchHandler(query, page, pageSize)
         override suspend fun youtubeSearch(query: String): SearchResponse = youtubeHandler(query)
+        override suspend fun bilibiliSearch(query: String, page: Int): SearchResponse =
+            bilibiliHandler(query, page)
         override suspend fun resolvePlayback(videoId: String, qn: Int?): PlaybackResult =
             error("not used")
     }
@@ -54,8 +59,7 @@ class SearchViewModelTest {
     private fun video(id: String) = VideoSummary(id = id, title = id)
 
     private suspend fun TestScope.waitSearch(vm: SearchViewModel, query: String) {
-        vm.search(query)
-        advanceTimeBy(700)
+        vm.submit(query)
         advanceUntilIdle()
     }
 
@@ -99,18 +103,29 @@ class SearchViewModelTest {
     }
 
     @Test
-    fun `输入达到两字立即进入加载态`() = runTest {
+    fun `输入只更新文本不触发搜索`() = runTest {
+        var searchCalls = 0
         val repo = FakeRepository(searchHandler = { q, _, _ ->
+            searchCalls++
             SearchResponse(query = q, total = 1, items = listOf(video("v1")))
         })
         val vm = SearchViewModel(repo)
-        vm.search("dota")
-        // 防抖窗口内就应是加载态:此前 isSearching 要等 600ms 后才置 true,
-        // UI 会先闪一下"没有找到相关视频"。
+        // 输入几个字:不提交就不应发请求(TV 上边输入边搜是纯浪费)。
+        vm.onQueryChange("d")
+        vm.onQueryChange("do")
+        vm.onQueryChange("dot")
+        vm.onQueryChange("dota")
+        advanceUntilIdle()
+        assertEquals(0, searchCalls)
+        assertEquals("dota", vm.uiState.value.query)
+        assertTrue(vm.uiState.value.results.isEmpty())
+
+        // 显式提交才真正搜索。
+        vm.submit()
         assertTrue(vm.uiState.value.isSearching)
-        advanceTimeBy(700)
         advanceUntilIdle()
         assertFalse(vm.uiState.value.isSearching)
+        assertEquals(1, searchCalls)
         assertEquals(1, vm.uiState.value.results.size)
     }
 
@@ -129,12 +144,65 @@ class SearchViewModelTest {
 
         // 重试按钮与重复点同一个热词都走这里:query 相同,queryFlow 不会发射,
         // 必须显式重跑,否则此前是一次静默 no-op。
-        vm.search("dota")
+        vm.submit()
         assertTrue(vm.uiState.value.isSearching)
         advanceUntilIdle()
         assertEquals(2, attempts)
         assertNull(vm.uiState.value.error)
         assertEquals(1, vm.uiState.value.results.size)
+    }
+
+    @Test
+    fun `bilibili 走全站搜索且可分页`() = runTest {
+        val pages = mapOf(
+            1 to SearchResponse(query = "黑神话", total = 45, items = (1..20).map { video("b$it") }),
+            2 to SearchResponse(query = "黑神话", total = 45, items = (21..40).map { video("b$it") }),
+            3 to SearchResponse(query = "黑神话", total = 45, items = listOf(video("b41"))),
+        )
+        var bilibiliCalls = 0
+        val repo = FakeRepository(
+            currentProvider = "bilibili",
+            bilibiliHandler = { q, page ->
+                bilibiliCalls++
+                pages.getValue(page)
+            },
+        )
+        val vm = SearchViewModel(repo)
+        waitSearch(vm, "黑神话")
+
+        val first = vm.uiState.value
+        assertEquals(20, first.results.size)
+        assertEquals(45, first.total)
+        assertTrue(first.paged)
+        assertFalse(first.noMore)
+
+        vm.loadMore()
+        advanceUntilIdle()
+        assertEquals(40, vm.uiState.value.results.size)
+
+        vm.loadMore()
+        advanceUntilIdle()
+        val last = vm.uiState.value
+        assertEquals(41, last.results.size)
+        assertTrue(last.noMore)
+        assertFalse(last.paged)
+        assertEquals(3, bilibiliCalls)
+    }
+
+    @Test
+    fun `不足两字符提交不发请求`() = runTest {
+        var searchCalls = 0
+        val repo = FakeRepository(searchHandler = { _, _, _ ->
+            searchCalls++
+            SearchResponse()
+        })
+        val vm = SearchViewModel(repo)
+        vm.onQueryChange("a")
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals(0, searchCalls)
+        assertEquals("a", vm.uiState.value.query)
+        assertNull(vm.uiState.value.completedQuery)
     }
 
     @Test

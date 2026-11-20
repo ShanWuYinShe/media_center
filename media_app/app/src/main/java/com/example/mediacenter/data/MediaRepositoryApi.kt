@@ -39,6 +39,12 @@ interface MediaRepositoryApi {
 
     suspend fun youtubeSearch(query: String): SearchResponse
 
+    /**
+     * B 站**全站**实时搜索(服务端代理 B 站官方搜索接口，结果不写 catalog)。
+     * 与 [search] 的区别:search 只查已审核目录，这里能搜到全站视频。
+     */
+    suspend fun bilibiliSearch(query: String, page: Int = 1): SearchResponse
+
     suspend fun resolvePlayback(videoId: String, qn: Int? = null): PlaybackResult
 
     /**

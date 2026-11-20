@@ -170,6 +170,20 @@ class MediaRepository(
                 items = items,
             )
         }
+        if (currentProvider == "bilibili" && trimmed.isNotEmpty()) {
+            // B 站走**全站**实时搜索(服务端代理 B 站官方接口):目录搜索只覆盖
+            // 已审核条目，用户搜全站视频会大面积搜不到(线上反馈的核心问题)。
+            // 结果按页返回;loadMore 由 ViewModel 层用同一端点的 page 参数续页。
+            val resp = api.bilibiliSearch(trimmed, page)
+            val items = resp.items.orEmpty()
+            return SearchResponse(
+                query = query,
+                page = page,
+                pageSize = items.size,
+                total = resp.total,
+                items = items,
+            )
+        }
         if (categoryId == null) {
             return SearchResponse(query = query, page = page, pageSize = pageSize)
         }

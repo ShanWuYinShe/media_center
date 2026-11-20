@@ -38,6 +38,10 @@ internal fun HomeCategoryTabs(
     selectedFocusRequester: FocusRequester,
     firstCardDownFocusRequester: FocusRequester?,
     modifier: Modifier = Modifier,
+    // 分类栏向上要能进入顶栏按钮区。默认的 2D 焦点搜索只会找到「横向最接近」
+    // 的节点,于是用户必须一路右移到最右侧才能向上跳到设置/搜索,实际很难命中。
+    // 这里显式声明 UP 目标,任意分类标签按上都能直接进入顶栏。
+    upFocusRequester: FocusRequester? = null,
 ) {
     val listState = rememberLazyListState()
     LaunchedEffect(tabs, selectedId) {
@@ -74,6 +78,13 @@ internal fun HomeCategoryTabs(
                     .then(
                         if (firstCardDownFocusRequester != null) {
                             Modifier.focusProperties { down = firstCardDownFocusRequester }
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .then(
+                        if (upFocusRequester != null) {
+                            Modifier.focusProperties { up = upFocusRequester }
                         } else {
                             Modifier
                         },

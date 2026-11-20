@@ -86,6 +86,10 @@ class MediaRepository(
     // 没有互斥时两条请求都会穿透。
     private val credentialsMutex = Mutex()
 
+    /** B 站全站实时搜索:委托 MediaApi 的实时端点(要求 App Token)。 */
+    override suspend fun bilibiliSearch(query: String, page: Int): SearchResponse =
+        api.bilibiliSearch(query, page)
+
     /**
      * 拉取 Cloudflare 优选 IP 候选池。这是纯加速辅助数据:任何失败都返回 null，
      * 由调用方退回内置池/系统 DNS，绝不影响目录与播放。

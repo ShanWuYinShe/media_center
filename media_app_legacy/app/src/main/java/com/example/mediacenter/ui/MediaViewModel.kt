@@ -414,7 +414,9 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                     repository.search(query, categoryId, page = 1, pageSize = PageSize)
                 }
                     .onSuccess { response ->
-                        val canLoadMoreFirstPage = query.isBlank() &&
+                        // 关键词搜索一般是一次性聚合不分页;例外是 bilibili 全站实时搜索
+                        // (服务端按页代理 B 站官方接口),与分类浏览一样可以续页。
+                        val canLoadMoreFirstPage = (query.isBlank() || repository.currentProvider == "bilibili") &&
                             repository.currentProvider != "youtube" &&
                             response.items.size >= PageSize
                         mutableState.update { state ->

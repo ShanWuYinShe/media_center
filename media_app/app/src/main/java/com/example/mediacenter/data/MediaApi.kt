@@ -121,6 +121,22 @@ class MediaApi(
      * 失败返回 null(展示场景快速失败,不走重试放大延迟)。
      */
     /**
+     * B 站**全站**实时搜索(GET /providers/bilibili/search)。
+     *
+     * 与目录搜索(/search 只查已审核 catalog)不同:这里走服务端的 B 站官方
+     * 搜索通道，能搜到全站视频。要求 X-App-Token(与 youtube 实时端点同一令牌)，
+     * 结果按页返回(每页 20 条)。
+     */
+    suspend fun bilibiliSearch(query: String, page: Int = 1): SearchResponse = get(
+        pathSegments = listOf("providers", "bilibili", "search"),
+        query = mapOf(
+            "q" to query,
+            "page" to page.toString(),
+        ),
+        headers = appTokenHeaders(),
+    )
+
+    /**
      * Cloudflare 优选 IP 候选池(GET /preferred-ips)。
      *
      * 服务端在墙外拉公共优选源后下发;客户端拿到再自己测速排序(见

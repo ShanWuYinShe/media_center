@@ -231,6 +231,14 @@ YouTube **实时搜索**：经 vod_extractor 的 yt-dlp `ytsearch`（flat 模式
 
 - 未配置 `MEDIA_SERVER_VOD_EXTRACTOR_URL` 返回 503 `NOT_CONFIGURED`；yt-dlp 失败（cookies 失效、风控、extractor 不可达/超时等基础设施类）返回 503 `UPSTREAM_UNAVAILABLE` + `Retry-After: 15`（可安全重试；连续失败会触发进程级熔断，见 `/healthz` 的 `youtube` 字段）。旧版 extractor 的裸 502（无 `reason`）保留 502 `UPSTREAM_ERROR` 兼容。
 
+### `GET /api/providers/bilibili/search?q=&page=1`
+
+B 站**全站**实时搜索：服务端代理 B 站官方搜索接口（WBI 签名），按关键词返回全站视频。要求 `X-App-Token`，限流 20/min/IP；结果带 30s `Cache-Control`，服务端另有 5min 按页缓存。
+
+**与 `/api/search` 的区别**：`/api/search` 只在已审核目录内做关键词过滤（收录范围小）；本端点搜的是 B 站全站（与用户在 B 站网页里搜索同源）。App 的 B 站搜索应走本端点。
+
+响应结构同 `SearchResponse`：`total` 为 B 站返回的命中总数，`items` 为当前页（每页 20 条，`id` 为 bvid，可直接用于播放解析）；`title` 已去掉高亮标签并补上「UP主: 标题」前缀。结果**不写 catalog**（与 youtube 实时通道同一受控例外）。
+
 ### `GET /api/providers/youtube/resolve?id=<11字符视频ID>`
 
 YouTube 播放解析：代理 `vod_extractor`（yt-dlp）解析 watch URL，返回该视频全部可播放清晰度档位（按高度降序）。App 端一次拿到全部档位，切清晰度在播放器内本地换源，不需要重新解析。
