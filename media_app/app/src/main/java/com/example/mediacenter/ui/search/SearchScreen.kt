@@ -126,6 +126,7 @@ fun SearchScreen(
         // 已点击热词、但该关键词尚未完成(防抖中或请求中)且没有结果:显示
         // 加载态并让结果区承接焦点,防止键盘抢回焦点。
         val hotWordPending = focusResultsAfterHotWord &&
+            state.query.trim().length >= 2 &&
             state.results.isEmpty() &&
             state.error == null &&
             state.completedQuery != state.query
@@ -204,7 +205,11 @@ fun SearchScreen(
             keyboardActions = KeyboardActions(
                 onSearch = {
                     keyboardController?.hide()
-                    focusResultsAfterHotWord = true
+                    // 短/空查询不发请求也不置 pending 标记:否则 hotWordPending
+                    // 会因 completedQuery(null) != query("") 恒真,卡死加载骨架。
+                    if (state.query.trim().length >= 2) {
+                        focusResultsAfterHotWord = true
+                    }
                     viewModel.submit(state.query)
                 },
             ),
