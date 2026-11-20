@@ -179,7 +179,9 @@ class SearchViewModel(
                 // 已审核条目，用户搜全站视频会大面积搜不到(线上反馈的核心问题)。
                 val response = repository.bilibiliSearch(query, page = 1)
                 val items = response.items.orEmpty()
-                val noMore = items.size >= response.total || items.isEmpty()
+                // B 站的 numResults 不可靠(统计口径偏大，实际可用结果更少):
+                // 终止条件用「页不满」启发式，不能用 total 判断，否则永远翻不完。
+                val noMore = items.size < BILIBILI_SEARCH_PAGE_SIZE
                 _uiState.value = _uiState.value.copy(
                     isSearching = false,
                     results = items,
@@ -265,8 +267,13 @@ class SearchViewModel(
                         return@update current
                     }
                     val merged = (current.results + response.items.orEmpty()).distinctBy { it.id }
-                    val noMore = response.items.isNullOrEmpty() ||
-                        (response.total > 0 && merged.size >= response.total)
+                    val noMore = if (provider == "bilibili") {
+                        // B 站:页不满即止(numResults 不可靠，不能用 total 判断)。
+                        response.items.orEmpty().size < BILIBILI_SEARCH_PAGE_SIZE
+                    } else {
+                        response.items.isNullOrEmpty() ||
+                            (response.total > 0 && merged.size >= response.total)
+                    }
                     current.copy(
                         results = merged,
                         page = nextPage,
@@ -300,6 +307,9 @@ class SearchViewModel(
     private companion object {
         // 与服务端 pageSize 上限(40)留余量,兼顾首屏速度。
         const val SEARCH_PAGE_SIZE = 30
+        // B 站全站搜索每页条数:与服务端 bilibiliSearchPageSize(20)对齐,
+        // 「页不满即止」的终止判断依赖这个值。
+        const val BILIBILI_SEARCH_PAGE_SIZE = 20
         // 目录搜索(本地解析 provider)总预算;YouTube 实时搜索有服务端 35s 预算,
         // 不走这个短超时(冷启动 ytsearch 本身就可能十几秒)。
         const val CATALOG_SEARCH_TIMEOUT_MS = 15_000L

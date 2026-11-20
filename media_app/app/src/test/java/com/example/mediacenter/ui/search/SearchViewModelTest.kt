@@ -69,7 +69,9 @@ class SearchViewModelTest {
             1 to SearchResponse(total = 60, items = (1..30).map { video("v$it") }),
             2 to SearchResponse(total = 60, items = (31..60).map { video("v$it") }),
         )
-        val repo = FakeRepository(searchHandler = { _, page, _ -> pages.getValue(page) })
+        // catalog 目录搜索分支(else):bilibili/youtube 都已走实时通道,
+        // 用假想的第三 provider 驱动该分支。
+        val repo = FakeRepository(currentProvider = "demo", searchHandler = { _, page, _ -> pages.getValue(page) })
         val vm = SearchViewModel(repo)
         waitSearch(vm, "dota")
 
@@ -105,7 +107,7 @@ class SearchViewModelTest {
     @Test
     fun `输入只更新文本不触发搜索`() = runTest {
         var searchCalls = 0
-        val repo = FakeRepository(searchHandler = { q, _, _ ->
+        val repo = FakeRepository(currentProvider = "demo", searchHandler = { q, _, _ ->
             searchCalls++
             SearchResponse(query = q, total = 1, items = listOf(video("v1")))
         })
@@ -132,7 +134,7 @@ class SearchViewModelTest {
     @Test
     fun `搜索失败后同一关键词重试会再次发起请求`() = runTest {
         var attempts = 0
-        val repo = FakeRepository(searchHandler = { q, _, _ ->
+        val repo = FakeRepository(currentProvider = "demo", searchHandler = { q, _, _ ->
             attempts++
             if (attempts == 1) throw IOException("boom")
             SearchResponse(query = q, total = 1, items = listOf(video("v1")))
@@ -207,7 +209,7 @@ class SearchViewModelTest {
 
     @Test
     fun `搜索失败展示错误而不是静默空结果`() = runTest {
-        val repo = FakeRepository(searchHandler = { _, _, _ -> throw IOException("boom") })
+        val repo = FakeRepository(currentProvider = "demo", searchHandler = { _, _, _ -> throw IOException("boom") })
         val vm = SearchViewModel(repo)
         waitSearch(vm, "dota")
         val state = vm.uiState.value
@@ -218,7 +220,7 @@ class SearchViewModelTest {
 
     @Test
     fun `目录搜索超出总预算时给出超时文案`() = runTest {
-        val repo = FakeRepository(searchHandler = { _, _, _ ->
+        val repo = FakeRepository(currentProvider = "demo", searchHandler = { _, _, _ ->
             kotlinx.coroutines.delay(60_000)
             SearchResponse()
         })
