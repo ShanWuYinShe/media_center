@@ -76,8 +76,8 @@ func TestPreferredIPPoolCollectDedupesAndKeepsSeedFallback(t *testing.T) {
 	}
 }
 
-func TestPreferredIPPoolCollectPutsRemoteFirstAndDedupes(t *testing.T) {
-	// 公共源成功时:远端 IP 排在种子之前，且与种子重复的项只保留一次。
+func TestPreferredIPPoolCollectKeepsSeedsAndAddsRemote(t *testing.T) {
+	// 种子必须优先(已知能服务本 zone)，公共源只做补充；且两者重复项只保留一次。
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("10.9.8.7\n" + preferredIPSeeds[0] + "\n10.9.8.7\n"))
 	}))
@@ -92,10 +92,21 @@ func TestPreferredIPPoolCollectPutsRemoteFirstAndDedupes(t *testing.T) {
 	if !sourceOK {
 		t.Fatalf("source should succeed")
 	}
-	if items[0] != "10.9.8.7" {
-		t.Fatalf("remote ip should come first, got %q", items[0])
+	// 种子排在前面:公共源常含大量国内连不上的 IP，不能让它们挤掉种子。
+	if items[0] != preferredIPSeeds[0] {
+		t.Fatalf("seed should come first, got %q", items[0])
 	}
-	// 种子池第一项紧随其后，且只出现一次。
+	// 公共源里不重复的 IP 仍要进池子(多样性靠客户端测速兜住)。
+	found := false
+	for _, ip := range items {
+		if ip == "10.9.8.7" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("remote-only ip should be included, got %v", items)
+	}
+	// 与种子重复的项只出现一次。
 	count := 0
 	for _, ip := range items {
 		if ip == preferredIPSeeds[0] {
