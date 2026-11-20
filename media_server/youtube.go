@@ -490,7 +490,7 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 			s.writeError(w, &apiError{Status: http.StatusBadGateway, Code: "RESOLVE_FAILED", Message: "播放地址解析失败,该视频可能受限或稍后再试。"})
 			return
 		}
-		s.writeJSON(w, http.StatusOK, result)
+		s.writeJSON(w, http.StatusOK, s.rewriteForProxy(result))
 		return
 	}
 	// 进程内未命中再查磁盘持久缓存(跨重启/发布存活);命中后回填内存缓存,
@@ -502,7 +502,7 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 				result:    result,
 				expiresAt: time.Now().Add(resolvePositiveCacheTTL),
 			})
-			s.writeJSON(w, http.StatusOK, result)
+			s.writeJSON(w, http.StatusOK, s.rewriteForProxy(result))
 			return
 		}
 	}
@@ -579,5 +579,7 @@ func (s *mediaServer) handleYouTubeResolve(w http.ResponseWriter, r *http.Reques
 	if s.resolveDisk != nil {
 		s.resolveDisk.store(videoID, result)
 	}
-	s.writeJSON(w, http.StatusOK, result)
+	// 缓存里存的是原始 googlevideo 直链;代理改写只在响应 App 的最后一步做
+	// (token 是内存态,磁盘缓存跨重启后仍可重新改写)。
+	s.writeJSON(w, http.StatusOK, s.rewriteForProxy(result))
 }
