@@ -154,7 +154,16 @@ func (p *preferredIPPool) collect(ctx context.Context) ([]string, bool) {
 		collected = append(collected, ip)
 		return len(collected) >= preferredIPsMaxItems
 	}
-	// 公共源在前:它们更新鲜，且包含国内三网实测节点。
+	// **种子优先**:它们是唯一「已知能服务本 zone」的地址，必须保证在池子里。
+	// 公共源动辄返回 20+ 条未经本站验证的 IP(实测有不小比例在国内完全连不上)，
+	// 若先填公共源再截断，种子会被整体挤掉——客户端测速再准也没有好节点可选。
+	for _, ip := range preferredIPSeeds {
+		if add(ip) {
+			return collected, true
+		}
+	}
+	// 公共源补充多样性:它们更新鲜，且常含国内三网实测更好的节点(实测有 IP
+	// 6/6 可用、首字节 0.72s，优于种子池最好的 0.83s)。客户端测速再挑出最优。
 	anySourceOK := false
 	for _, source := range preferredIPSources {
 		body, err := p.fetchSource(ctx, source)
@@ -167,12 +176,6 @@ func (p *preferredIPPool) collect(ctx context.Context) ([]string, bool) {
 			if add(ip) {
 				return collected, true
 			}
-		}
-	}
-	// 种子兜底补齐。
-	for _, ip := range preferredIPSeeds {
-		if add(ip) {
-			break
 		}
 	}
 	return collected, anySourceOK
