@@ -1,5 +1,8 @@
 package com.example.mediacenter.ui.home
 
+import android.app.Activity
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,6 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -18,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -109,6 +114,21 @@ fun HomeScreen(
     // 记住离开首页前停在哪张卡片：从详情/播放/搜索返回时恢复到该卡片，
     // 不要把焦点丢给顶栏按钮(此前返回后会落在"设置/搜索"上，还要按方向键找回)。
     var lastFocusedVideoId by rememberSaveable { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    var lastBackPressTime by remember { mutableLongStateOf(0L) }
+    BackHandler {
+        val now = System.currentTimeMillis()
+        if (lastFocusedVideoId != null) {
+            // 在卡片网格浏览时按返回键:平滑将焦点带回当前选中的分类标签，避免误触直接退回桌面
+            lastFocusedVideoId = null
+            runCatching { selectedTabFocus.requestFocus() }
+        } else if (now - lastBackPressTime < 2000L) {
+            (context as? Activity)?.finish()
+        } else {
+            lastBackPressTime = now
+            Toast.makeText(context, "再按一次退出应用", Toast.LENGTH_SHORT).show()
+        }
+    }
     val categoriesReady = state.categories.isNotEmpty()
     LaunchedEffect(categoriesReady, lastFocusedVideoId) {
         if (!categoriesReady) return@LaunchedEffect
