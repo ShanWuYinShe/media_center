@@ -73,9 +73,26 @@ adb -s emulator-5554 shell am start -W -n com.example.mediacenter/.ComposeActivi
 - ★ 搜索页**空输入直接按确认键**：必须留在空态。回归过一次卡死骨架的 bug（pending 标记 + 空提交组合）。
 - ★ 搜索热词点选出结果：确认热词内容与当前搜索语义匹配（B 站已改全站搜索，热词须家庭友好，见 media_app AGENTS.md）。
 - ★ 首页分类标签按 **UP**：焦点应直接落顶栏「设置」（normal 与 legacy 都修过 UP 被吞的问题）。
-- YouTube 源封面全部显示（走服务端缩略图代理）；选一个视频播放到出画面（走播放流中转，冷解析 25–30s 属正常）。
+- ★ **视频播放抽查必须随机、不固定测试集**：每次走查看 B 站与 YouTube 两个源、跨多个分类随机点 6–10 个视频（分类/卡片位置随机，覆盖电影、电视剧、家庭剧场、红色经典、Dota 专区与 YouTube 音乐/科技/游戏/纪录片/电影/学习），逐个播放到出画面。固定点某几个高频视频会漏掉"个别视频加载失败"（v1.19.3 随机抽查 456 部电影，发现 39 部源站已删/不可见——这些在 App 里都表现为加载失败）。
+- YouTube 源封面全部显示（走服务端缩略图代理）；播放走播放流中转，冷解析 25–30s 属正常。
 - B 站源播放（本地 WBI 解析链路）。
 - 离开播放页返回首页：焦点恢复到离开前的卡片。
+
+### 抽查发现"视频加载失败"时的处置
+
+判定看 logcat 的 `MediaCenter.Perf` / `MediaCenter.Player`：
+
+- `resolvePlayback failed: view 失败(-404/62002/62012)` 或 playurl 同类错误 = **catalog 脏数据**（源站视频已删/不可见），按下面的巡检流程清理；不要当成网络问题重试。
+- `resolvePlayback failed` 为风控/超时类（-352/-412/HTTP 4xx/5xx）或 YouTube resolve 超时 = 解析链路问题，重测一次区分偶发；持续则查服务器 `/healthz` 的 `youtube` 熔断与 `vod_extractor`。
+- 有 `resolve` 无 `player first frame` = 直链/中转/解码问题，看 media warmup 与 player error 日志。
+
+catalog 巡检（开发机跑，B 站接口受服务器 IP 风控限制）：
+
+```bash
+python3 scripts/check-bilibili-catalog.py --output /tmp/catalog-check.json   # 全量 dry-run，输出失效清单
+```
+
+确认清单后按 media-server-catalog skill「可播放性巡检」下架（软 reject，可恢复）。
 
 ### 判定与收尾
 

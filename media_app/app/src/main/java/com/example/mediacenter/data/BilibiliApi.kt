@@ -30,12 +30,16 @@ private fun biliHttpMessage(statusCode: Int): String = when (statusCode) {
 }
 
 /**
- * 拼装 B 站业务错误的用户可见文案:优先透出响应里的 message(风控 -352/-412/-403
- * 的真实原因就在这个字段),缺失时回退到裸 code。
+ * 拼装 B 站业务错误的用户可见文案。风控类业务码(-352/-412)的真实原因在
+ * 上游 message 字段,透出有诊断价值;而内容类业务码(-403/-404/62002/62012)
+ * 的上游 message 是 B 站的俏皮话("啥都木有")或纯数字,对电视用户没有信息量,
+ * 统一映射为可读原因——原始 code/message 由调用处 AppLog 记录(见 fetchView)。
  */
-private fun biliError(where: String, code: Int, message: String?): String =
-    message?.takeIf { it.isNotBlank() }?.let { "$where 失败($code): $it" }
+private fun biliError(where: String, code: Int, message: String?): String = when (code) {
+    -403, -404, 62002, 62012 -> "该视频已下架或暂时不可见"
+    else -> message?.takeIf { it.isNotBlank() }?.let { "$where 失败($code): $it" }
         ?: "${where}接口返回 code=$code"
+}
 
 /**
  * B 站官方 API 客户端:让 App 端拿到 catalog 的 bvid 后**自己**解析播放地址,
@@ -173,12 +177,16 @@ class BilibiliApi(
         val signed = signWbiParams(mapOf("bvid" to bvid), keys.first, keys.second)
         val url = buildUrl("https://api.bilibili.com/x/web-interface/wbi/view", signed)
         val payload = getJson<BiliViewResponse>(url)
-        val data = payload.data ?: throw BilibiliApiException(biliError("view", payload.code, payload.message) + " (bvid=$bvid)")
-        if (data.bvid.isNullOrEmpty()) {
-            throw BilibiliApiException(biliError("view", payload.code, payload.message) + " (bvid=$bvid)")
+        val data = payload.data
+        if (data == null || data.bvid.isNullOrEmpty()) {
+            // 技术细节只进日志:播放页会把异常 message 直接展示给电视用户,
+            // "view 失败(-404): 啥都木有 (bvid=...)" 对用户不可读(与 legacy 一致)。
+            AppLog.w("Bili", "view failed: code=${payload.code} bvid=$bvid")
+            throw BilibiliApiException(biliError("view", payload.code, payload.message))
         }
         if ((data.cid ?: 0) == 0L) {
-            throw BilibiliApiException("view 接口未返回 cid(可能视频被删/审核)")
+            AppLog.w("Bili", "view returned no cid: bvid=$bvid")
+            throw BilibiliApiException("该视频已下架或暂时不可见")
         }
         return payload
     }

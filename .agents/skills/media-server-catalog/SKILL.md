@@ -27,6 +27,19 @@ description: media_server catalog 分类数据与审核体系。触发：改分�
 - 时长筛选：分类视频端点支持 `minDurationSeconds` / `maxDurationSeconds`（秒，含边界），计数与列表共用同一 WHERE；非法值 400。启用筛选时 `duration_sec` 为空的视频被排除。
 - 索引：`category_members` 上有 `(category_id,status)`、`(provider,category_id,status)`、`(provider,status)` 三个索引。
 
+## 可播放性巡检（上架后）
+
+审核关卡只保证**上架时**可播放（CATEGORY_CURATION_GUIDE「可播放性」）；B 站视频上架后被 UP 主删除/隐藏时，catalog 里的 approved 数据不会自动失效，App 点开就表现为"加载失败"（`view 失败(-404)` / `62002 稿件不可见`）。
+
+- **巡检脚本**：`scripts/check-bilibili-catalog.py`（在可访问 B 站的开发机跑；服务器 IP 会被 B 站风控）。
+  - `--category movies` 限定分类、`--limit N` 每分类随机抽样（`--seed` 复现）、`--output` 落 JSON 报告；默认只报告不下架。
+  - 失效判定口径：`-404`（视频不存在）= gone；`62002/62012`（稿件不可见/审核中）= invisible；`-352/-412/-403/429` 是风控，不算条目失效（脚本会暂停 30s，连续 3 次中止，避免误下架）。
+  - 分P条目（`bvid_pN`）按主 bvid 校验；报告里保留原始 videoId 供下架。
+- **下架**：用 `/internal/catalog/review` 软 reject（`status=rejected`，可人工重新 approve），**不要硬删**（`/internal/catalog/delete` 只用于确需彻底移除的成员）。
+  - `/internal/*` 不对公网暴露（nginx 直接 404）：`--apply` 只能在能直达 media_server 的地方执行（服务器上 `docker compose exec -T media_server wget` 或本机 SSH 隧道到容器 8787）。
+  - 操作前先备份（部署侧 `make backup`，见 deploy/README.md）。
+- 频率：发版前走查伴随跑一次；用户反馈"某类视频打不开"时先跑它定位是数据问题还是解析链路问题。
+
 ## YouTube 解析（App 播放链路）
 
 - 1080P+ 常见形态是"纯视频 DASH 轨 + 纯音频轨"：`/providers/youtube/resolve` 的 option 会带 `audioUrl`/`audioMimeType`，App 端 `PlaybackMediaSourceFactory` 读 MediaItem extras 后用 `MergingMediaSource` 合流（MediaController 不能直接传 MediaSource）。
