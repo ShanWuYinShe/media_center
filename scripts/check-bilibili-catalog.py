@@ -40,15 +40,24 @@ GONE_CODES = {-404}
 INVISIBLE_CODES = {62002, 62012}
 
 
+def request_headers(extra=None):
+    """所有请求统一带 UA:Cloudflare 对无 UA 的 urllib 请求直接 403(公开分类接口也会)。"""
+    headers = {"User-Agent": UA}
+    if extra:
+        headers.update(extra)
+    return headers
+
+
 def http_json(url, headers=None, timeout=20):
-    req = urllib.request.Request(url, headers=headers or {})
+    req = urllib.request.Request(url, headers=request_headers(headers))
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode())
 
 
 def http_post_json(url, payload, headers, timeout=30):
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=data, headers={**headers, "Content-Type": "application/json"},
+    req = urllib.request.Request(url, data=data,
+                                 headers={**request_headers(headers), "Content-Type": "application/json"},
                                  method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode())
