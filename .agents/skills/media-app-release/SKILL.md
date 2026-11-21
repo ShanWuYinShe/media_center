@@ -39,3 +39,46 @@ APK 有 **normal + legacy 两个变体**：normal 源码即本目录；legacy �
   （versionCode / versionName / SHA256 / apkFilename）。
 - **自动化（推荐）**：仓库变量 `ENABLE_AUTO_DEPLOY=true` 且配置 deploy secrets 时，发版 workflow 自动把 APK 与两份 manifest 写入该目录（normal 与 legacy 各自保留最近 5 个版本化 APK；manifest 热加载，无需重启）；手动上传仅作兜底。
 - **一键脚本**：`scripts/release-apk.sh` 完成构建 + 命名 + manifest 生成（+ 可选 scp 上传）；GitHub Actions workflow 以 `--out` 调用同一脚本。脚本头部注释是 manifest 字段与完整流程的唯一维护处，本文件不重复。
+
+## 发布后模拟器走查（发版门禁的最后一步）
+
+发版（tag → CI → 自动部署）完成后、通知用户升级前，在模拟器装**正式签名 APK**走一遍核心链路。v1.19.0/v1.19.1 两次走查各发现一个真 bug（空查询卡骨架、热词擦边），证明这一步不可省。
+
+### 取 APK 与核对（防装错变体）
+
+```bash
+# 从服务器更新通道取（normal 的文件名以 app-update.json 的 apkFilename 为准；scp 通配符
+# 会同时匹配 normal+legacy 两个变体并把目标当目录,必须用精确文件名）:
+scp workwork-server:media_center/deploy/data/generated/<apkFilename> /tmp/app.apk
+# 或从 GitHub Release 取: gh release download vX.Y.Z --pattern 'media-center-app-normal-*'
+BT=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+"$ANDROID_HOME/build-tools/$BT/aapt2" dump badging /tmp/app.apk | grep -E "^package:|launchable-activity"
+```
+
+变体判别：normal 的 launchable-activity 是 `ComposeActivity`，legacy 是 `MainActivity`——装错变体会"安装成功但走查的代码对不上"。
+
+### 模拟器与安装
+
+```bash
+"$ANDROID_HOME/emulator/emulator" -avd MediaCenterTV -no-window -no-audio -no-boot-anim -no-snapshot-save &
+adb wait-for-device   # 不等于系统可用
+adb -s emulator-5554 shell getprop sys.boot_completed   # 轮询到 1
+adb -s emulator-5554 install -r -t /tmp/app.apk
+adb -s emulator-5554 shell dumpsys package com.example.mediacenter | grep versionName
+adb -s emulator-5554 shell am start -W -n com.example.mediacenter/.ComposeActivity   # legacy 用 .MainActivity
+```
+
+### 走查检查单（发现过真 bug 的项标 ★）
+
+- ★ 搜索页**空输入直接按确认键**：必须留在空态。回归过一次卡死骨架的 bug（pending 标记 + 空提交组合）。
+- ★ 搜索热词点选出结果：确认热词内容与当前搜索语义匹配（B 站已改全站搜索，热词须家庭友好，见 media_app AGENTS.md）。
+- ★ 首页分类标签按 **UP**：焦点应直接落顶栏「设置」（normal 与 legacy 都修过 UP 被吞的问题）。
+- YouTube 源封面全部显示（走服务端缩略图代理）；选一个视频播放到出画面（走播放流中转，冷解析 25–30s 属正常）。
+- B 站源播放（本地 WBI 解析链路）。
+- 离开播放页返回首页：焦点恢复到离开前的卡片。
+
+### 判定与收尾
+
+- 「真的跑起来了」要**截图 + 前台 Activity + 进程 PID 三者交叉**（见 android-emulator-debug skill）。
+- 结果判定优先看 `Perf:` 日志链（resolve → controller connected → prepared → first frame），不是只看 UI。
+- 收尾必须 `adb emu kill` 并确认 `adb devices` 里模拟器消失；删除 /tmp 下的 APK 与截图。
