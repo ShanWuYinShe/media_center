@@ -18,6 +18,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.currentCoroutineContext
+import android.content.Intent
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -32,9 +33,13 @@ class AppUpdateManager(
     private val context: Context,
     private val api: MediaApi,
     private val client: OkHttpClient = AppHttpClient.shared,
+    // PackageInstaller 需要用户确认时的确认 Intent 回调:**必须由前台 Activity 启动**
+    // (Android 9+ 的后台 Activity 启动限制会静默拦截 receiver 里的 startActivity,
+    // 模拟器实测确认框不出现)。
+    private val onPendingUserAction: (Intent) -> Unit = {},
 ) {
     // APK 安装逻辑(三种安装方式 + 权限引导)拆到独立类,本类只做版本检查/下载/校验。
-    private val installer = ApkInstaller(context)
+    private val installer = ApkInstaller(context, onPendingUserAction = onPendingUserAction)
 
     private companion object {
         // 进程级共享:首页与设置页各自构造 AppUpdateManager 实例,实例级 Mutex 不互斥——
