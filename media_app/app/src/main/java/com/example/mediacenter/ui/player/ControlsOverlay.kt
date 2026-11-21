@@ -303,12 +303,21 @@ internal fun PlaybackOptionsDialog(
     val qualities = playbackResult.availableQualities
     val currentQn = playbackResult.options.firstOrNull()?.qn
     val firstFocus = remember { FocusRequester() }
+    val qualityFocus = remember { FocusRequester() }
+    val closeButtonFocus = remember { FocusRequester() }
     val pagesState = rememberLazyListState()
+    val hasEpisodes = pages.totalPages > 1
+    val hasQualities = qualities.size > 1
     LaunchedEffect(Unit) {
-        if (pages.totalPages > 1) {
+        if (hasEpisodes) {
             runCatching { pagesState.scrollToItem(pages.currentPage) }
         }
-        runCatching { firstFocus.requestFocus() }
+        val target = when {
+            hasEpisodes -> firstFocus
+            hasQualities -> qualityFocus
+            else -> closeButtonFocus
+        }
+        runCatching { target.requestFocus() }
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -317,7 +326,7 @@ internal fun PlaybackOptionsDialog(
         },
         text = {
             Column(verticalArrangement = LayoutArrangement.spacedBy(14.dp)) {
-                if (pages.totalPages > 1) {
+                if (hasEpisodes) {
                     Text(
                         text = "选集",
                         color = TextSecondary,
@@ -326,6 +335,12 @@ internal fun PlaybackOptionsDialog(
                     LazyRow(
                         state = pagesState,
                         horizontalArrangement = LayoutArrangement.spacedBy(8.dp),
+                        // 选集行向下明确指向清晰度行(或无清晰度时直通关闭按钮):
+                        // 当集数较多滚到靠右(如第 20 集)时,下方若无垂直对齐的清晰度项,
+                        // 2D 空间导航会搜空导致焦点卡死在选集行出不来。
+                        modifier = Modifier.focusProperties {
+                            down = if (hasQualities) qualityFocus else closeButtonFocus
+                        },
                     ) {
                         itemsIndexed(
                             items = pages.pageTitles,
@@ -349,17 +364,25 @@ internal fun PlaybackOptionsDialog(
                         }
                     }
                 }
-                if (qualities.size > 1) {
+                if (hasQualities) {
                     Text(
                         text = "清晰度",
                         color = TextSecondary,
                         style = MaterialTheme.typography.titleMedium,
                     )
-                    LazyRow(horizontalArrangement = LayoutArrangement.spacedBy(8.dp)) {
+                    LazyRow(
+                        horizontalArrangement = LayoutArrangement.spacedBy(8.dp),
+                        // 清晰度行向上返回当前选集,向下直达关闭按钮
+                        modifier = Modifier.focusProperties {
+                            if (hasEpisodes) up = firstFocus
+                            down = closeButtonFocus
+                        },
+                    ) {
                         itemsIndexed(
                             items = qualities,
                             key = { _, quality -> quality.qn },
                         ) { index, quality ->
+                            val isCurrentQuality = quality.qn == currentQn || (currentQn == null && index == 0)
                             TvChip(
                                 label = quality.label,
                                 selected = quality.qn == currentQn,
@@ -368,8 +391,8 @@ internal fun PlaybackOptionsDialog(
                                     onDismiss()
                                 },
                                 modifier = Modifier.then(
-                                    if (pages.totalPages <= 1 && quality.qn == currentQn) {
-                                        Modifier.focusRequester(firstFocus)
+                                    if (isCurrentQuality) {
+                                        Modifier.focusRequester(qualityFocus)
                                     } else {
                                         Modifier
                                     },
@@ -381,7 +404,15 @@ internal fun PlaybackOptionsDialog(
             }
         },
         confirmButton = {
-            TvDialogButton(label = "关闭", onClick = onDismiss)
+            TvDialogButton(
+                label = "关闭",
+                onClick = onDismiss,
+                modifier = Modifier
+                    .focusRequester(closeButtonFocus)
+                    .focusProperties {
+                        up = if (hasQualities) qualityFocus else if (hasEpisodes) firstFocus else FocusRequester.Default
+                    },
+            )
         },
         containerColor = CardGray,
     )

@@ -42,6 +42,7 @@ fun EmptyStateView(
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
     autoFocusAction: Boolean = false,
+    actionFocusRequester: FocusRequester? = null,
 ) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -77,12 +78,13 @@ fun EmptyStateView(
             }
             if (actionLabel != null && onAction != null) {
                 Spacer(Modifier.height(20.dp))
-                val actionFocus = remember { FocusRequester() }
-                LaunchedEffect(Unit) { if (autoFocusAction) actionFocus.requestFocus() }
+                val internalFocus = remember { FocusRequester() }
+                val resolvedFocus = actionFocusRequester ?: internalFocus
+                LaunchedEffect(Unit) { if (autoFocusAction) resolvedFocus.requestFocus() }
                 TvActionButton(
                     label = actionLabel,
                     onClick = onAction,
-                    modifier = Modifier.focusRequester(actionFocus),
+                    modifier = Modifier.focusRequester(resolvedFocus),
                 )
             }
         }

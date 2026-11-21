@@ -3,6 +3,7 @@ package com.example.mediacenter.ui.settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -28,6 +29,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -170,6 +173,10 @@ fun SettingsScreen(onBack: () -> Unit) {
         )
     }
 
+    val confirmDialogFocus = remember { FocusRequester() }
+    LaunchedEffect(confirmAction) {
+        if (confirmAction != null) confirmDialogFocus.requestFocus()
+    }
     confirmAction?.let { action ->
         AlertDialog(
             onDismissRequest = { confirmAction = null },
@@ -183,6 +190,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                         action.onConfirm()
                         confirmAction = null
                     },
+                    modifier = Modifier.focusRequester(confirmDialogFocus),
                 )
             },
             dismissButton = {
@@ -192,6 +200,10 @@ fun SettingsScreen(onBack: () -> Unit) {
         )
     }
 
+    val logsDialogFocus = remember { FocusRequester() }
+    LaunchedEffect(showLogs) {
+        if (showLogs) logsDialogFocus.requestFocus()
+    }
     if (showLogs) {
         AlertDialog(
             onDismissRequest = { showLogs = false },
@@ -207,7 +219,12 @@ fun SettingsScreen(onBack: () -> Unit) {
                 )
             },
             confirmButton = {
-                TvDialogButton(label = "关闭", primary = true, onClick = { showLogs = false })
+                TvDialogButton(
+                    label = "关闭",
+                    primary = true,
+                    onClick = { showLogs = false },
+                    modifier = Modifier.focusRequester(logsDialogFocus),
+                )
             },
             containerColor = CardGray,
         )
@@ -241,7 +258,10 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
         }
 
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 32.dp),
+        ) {
             item {
                 SectionTitle("关于")
                 InfoRow("版本", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
@@ -258,8 +278,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                     onClick = { checkForUpdate() },
                 )
             }
+            item { SectionTitle("数据") }
             item {
-                SectionTitle("数据")
                 ActionRow(
                     label = "清除断点续播记录",
                     onClick = {
@@ -273,6 +293,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                         )
                     },
                 )
+            }
+            item {
                 ActionRow(
                     label = "清除观看历史",
                     onClick = {
@@ -286,6 +308,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                         )
                     },
                 )
+            }
+            item {
                 ActionRow(
                     label = "清除搜索历史",
                     onClick = {
@@ -299,6 +323,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                         )
                     },
                 )
+            }
+            item {
                 ActionRow(
                     label = "清除更新缓存",
                     onClick = {
@@ -309,6 +335,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                         )
                     },
                 )
+            }
+            item {
                 val sizeLabel = mediaCacheBytes?.takeIf { bytes -> bytes > 0 }
                     ?.let { bytes ->
                         val mb = bytes / 1024 / 1024
@@ -325,6 +353,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                         )
                     },
                 )
+            }
+            item {
                 ActionRow(
                     label = "清除日志",
                     onClick = {

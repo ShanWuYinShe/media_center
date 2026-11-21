@@ -24,6 +24,7 @@ fun ErrorView(
     message: String,
     onRetry: (() -> Unit)? = null,
     autoFocusRetry: Boolean = false,
+    retryFocusRequester: FocusRequester? = null,
 ) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
@@ -43,14 +44,15 @@ fun ErrorView(
                 Spacer(Modifier.height(16.dp))
                 // 全屏错误层出现时遥控器焦点常常无处落；autoFocusRetry 把焦点
                 // 明确放到“重试”上，用户直接按 OK 即可重试。
-                val retryFocus = remember { FocusRequester() }
-                LaunchedEffect(Unit) { if (autoFocusRetry) retryFocus.requestFocus() }
+                val internalFocus = remember { FocusRequester() }
+                val resolvedFocus = retryFocusRequester ?: internalFocus
+                LaunchedEffect(Unit) { if (autoFocusRetry) resolvedFocus.requestFocus() }
                 // tv Button + 项目统一焦点态(聚焦 Apple Blue 底/白字),替代 M3
                 // OutlinedButton 的弱焦点指示,与 SelectChip/ActionRow 视觉一致。
                 TvActionButton(
                     label = "重试",
                     onClick = onRetry,
-                    modifier = Modifier.focusRequester(retryFocus),
+                    modifier = Modifier.focusRequester(resolvedFocus),
                 )
             }
         }
