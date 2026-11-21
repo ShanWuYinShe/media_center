@@ -189,6 +189,20 @@ class AppUpdateManager(
                 override fun onReceive(ctx: Context, intent: Intent) {
                     val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
                     AppLog.i("Update", "install result: status=$status")
+                    // STATUS_PENDING_USER_ACTION = 系统需要用户确认(应用没有静默安装
+                    // 权限时必然出现):EXTRA_INTENT 里携带确认对话框,必须启动它——
+                    // 否则对话框永远不出现,更新下载完成后静默卡死不装(模拟器实测)。
+                    // 此时不能注销 receiver:用户在对话框确认后,最终状态广播还会再来。
+                    if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+                        @Suppress("DEPRECATION")
+                        val confirm = intent.getParcelableExtra<android.content.Intent>(android.content.Intent.EXTRA_INTENT)
+                        if (confirm != null) {
+                            confirm.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            runCatching { ctx.startActivity(confirm) }
+                            return
+                        }
+                        AppLog.w("Update", "pending user action but no confirmation intent")
+                    }
                     ctx.unregisterReceiver(this)
                     installReceiver = null
                 }
