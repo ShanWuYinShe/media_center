@@ -16,6 +16,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -219,15 +220,29 @@ fun SearchScreen(
                 },
             ),
             trailingIcon = {
-                if (state.query.isNotEmpty()) {
-                    TvIconButton(
-                        onClick = {
-                            viewModel.clear()
-                            searchFocus.requestFocus()
-                        },
-                        contentDescription = "清除搜索",
-                    ) {
-                        Icon(Icons.Default.Close, contentDescription = null, tint = TextSecondary)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (state.query.isNotEmpty()) {
+                        TvIconButton(
+                            onClick = {
+                                viewModel.clear()
+                                searchFocus.requestFocus()
+                            },
+                            contentDescription = "清除搜索",
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = null, tint = TextSecondary)
+                        }
+                    }
+                    if (state.query.trim().length >= 2) {
+                        TvIconButton(
+                            onClick = {
+                                keyboardController?.hide()
+                                focusResultsAfterHotWord = true
+                                viewModel.submit(state.query)
+                            },
+                            contentDescription = "搜索",
+                        ) {
+                            Icon(Icons.Default.Search, contentDescription = null, tint = AppleBlue)
+                        }
                     }
                 }
             },
@@ -269,7 +284,11 @@ fun SearchScreen(
             state.error != null -> ErrorView(
                 message = state.error!!,
                 modifier = Modifier.fillMaxSize(),
-                onRetry = { viewModel.submit(state.query) },
+                onRetry = {
+                    keyboardController?.hide()
+                    focusResultsAfterHotWord = true
+                    viewModel.submit(state.query)
+                },
                 autoFocusRetry = true,
                 retryFocusRequester = emptyActionFocus,
             )

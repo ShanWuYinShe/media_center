@@ -65,6 +65,7 @@ import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.TextSecondary
 import com.example.mediacenter.ui.theme.TextTertiary
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -76,6 +77,12 @@ fun SettingsScreen(onBack: () -> Unit) {
     BackHandler(onBack = onBack)
 
     var feedback by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(feedback) {
+        if (feedback != null) {
+            delay(3000)
+            feedback = null
+        }
+    }
     var confirmAction by remember { mutableStateOf<ConfirmAction?>(null) }
     var showLogs by remember { mutableStateOf(false) }
     var logs by remember { mutableStateOf("") }
