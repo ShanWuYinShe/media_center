@@ -133,7 +133,19 @@ fun PagedVideoGrid(
         ),
         horizontalArrangement = Arrangement.spacedBy(CardSpacing),
         verticalArrangement = Arrangement.spacedBy(CardSpacing),
-        modifier = modifier.fillMaxWidth().focusRestorer(),
+        // 网格顶栏向上统一指向当前分类标签(或搜索框):第一排任意列卡片向上脱离
+        // 网格时,事件冒泡到网格容器级声明的目标,避免 2D 空间搜索落入正上方的
+        // 其他分类标签导致意外自动切类。第二排及后续卡片仍正常在网格内向上翻行。
+        modifier = modifier
+            .fillMaxWidth()
+            .focusRestorer()
+            .then(
+                if (firstItemUpFocusRequester != null) {
+                    Modifier.focusProperties { up = firstItemUpFocusRequester }
+                } else {
+                    Modifier
+                },
+            ),
     ) {
         itemsIndexed(items, key = { _, video -> video.id }) { index, video ->
             val firstModifier = if (index == 0) {

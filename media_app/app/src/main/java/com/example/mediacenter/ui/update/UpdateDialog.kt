@@ -44,11 +44,15 @@ fun UpdateDialog(
     allowDismissDuringDownload: Boolean = false,
 ) {
     // 主按钮焦点路径:弹窗出现或状态切换时把遥控器焦点明确放到主操作上，
-    // 不依赖空间猜测(TV 焦点态约定);下载中主按钮禁用，不抢焦点。
+    // 不依赖空间猜测(TV 焦点态约定);下载中主按钮禁用，若允许后台下载则自动
+    // 将焦点转至“后台下载”操作，消除无处聚焦与盲操死胡同。
     val primaryFocus = remember { FocusRequester() }
-    LaunchedEffect(state) {
+    val dismissFocus = remember { FocusRequester() }
+    LaunchedEffect(state, allowDismissDuringDownload) {
         if (state !is UpdateDialogState.Downloading) {
             primaryFocus.requestFocus()
+        } else if (allowDismissDuringDownload) {
+            dismissFocus.requestFocus()
         }
     }
 
@@ -136,7 +140,11 @@ fun UpdateDialog(
                     TvDialogButton(label = "稍后", onClick = onDismiss)
                 }
                 allowDismissDuringDownload -> {
-                    TvDialogButton(label = "后台下载", onClick = onDismiss)
+                    TvDialogButton(
+                        label = "后台下载",
+                        onClick = onDismiss,
+                        modifier = Modifier.focusRequester(dismissFocus),
+                    )
                 }
             }
         },

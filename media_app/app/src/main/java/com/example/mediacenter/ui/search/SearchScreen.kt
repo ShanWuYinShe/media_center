@@ -115,9 +115,10 @@ fun SearchScreen(
         // 进入搜索页即聚焦输入框：遥控器第一下 OK 直接弹出 IME，不用先找输入框
         val searchFocus = remember { FocusRequester() }
         // 单行 TextField 会把方向键当作光标移动消费:显式把 DOWN 交给
-        // 热词/首个结果,否则输入后遥控器永远出不了输入框。
+        // 热词/首个结果/空态重试,否则输入后遥控器永远出不了输入框。
         val firstHotFocus = remember { FocusRequester() }
         val firstResultFocus = remember { FocusRequester() }
+        val emptyActionFocus = remember { FocusRequester() }
         // 热词点击后结果区(加载中)承接焦点:否则热词 chip 被移出组合,焦点
         // 会落回输入框重新弹出键盘,把结果/加载态整个遮住。
         val resultsFocus = remember { FocusRequester() }
@@ -183,10 +184,11 @@ fun SearchScreen(
                     val target = when {
                         state.query.length < 2 -> firstHotFocus
                         state.results.isNotEmpty() -> firstResultFocus
+                        state.error != null || state.results.isEmpty() -> emptyActionFocus
                         else -> null
                     }
                     if (target != null) {
-                        // 离开输入框即收起软键盘,把屏幕让给热词/结果。
+                        // 离开输入框即收起软键盘,把屏幕让给热词/结果/空态重试。
                         keyboardController?.hide()
                         target.requestFocus()
                         true
@@ -269,6 +271,7 @@ fun SearchScreen(
                 modifier = Modifier.fillMaxSize(),
                 onRetry = { viewModel.submit(state.query) },
                 autoFocusRetry = true,
+                retryFocusRequester = emptyActionFocus,
             )
             state.query.length < 2 -> Column(modifier = Modifier.fillMaxSize()) {
                 Text(
@@ -351,7 +354,11 @@ fun SearchScreen(
                 message = "没有找到相关视频",
                 detail = "换个关键词或视频源再试试",
                 actionLabel = "清空搜索",
-                onAction = { viewModel.clear() },
+                onAction = {
+                    viewModel.clear()
+                    searchFocus.requestFocus()
+                },
+                actionFocusRequester = emptyActionFocus,
             )
             else -> Column(modifier = Modifier.fillMaxSize()) {
                 Row(
