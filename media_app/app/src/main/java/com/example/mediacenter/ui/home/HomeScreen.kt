@@ -389,7 +389,7 @@ private fun WatchHistoryManageDialog(
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 TvDialogButton(
-                    text = "从继续观看中移除",
+                    label = "从继续观看中移除",
                     primary = true,
                     onClick = onRemove,
                     modifier = Modifier
@@ -400,7 +400,7 @@ private fun WatchHistoryManageDialog(
                         },
                 )
                 TvDialogButton(
-                    text = "重新从头播放",
+                    label = "重新从头播放",
                     primary = false,
                     onClick = onRestart,
                     modifier = Modifier
@@ -416,7 +416,7 @@ private fun WatchHistoryManageDialog(
         confirmButton = {},
         dismissButton = {
             TvDialogButton(
-                text = "取消",
+                label = "取消",
                 onClick = onDismiss,
                 modifier = Modifier
                     .focusRequester(cancelFocus)
