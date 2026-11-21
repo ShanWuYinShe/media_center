@@ -11,6 +11,7 @@ import com.example.mediacenter.data.PlaybackPrefetcher
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.PlaybackTuning
 import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.data.friendlyLoadMessage
 import com.example.mediacenter.data.parsePageId
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.player.PlaybackWarmup
@@ -241,11 +242,10 @@ class PlayerViewModel(
             )
             // B 站/服务端异常的 message 已是面向用户的中文具体原因(风控/无分P/
             // 令牌失效等),透出比固定文案可诊断——TV 上用户报错只有这一行字,
-            // "解析失败,请重试"无法区分是网络问题还是内容问题;其余异常
-            // (原始信息是英文技术细节)仍用通用友好文案。
+            // 接入统一的 friendlyLoadMessage 诊断 TLS 证书/时间错乱、DNS 污染或超时。
             val friendly = when (e) {
-                is BilibiliApiException, is ApiException -> e.message
-                else -> "播放地址解析失败，请重试"
+                is BilibiliApiException -> e.message
+                else -> e.friendlyLoadMessage("播放地址解析失败，请重试")
             }
             _uiState.value = _uiState.value.copy(isLoading = false, error = friendly)
         }

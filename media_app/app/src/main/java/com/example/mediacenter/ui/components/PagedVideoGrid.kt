@@ -69,6 +69,7 @@ fun PagedVideoGrid(
 ) {
     val gridState = rememberLazyGridState()
     val restoreFocusRequester = remember { FocusRequester() }
+    val retryFocus = remember { FocusRequester() }
     var restoreFocusDone by remember { mutableStateOf(false) }
     // 只在"刚进入页面"的短窗口内恢复焦点:同一组合内切分类/翻页导致列表变化时
     // 不能把焦点从分类标签抢到网格里。
@@ -136,12 +137,20 @@ fun PagedVideoGrid(
         // 网格顶栏向上统一指向当前分类标签(或搜索框):第一排任意列卡片向上脱离
         // 网格时,事件冒泡到网格容器级声明的目标,避免 2D 空间搜索落入正上方的
         // 其他分类标签导致意外自动切类。第二排及后续卡片仍正常在网格内向上翻行。
+        // 当底部加载更多失败时,最后一排任意列卡片向下离开网格统一跳至重试按钮。
         modifier = modifier
             .fillMaxWidth()
             .focusRestorer()
             .then(
                 if (firstItemUpFocusRequester != null) {
                     Modifier.focusProperties { up = firstItemUpFocusRequester }
+                } else {
+                    Modifier
+                },
+            )
+            .then(
+                if (loadMoreFailed) {
+                    Modifier.focusProperties { down = retryFocus }
                 } else {
                     Modifier
                 },
@@ -193,7 +202,9 @@ fun PagedVideoGrid(
                         TvActionButton(
                             label = "重试加载",
                             onClick = onRetryLoadMore,
-                            modifier = Modifier.requiredWidth(200.dp),
+                            modifier = Modifier
+                                .requiredWidth(200.dp)
+                                .focusRequester(retryFocus),
                         )
                     } else {
                         CircularProgressIndicator(color = AppleBlue, modifier = Modifier.padding(12.dp))
