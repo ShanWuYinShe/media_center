@@ -774,6 +774,16 @@ internal fun PlayerContent(
                         }
                         true
                     }
+                    Key.Escape -> {
+                        if (down) {
+                            if (showControls) {
+                                showControls = false
+                            } else {
+                                onBack()
+                            }
+                        }
+                        true
+                    }
                     else -> false
                 }
             },

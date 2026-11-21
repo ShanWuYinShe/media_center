@@ -19,6 +19,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -44,6 +45,7 @@ fun ProviderSelectDialog(
 ) {
     // 进入弹窗即聚焦当前源(TV:对齐"当前选中项",按 OK 不会误切到别的源)
     val currentFocus = remember { FocusRequester() }
+    val cancelFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { currentFocus.requestFocus() } }
     val currentEntryIndex = providers.indexOfFirst { it.id == currentProvider }
         .let { if (it >= 0) it else 0 }
@@ -58,6 +60,7 @@ fun ProviderSelectDialog(
             ) {
                 providers.forEachIndexed { index, provider ->
                     val isCurrent = provider.id == currentProvider
+                    val isLast = index == providers.lastIndex
                     Button(
                         shape = tvPillButtonShape(),
                         border = tvPillButtonBorder(),
@@ -68,6 +71,9 @@ fun ProviderSelectDialog(
                             .requiredHeight(48.dp)
                             .then(
                                 if (index == currentEntryIndex) Modifier.focusRequester(currentFocus) else Modifier,
+                            )
+                            .then(
+                                if (isLast) Modifier.focusProperties { down = cancelFocus } else Modifier,
                             ),
                         colors = ButtonDefaults.colors(
                             // 当前源非聚焦时用暗蓝 + 对勾图标；亮蓝只留给焦点态
@@ -99,7 +105,15 @@ fun ProviderSelectDialog(
             }
         },
         confirmButton = {
-            TvDialogButton(label = "取消", onClick = onDismiss)
+            TvDialogButton(
+                label = "取消",
+                onClick = onDismiss,
+                modifier = Modifier
+                    .focusRequester(cancelFocus)
+                    .focusProperties {
+                        up = currentFocus
+                    },
+            )
         },
         containerColor = CardGray,
     )
