@@ -30,7 +30,14 @@ import kotlinx.coroutines.withContext
  *
  * 安装结果通过 broadcast 回调记录日志;权限引导失败时降级到应用详情页。
  */
-class ApkInstaller(private val context: Context) {
+class ApkInstaller(
+    private val context: Context,
+    // STATUS_PENDING_USER_ACTION 时的确认 Intent 回调:**必须由前台 Activity 启动**。
+    // Android 9+ 的后台 Activity 启动限制会静默拦截 receiver 里的 startActivity
+    // (模拟器实测:无异常、无 ATM START 记录、对话框不出现),所以不能在 receiver
+    // 里直接启动;交给可见的 Activity 启动即豁免。
+    private val onPendingUserAction: (Intent) -> Unit,
+) {
     private var installReceiver: BroadcastReceiver? = null
     private val installAction = "${context.packageName}.INSTALL_RESULT"
     // 超时注销用主线程 Handler:BroadcastReceiver 注销本身线程安全,排期统一走主线程
@@ -144,15 +151,16 @@ class ApkInstaller(private val context: Context) {
                 val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
                 AppLog.i("Update", "install result: status=$status")
                 // STATUS_PENDING_USER_ACTION = 系统需要用户确认(应用没有静默安装
-                // 权限时必然出现):EXTRA_INTENT 里携带确认对话框,必须启动它——
-                // 否则对话框永远不出现,更新下载完成后静默卡死不装(模拟器实测)。
-                // 此时不能注销 receiver:用户在对话框确认后,最终状态广播还会再来。
+                // 权限时必然出现):EXTRA_INTENT 里携带确认对话框。**不能在这里直接
+                // startActivity**:receiver 属后台上下文,Android 9+ 的后台 Activity
+                // 启动限制会静默拦截(模拟器实测:无异常、无 ATM START 记录、对话框
+                // 不出现)。把 Intent 交给 onPendingUserAction 回调,由前台 Activity
+                // 启动;保留 receiver 等用户确认后的最终结果广播。
                 if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
                     @Suppress("DEPRECATION")
                     val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
                     if (confirm != null) {
-                        confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        runCatching { ctx.startActivity(confirm) }
+                        onPendingUserAction(confirm)
                         return
                     }
                     AppLog.w("Update", "pending user action but no confirmation intent")

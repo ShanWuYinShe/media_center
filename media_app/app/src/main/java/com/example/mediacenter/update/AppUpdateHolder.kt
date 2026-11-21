@@ -1,6 +1,7 @@
 package com.example.mediacenter.update
 
 import android.content.Context
+import android.content.Intent
 import com.example.mediacenter.data.AppUpdateInfo
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.ui.update.UpdateDialogState
@@ -36,6 +37,9 @@ object AppUpdateHolder {
         AppUpdateManager(
             requireNotNull(appContext) { "AppUpdateHolder.init must be called before first use" },
             MediaRepositoryHolder.updateApi,
+            onPendingUserAction = { confirm ->
+                _pendingConfirmIntent.value = confirm
+            },
         )
     }
 
@@ -44,6 +48,19 @@ object AppUpdateHolder {
 
     private val _updateState = MutableStateFlow<UpdateDialogState?>(null)
     val updateState: StateFlow<UpdateDialogState?> = _updateState.asStateFlow()
+
+    /**
+     * OTA 安装确认 Intent:PackageInstaller 需要用户确认时由 receiver 写入,
+     * **可见页面观察到非空必须立即 startActivity 它**(后台上下文启动会被
+     * Android 9+ 的 BAL 限制静默拦截,模拟器实测确认框不出现)。启动后置空。
+     */
+    private val _pendingConfirmIntent = MutableStateFlow<Intent?>(null)
+    val pendingConfirmIntent: StateFlow<Intent?> = _pendingConfirmIntent.asStateFlow()
+
+    /** 页面启动确认框后调用:清空状态,允许下一次更新确认。 */
+    fun consumePendingConfirmIntent() {
+        _pendingConfirmIntent.value = null
+    }
 
     @Volatile private var updateChecked = false
     @Volatile private var updateDownloading = false

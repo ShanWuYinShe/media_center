@@ -31,6 +31,10 @@ class AppUpdateManager(
     private val context: Context,
     private val api: MediaApi,
     private val client: OkHttpClient = AppHttpClient.shared,
+    // PackageInstaller 需要用户确认时的确认 Intent 回调:必须由前台 Activity 启动
+    // (Android 9+ 的后台 Activity 启动限制会静默拦截 receiver 里的 startActivity,
+    // 模拟器实测确认框不出现)。默认空实现保证既有调用方兼容。
+    private val onPendingConfirm: (android.content.Intent) -> Unit = {},
 ) {
     private var installReceiver: BroadcastReceiver? = null
     private val installAction = "${context.packageName}.INSTALL_RESULT"
@@ -189,16 +193,16 @@ class AppUpdateManager(
                 override fun onReceive(ctx: Context, intent: Intent) {
                     val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
                     AppLog.i("Update", "install result: status=$status")
-                    // STATUS_PENDING_USER_ACTION = 系统需要用户确认(应用没有静默安装
-                    // 权限时必然出现):EXTRA_INTENT 里携带确认对话框,必须启动它——
-                    // 否则对话框永远不出现,更新下载完成后静默卡死不装(模拟器实测)。
-                    // 此时不能注销 receiver:用户在对话框确认后,最终状态广播还会再来。
+                    // STATUS_PENDING_USER_ACTION = 系统需要用户确认:EXTRA_INTENT 里
+                    // 携带确认对话框,**必须由前台 Activity 启动**(receiver 属后台
+                    // 上下文,BAL 限制会静默拦截 startActivity,模拟器实测确认框
+                    // 不出现)。转发给回调,由 MainActivity 启动;保留 receiver 等
+                    // 用户确认后的最终结果广播。
                     if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
                         @Suppress("DEPRECATION")
                         val confirm = intent.getParcelableExtra<android.content.Intent>(android.content.Intent.EXTRA_INTENT)
                         if (confirm != null) {
-                            confirm.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                            runCatching { ctx.startActivity(confirm) }
+                            onPendingConfirm(confirm)
                             return
                         }
                         AppLog.w("Update", "pending user action but no confirmation intent")

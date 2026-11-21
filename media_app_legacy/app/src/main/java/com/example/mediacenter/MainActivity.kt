@@ -133,7 +133,15 @@ class MainActivity : ComponentActivity() {
 
         root = FrameLayout(this)
         setContentView(root)
-        appUpdateManager = AppUpdateManager(this, MediaApi(BuildConfig.MEDIA_SERVER_URL))
+        appUpdateManager = AppUpdateManager(
+            this,
+            MediaApi(BuildConfig.MEDIA_SERVER_URL),
+            onPendingConfirm = { confirm ->
+                // 确认框必须由前台 Activity 启动(BAL 限制);本 Activity 正在前台。
+                runCatching { startActivity(confirm) }
+                    .onFailure { AppLog.w("Update", "launch install confirm failed: " + it.message, it) }
+            },
+        )
 
         onBackPressedDispatcher.addCallback(
             this,

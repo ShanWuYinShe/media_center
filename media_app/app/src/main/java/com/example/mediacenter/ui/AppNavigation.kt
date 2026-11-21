@@ -12,7 +12,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -25,6 +28,7 @@ import com.example.mediacenter.ui.player.PlayerScreen
 import com.example.mediacenter.ui.search.SearchScreen
 import com.example.mediacenter.ui.settings.SettingsScreen
 import com.example.mediacenter.ui.theme.BackgroundDark
+import com.example.mediacenter.update.AppUpdateHolder
 import com.example.mediacenter.util.DevicePerformance
 import kotlinx.serialization.json.Json
 
@@ -87,6 +91,16 @@ private val videoSummaryType = object : NavType<VideoSummary>(isNullableAllowed 
 
 @Composable
 fun AppNavigation() {
+    // OTA 安装确认:PackageInstaller 需要用户确认时,确认框必须由前台 Activity 启动
+    // (后台 receiver 启动会被 Android 9+ 的 BAL 限制静默拦截)。观察到非空立即启动并置空。
+    val pendingConfirm by AppUpdateHolder.pendingConfirmIntent.collectAsStateWithLifecycle()
+    val activityContext = LocalContext.current
+    LaunchedEffect(pendingConfirm) {
+        val intent = pendingConfirm ?: return@LaunchedEffect
+        runCatching { activityContext.startActivity(intent) }
+        AppUpdateHolder.consumePendingConfirmIntent()
+    }
+
     val navController = rememberNavController()
     // 转场:NavHost 默认是较长的交叉淡入淡出,10ft 观看距离下偏拖沓,
     // 换页时上一屏会明显压住下一屏。统一收敛为短淡入淡出(navEnter/navExit),
