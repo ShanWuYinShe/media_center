@@ -105,6 +105,7 @@ fun HomeScreen(
     // 顶栏「搜索」按钮同样可被 UP 命中:焦点落在顶栏区后左右键在
     // 视频源/设置/搜索之间移动即可。
     val topBarSearchFocus = remember { FocusRequester() }
+    val emptyActionFocus = remember { FocusRequester() }
     // 记住离开首页前停在哪张卡片：从详情/播放/搜索返回时恢复到该卡片，
     // 不要把焦点丢给顶栏按钮(此前返回后会落在"设置/搜索"上，还要按方向键找回)。
     var lastFocusedVideoId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -172,12 +173,21 @@ fun HomeScreen(
             searchFocusRequester = topBarSearchFocus,
             settingsFocusRequester = topBarSettingsFocus,
         )
+        val firstNormalCategory = state.categories.firstOrNull()
+        val downFocusRequester = when {
+            hasGridContent -> gridFirstFocus
+            state.error != null -> emptyActionFocus
+            showingContinue -> if (firstNormalCategory != null) emptyActionFocus else null
+            state.items.isEmpty() -> emptyActionFocus
+            else -> null
+        }
+
         HomeCategoryTabs(
             tabs = tabs,
             selectedId = state.selectedTab,
             onSelect = viewModel::selectTab,
             selectedFocusRequester = selectedTabFocus,
-            firstCardDownFocusRequester = if (hasGridContent) gridFirstFocus else null,
+            firstCardDownFocusRequester = downFocusRequester,
             modifier = Modifier.fillMaxWidth(),
             // 任意分类标签按 UP 都能进入顶栏(此前只能一路右移到最右侧)。
             upFocusRequester = topBarSettingsFocus,
@@ -217,6 +227,7 @@ fun HomeScreen(
                     message = state.error!!,
                     onRetry = viewModel::retry,
                     autoFocusRetry = true,
+                    retryFocusRequester = emptyActionFocus,
                     modifier = Modifier.fillMaxSize(),
                 )
                 showingContinue -> {
@@ -224,6 +235,13 @@ fun HomeScreen(
                         EmptyStateView(
                             message = "还没有观看记录",
                             detail = "看过的视频会自动出现在这里，方便接着看",
+                            actionLabel = if (firstNormalCategory != null) "浏览推荐" else null,
+                            onAction = if (firstNormalCategory != null) {
+                                { viewModel.selectTab(firstNormalCategory.id) }
+                            } else {
+                                null
+                            },
+                            actionFocusRequester = emptyActionFocus,
                             modifier = Modifier.fillMaxSize(),
                         )
                     } else {
@@ -263,6 +281,9 @@ fun HomeScreen(
                     } else {
                         "服务端还没有已上线的视频"
                     },
+                    actionLabel = if (state.currentProvider == "youtube") "去搜索" else "刷新",
+                    onAction = if (state.currentProvider == "youtube") onSearchClick else viewModel::retry,
+                    actionFocusRequester = emptyActionFocus,
                     modifier = Modifier.fillMaxSize(),
                 )
                 else -> PagedVideoGrid(

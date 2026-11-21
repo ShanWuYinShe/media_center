@@ -104,11 +104,21 @@ fun TopBar(
             TvChip(
                 label = "设置",
                 onClick = onSettingsClick,
-                modifier = if (settingsFocusRequester != null) {
-                    Modifier.focusRequester(settingsFocusRequester)
-                } else {
-                    Modifier
-                },
+                modifier = Modifier
+                    .then(
+                        if (settingsFocusRequester != null) {
+                            Modifier.focusRequester(settingsFocusRequester)
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .then(
+                        if (searchDownFocusRequester != null) {
+                            Modifier.focusProperties { down = searchDownFocusRequester }
+                        } else {
+                            Modifier
+                        },
+                    ),
                 leading = {
                     Icon(
                         Icons.Default.Settings,

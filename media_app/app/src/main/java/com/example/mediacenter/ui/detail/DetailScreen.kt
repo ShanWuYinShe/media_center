@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.painter.ColorPainter
@@ -139,19 +140,31 @@ fun DetailScreen(
                 ),
         )
 
+        val backFocus = remember { FocusRequester() }
+        val playFocus = remember { FocusRequester() }
+        val descFocus = remember { FocusRequester() }
+        var descOverflowed by remember(video.id) { mutableStateOf(false) }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = ScreenHorizontalPadding, vertical = 24.dp),
         ) {
             // 顶栏:返回 + 来源标识。TV 上给 BACK 键一个可见的对应控件,
-            // 不依赖用户记住遥控器按键。
+            // 不依赖用户记住遥控器按键;与下方主操作建立 D-pad 连通拓扑。
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                TvBackButton(onClick = onBack)
+                TvBackButton(
+                    onClick = onBack,
+                    modifier = Modifier
+                        .focusRequester(backFocus)
+                        .focusProperties {
+                            down = if (descOverflowed) descFocus else playFocus
+                        },
+                )
                 Text(
                     text = providerDisplayName(provider),
                     color = TextSecondary,
@@ -269,8 +282,7 @@ fun DetailScreen(
                     val desc = video.description.orEmpty()
                     // 只按真实文本布局判断是否溢出,固定折叠 3 行,不在原布局内展开。
                     // 必须用 hasVisualOverflow:maxLines=3 时 lineCount 恒 <=3,"行数>3"永远为 false,
-                    // 披露按钮会永不出现。remember 带 video.id:换视频时重置溢出状态。
-                    var descOverflowed by remember(video.id) { mutableStateOf(false) }
+                    // 披露按钮会永不出现。
                     Text(
                         desc.ifEmpty { "暂无简介" },
                         color = TextSecondary,
@@ -282,7 +294,16 @@ fun DetailScreen(
                     if (descOverflowed) {
                         var showFullDesc by remember { mutableStateOf(false) }
                         Spacer(Modifier.height(8.dp))
-                        TvChip(label = "查看完整简介", onClick = { showFullDesc = true })
+                        TvChip(
+                            label = "查看完整简介",
+                            onClick = { showFullDesc = true },
+                            modifier = Modifier
+                                .focusRequester(descFocus)
+                                .focusProperties {
+                                    up = backFocus
+                                    down = playFocus
+                                },
+                        )
                         if (showFullDesc) {
                             FullDescriptionDialog(
                                 title = video.title,
@@ -294,7 +315,6 @@ fun DetailScreen(
                     Spacer(Modifier.height(24.dp))
                     // 主操作(播放)获得进入时焦点：简介溢出时上方还有"查看完整简介"按钮，
                     // 不指定焦点路径遥控器会先落在那里，多按一次才能到播放。
-                    val playFocus = remember { FocusRequester() }
                     LaunchedEffect(video.id) { playFocus.requestFocus() }
                     TvActionButton(
                         label = if (hintText != null) "继续播放" else "播放",
@@ -317,8 +337,13 @@ fun DetailScreen(
                             onPlay(lastWatchedPage)
                         },
                         // TV 详情主操作固定宽度:铺满右栏会变成一条横贯屏幕的蓝带,
-                        // 压过封面与标题的视觉重心。
-                        modifier = Modifier.width(300.dp).focusRequester(playFocus),
+                        // 压过封面与标题的视觉重心;向上方向显式打通至披露按钮或返回键。
+                        modifier = Modifier
+                            .width(300.dp)
+                            .focusRequester(playFocus)
+                            .focusProperties {
+                                up = if (descOverflowed) descFocus else backFocus
+                            },
                     )
                 }
             }

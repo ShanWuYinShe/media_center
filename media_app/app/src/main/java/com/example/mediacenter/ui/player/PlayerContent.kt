@@ -690,28 +690,28 @@ internal fun PlayerContent(
                 val down = event.type == KeyEventType.KeyDown
                 val up = event.type == KeyEventType.KeyUp
                 when (event.key) {
-                    Key.DirectionLeft -> {
+                    Key.DirectionLeft, Key.MediaRewind -> {
                         if (down) {
                             seekBy(-SEEK_STEP_MS)
                             revealControls()
                         }
                         true
                     }
-                    Key.DirectionRight -> {
+                    Key.DirectionRight, Key.MediaFastForward -> {
                         if (down) {
                             seekBy(SEEK_STEP_MS)
                             revealControls()
                         }
                         true
                     }
-                    Key.DirectionUp -> {
+                    Key.DirectionUp, Key.MediaPrevious -> {
                         if (down) {
                             switchEpisode(next = false)
                             revealControls()
                         }
                         true
                     }
-                    Key.DirectionDown -> {
+                    Key.DirectionDown, Key.MediaNext -> {
                         if (down) {
                             switchEpisode(next = true)
                             revealControls()
@@ -746,14 +746,28 @@ internal fun PlayerContent(
                         }
                         true
                     }
-                    Key.MediaPlayPause -> {
+                    Key.MediaPlayPause, Key.Spacebar -> {
                         if (down) {
                             togglePlayback()
                             revealControls()
                         }
                         true
                     }
-                    Key.Menu -> {
+                    Key.MediaPlay -> {
+                        if (down) {
+                            if (!controller.isPlaying) controller.play()
+                            revealControls()
+                        }
+                        true
+                    }
+                    Key.MediaPause -> {
+                        if (down) {
+                            if (controller.isPlaying) controller.pause()
+                            revealControls()
+                        }
+                        true
+                    }
+                    Key.Menu, Key.Info -> {
                         if (down && hasOptions) {
                             showOptions = true
                             revealControls()
