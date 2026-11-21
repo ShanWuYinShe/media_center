@@ -8,6 +8,7 @@ import com.example.mediacenter.data.HomeSnapshot
 import com.example.mediacenter.data.HomeSnapshotStore
 import com.example.mediacenter.data.MediaRepositoryApi
 import com.example.mediacenter.data.MediaRepositoryHolder
+import com.example.mediacenter.data.PlaybackPositionStore
 import com.example.mediacenter.data.ProviderInfo
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.WatchEntry
@@ -213,6 +214,30 @@ class HomeViewModel(
                         page = page,
                     ),
                 )
+            }
+            refreshWatchHistory()
+        }
+    }
+
+    /** 移除单条观看历史(包含断点位置),并刷新列表。 */
+    fun removeWatchHistory(videoId: String) {
+        val context = MediaRepositoryHolder.applicationContext ?: return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                WatchHistory.remove(context, videoId)
+                PlaybackPositionStore.remove(context, videoId)
+            }
+            refreshWatchHistory()
+        }
+    }
+
+    /** 重置单条观看历史进度(清除断点,从头播放)。 */
+    fun restartWatchHistory(videoId: String) {
+        val context = MediaRepositoryHolder.applicationContext ?: return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                PlaybackPositionStore.remove(context, videoId)
+                WatchHistory.updatePosition(context, videoId, 0L, 0L, page = 0)
             }
             refreshWatchHistory()
         }

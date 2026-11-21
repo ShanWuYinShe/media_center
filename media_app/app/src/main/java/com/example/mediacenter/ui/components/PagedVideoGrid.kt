@@ -66,6 +66,7 @@ fun PagedVideoGrid(
     // id 不存在(数据刷新/换分类)时不处理,交由调用方的默认焦点逻辑兜底。
     initialFocusItemId: String? = null,
     onItemFocused: ((String) -> Unit)? = null,
+    onItemLongClick: ((VideoSummary) -> Unit)? = null,
 ) {
     val gridState = rememberLazyGridState()
     val restoreFocusRequester = remember { FocusRequester() }
@@ -187,6 +188,7 @@ fun PagedVideoGrid(
             VideoCard(
                 video = video,
                 onClick = { onItemClick(video) },
+                onLongClick = onItemLongClick?.let { callback -> { callback(video) } },
                 modifier = Modifier.fillMaxWidth().then(firstModifier).then(restoreModifier).then(focusedModifier),
                 progress = progressById[video.id],
             )

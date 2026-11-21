@@ -83,6 +83,15 @@ class SearchViewModel(
         _uiState.update { it.copy(history = entries) }
     }
 
+    /** 清空本地搜索历史(由搜索页"清空历史"触发)。 */
+    fun clearHistory() {
+        val context = MediaRepositoryHolder.applicationContext ?: return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { SearchHistory.clear(context) }
+            _uiState.update { it.copy(history = emptyList()) }
+        }
+    }
+
     /**
      * 输入框文本变化:**只更新文本，不发起搜索**。
      *

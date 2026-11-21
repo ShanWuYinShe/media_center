@@ -61,6 +61,12 @@ object WatchHistoryCore {
         return (listOf(stamped) + entries.filterNot { it.videoId == entry.videoId }).take(cap)
     }
 
+    /** 移除指定视频的观看历史。 */
+    fun remove(entries: List<WatchEntry>, videoId: String): List<WatchEntry> {
+        if (videoId.isBlank()) return entries
+        return entries.filterNot { it.videoId == videoId }
+    }
+
     /**
      * 回写播放进度:只更新已存在的条目(条目创建于详情页点击播放时,元数据齐全),
      * 提到最前;看完(时长已知且距结尾不足 15s)则移除。位置不足 30s 忽略。
@@ -138,6 +144,19 @@ object WatchHistory {
     /** 某视频最后观看的分页(0 起始,无记录/未登记返回 0)。 */
     fun pageOf(context: Context, videoId: String): Int =
         WatchHistoryCore.pageOf(entries(context), videoId)
+
+    /** 移除单条观看历史。 */
+    fun remove(context: Context, videoId: String) {
+        if (videoId.isBlank()) return
+        prefs(context).edit {
+            putString(
+                KEY_ENTRIES,
+                WatchHistoryCore.encode(
+                    WatchHistoryCore.remove(entries(context), videoId),
+                ),
+            )
+        }
+    }
 
     /** 清除全部观看历史(设置页"清除观看历史")。 */
     fun clear(context: Context) {
