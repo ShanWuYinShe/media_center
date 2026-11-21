@@ -69,6 +69,12 @@ object PlaybackPositionCore {
         if (durationMs > 0 && entry.positionMs >= durationMs - TAIL_IGNORE_MS) return 0L
         return entry.positionMs
     }
+
+    /** 移除指定视频的断点(包含单P及所有分P页码)。 */
+    fun remove(entries: Map<String, PositionEntry>, videoId: String): Map<String, PositionEntry> {
+        if (videoId.isBlank()) return entries
+        return entries.filterKeys { key -> key != videoId && !key.startsWith("$videoId#p") }
+    }
 }
 
 /**
@@ -125,6 +131,19 @@ object PlaybackPositionStore {
     /** 返回该视频可恢复的位置;没有记录/记录过期时返回 0。 */
     fun resumePosition(context: Context, videoId: String, durationMs: Long = 0L): Long =
         PlaybackPositionCore.resumePositionMs(entries(context), videoId, System.currentTimeMillis(), durationMs)
+
+    /** 移除指定视频的断点记录(包含所有分P)。 */
+    fun remove(context: Context, videoId: String) {
+        if (videoId.isBlank()) return
+        prefs(context).edit {
+            putString(
+                KEY_ENTRIES,
+                PlaybackPositionCore.encode(
+                    PlaybackPositionCore.remove(entries(context), videoId),
+                ),
+            )
+        }
+    }
 
     /** 清除全部断点续播记录(设置页"清除数据")。 */
     fun clear(context: Context) {

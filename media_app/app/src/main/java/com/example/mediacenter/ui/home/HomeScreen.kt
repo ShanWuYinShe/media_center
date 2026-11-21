@@ -3,12 +3,14 @@ package com.example.mediacenter.ui.home
 import android.app.Activity
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -22,7 +24,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -35,7 +40,9 @@ import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.PagedVideoGrid
 import com.example.mediacenter.ui.components.ProviderSelectDialog
 import com.example.mediacenter.ui.components.TopBar
+import com.example.mediacenter.ui.components.TvDialogButton
 import com.example.mediacenter.ui.components.VideoGridSkeleton
+import com.example.mediacenter.ui.theme.CardGray
 import com.example.mediacenter.ui.theme.ScreenHorizontalPadding
 import com.example.mediacenter.ui.theme.TextPrimary
 import com.example.mediacenter.ui.theme.TextSecondary
@@ -114,6 +121,7 @@ fun HomeScreen(
     // 记住离开首页前停在哪张卡片：从详情/播放/搜索返回时恢复到该卡片，
     // 不要把焦点丢给顶栏按钮(此前返回后会落在"设置/搜索"上，还要按方向键找回)。
     var lastFocusedVideoId by rememberSaveable { mutableStateOf<String?>(null) }
+    var managingContinueVideo by remember { mutableStateOf<VideoSummary?>(null) }
     val context = LocalContext.current
     var lastBackPressTime by remember { mutableLongStateOf(0L) }
     BackHandler {
@@ -278,6 +286,9 @@ fun HomeScreen(
                             onItemClick = { video ->
                                 onPlayVideo(video, continuePageById[video.id] ?: 0)
                             },
+                            onItemLongClick = { video ->
+                                managingContinueVideo = video
+                            },
                             onLoadMore = {},
                             isLoadingMore = false,
                             loadMoreFailed = false,
@@ -323,4 +334,97 @@ fun HomeScreen(
             }
         }
     }
+
+    if (managingContinueVideo != null) {
+        val targetVideo = managingContinueVideo!!
+        WatchHistoryManageDialog(
+            title = targetVideo.title,
+            onDismiss = { managingContinueVideo = null },
+            onRemove = {
+                viewModel.removeWatchHistory(targetVideo.id)
+                managingContinueVideo = null
+            },
+            onRestart = {
+                viewModel.restartWatchHistory(targetVideo.id)
+                managingContinueVideo = null
+                onPlayVideo(targetVideo, 0)
+            },
+        )
+    }
+}
+
+@Composable
+private fun WatchHistoryManageDialog(
+    title: String,
+    onDismiss: () -> Unit,
+    onRemove: () -> Unit,
+    onRestart: () -> Unit,
+) {
+    val removeFocus = remember { FocusRequester() }
+    val restartFocus = remember { FocusRequester() }
+    val cancelFocus = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        runCatching { removeFocus.requestFocus() }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                title,
+                color = TextPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    "管理该视频的观看记录与进度：",
+                    color = com.example.mediacenter.ui.theme.TextSecondary,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                TvDialogButton(
+                    text = "从继续观看中移除",
+                    primary = true,
+                    onClick = onRemove,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(removeFocus)
+                        .focusProperties {
+                            down = restartFocus
+                        },
+                )
+                TvDialogButton(
+                    text = "重新从头播放",
+                    primary = false,
+                    onClick = onRestart,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(restartFocus)
+                        .focusProperties {
+                            up = removeFocus
+                            down = cancelFocus
+                        },
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TvDialogButton(
+                text = "取消",
+                onClick = onDismiss,
+                modifier = Modifier
+                    .focusRequester(cancelFocus)
+                    .focusProperties {
+                        up = restartFocus
+                    },
+            )
+        },
+        containerColor = CardGray,
+    )
 }

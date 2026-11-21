@@ -46,6 +46,18 @@ class WatchHistoryCoreTest {
         assertEquals(entries, WatchHistoryCore.upsert(entries, entry(" ")))
     }
 
+    // ── remove ──
+
+    @Test
+    fun remove_removes_matching_entry_and_ignores_others() {
+        val entries = listOf(entry("a"), entry("b"), entry("c"))
+        val result = WatchHistoryCore.remove(entries, "b")
+        assertEquals(listOf("a", "c"), result.map { it.videoId })
+        // 空 id 或不存在的 id 不变
+        assertEquals(result, WatchHistoryCore.remove(result, " "))
+        assertEquals(result, WatchHistoryCore.remove(result, "non_existent"))
+    }
+
     // ── updateProgress ──
 
     @Test

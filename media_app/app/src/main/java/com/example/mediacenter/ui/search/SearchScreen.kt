@@ -302,12 +302,22 @@ fun SearchScreen(
                 // 最近搜索:优先展示本地历史,一键重搜(遥控器逐字输入成本高)。
                 val recent = state.history
                 if (recent.isNotEmpty()) {
-                    Text(
-                        "最近搜索",
-                        color = TextTertiary,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(bottom = 12.dp),
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "最近搜索",
+                            color = TextTertiary,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        TvChip(
+                            label = "清空历史",
+                            selected = false,
+                            onClick = { viewModel.clearHistory() },
+                        )
+                    }
                     recent.chunked(6).forEachIndexed { rowIndex, rowWords ->
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),

@@ -20,6 +20,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.painter.ColorPainter
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -42,6 +47,7 @@ fun VideoCard(
     video: VideoSummary,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
     progress: Float? = null,
 ) {
     // 不用 requiredWidth/requiredHeight 钉死尺寸——会让卡片在 CategoryVideosScreen
@@ -49,7 +55,23 @@ fun VideoCard(
     // 改用 aspectRatio 让卡片宽高比固定(16:10)，宽度交给父网格分配。
     Card(
         onClick = onClick,
-        modifier = modifier.aspectRatio(16f / 10f),
+        onLongClick = onLongClick,
+        modifier = modifier
+            .aspectRatio(16f / 10f)
+            .then(
+                if (onLongClick != null) {
+                    Modifier.onPreviewKeyEvent { event ->
+                        if (event.key == Key.Menu && event.type == KeyEventType.KeyUp) {
+                            onLongClick()
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                } else {
+                    Modifier
+                },
+            ),
         scale = CardDefaults.scale(focusedScale = 1.04f),
         colors = CardDefaults.colors(containerColor = CardGray),
         // 项目 TV 焦点态:近白 3dp 外框 + 放大;封面铺满时仅靠放大在暗色

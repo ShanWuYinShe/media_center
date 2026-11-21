@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -53,7 +54,9 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -77,6 +80,7 @@ import com.example.mediacenter.ui.components.LoadingIndicator
 import com.example.mediacenter.ui.theme.BackgroundDark
 import com.example.mediacenter.util.BackgroundWork
 import com.example.mediacenter.util.NetworkRestoreEffect
+import com.example.mediacenter.util.formatDuration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -625,6 +629,13 @@ internal fun PlayerContent(
     var okHeld by remember { mutableStateOf(false) }
     var okLongConsumed by remember { mutableStateOf(false) }
     var okLongJob by remember { mutableStateOf<Job?>(null) }
+    var seekHudVisible by remember { mutableStateOf(false) }
+    var seekHudDeltaMs by remember { mutableLongStateOf(0L) }
+    var seekHudTargetMs by remember { mutableLongStateOf(0L) }
+    var lastSeekTimeMs by remember { mutableLongStateOf(0L) }
+    var consecutiveSeekCount by remember { mutableIntStateOf(0) }
+    var lastSeekDirection by remember { mutableIntStateOf(0) }
+    var seekHudJob by remember { mutableStateOf<Job?>(null) }
 
     fun revealControls() {
         showControls = true
@@ -635,6 +646,45 @@ internal fun PlayerContent(
         val target = (controller.currentPosition + deltaMs).coerceAtLeast(0L)
         val duration = controller.duration
         controller.seekTo(if (duration > 0) target.coerceAtMost(duration) else target)
+    }
+
+    fun performSeek(forward: Boolean) {
+        val now = System.currentTimeMillis()
+        val direction = if (forward) 1 else -1
+        if (direction == lastSeekDirection && now - lastSeekTimeMs < 800L) {
+            consecutiveSeekCount++
+        } else {
+            consecutiveSeekCount = 1
+            lastSeekDirection = direction
+            seekHudDeltaMs = 0L
+        }
+        lastSeekTimeMs = now
+
+        // 自适应步长：连按 1-2 次 10s，3-5 次 20s，6 次以上 30s
+        val baseStepMs = when {
+            consecutiveSeekCount <= 2 -> 10_000L
+            consecutiveSeekCount <= 5 -> 20_000L
+            else -> 30_000L
+        }
+        val delta = if (forward) baseStepMs else -baseStepMs
+        seekHudDeltaMs += delta
+
+        val currentPos = controller.currentPosition.coerceAtLeast(0L)
+        val duration = controller.duration.coerceAtLeast(0L)
+        val target = (currentPos + delta).coerceIn(0L, if (duration > 0) duration else Long.MAX_VALUE)
+        controller.seekTo(target)
+        seekHudTargetMs = target
+        seekHudVisible = true
+
+        revealControls()
+
+        seekHudJob?.cancel()
+        seekHudJob = scope.launch {
+            delay(1000L)
+            seekHudVisible = false
+            consecutiveSeekCount = 0
+            seekHudDeltaMs = 0L
+        }
     }
 
     fun togglePlayback() {
@@ -671,14 +721,12 @@ internal fun PlayerContent(
                         togglePlayback()
                         true
                     },
-                    CustomAccessibilityAction("快进 10 秒") {
-                        seekBy(SEEK_STEP_MS)
-                        revealControls()
+                    CustomAccessibilityAction("快进") {
+                        performSeek(forward = true)
                         true
                     },
-                    CustomAccessibilityAction("快退 10 秒") {
-                        seekBy(-SEEK_STEP_MS)
-                        revealControls()
+                    CustomAccessibilityAction("快退") {
+                        performSeek(forward = false)
                         true
                     },
                 )
@@ -692,15 +740,13 @@ internal fun PlayerContent(
                 when (event.key) {
                     Key.DirectionLeft, Key.MediaRewind -> {
                         if (down) {
-                            seekBy(-SEEK_STEP_MS)
-                            revealControls()
+                            performSeek(forward = false)
                         }
                         true
                     }
                     Key.DirectionRight, Key.MediaFastForward -> {
                         if (down) {
-                            seekBy(SEEK_STEP_MS)
-                            revealControls()
+                            performSeek(forward = true)
                         }
                         true
                     }
@@ -822,8 +868,8 @@ internal fun PlayerContent(
                         revealControls()
                         val width = size.width.coerceAtLeast(1)
                         when {
-                            offset.x < width * 0.3f -> seekBy(-SEEK_STEP_MS)
-                            offset.x > width * 0.7f -> seekBy(SEEK_STEP_MS)
+                            offset.x < width * 0.3f -> performSeek(forward = false)
+                            offset.x > width * 0.7f -> performSeek(forward = true)
                             else -> togglePlayback()
                         }
                     }
@@ -862,6 +908,19 @@ internal fun PlayerContent(
             isBuffering = isBuffering,
             modifier = Modifier.align(Alignment.Center),
         )
+        // 快进快退 HUD 悬浮指示：大字显示跳转幅度与预计时间，按键松开后淡出。
+        AnimatedVisibility(
+            visible = seekHudVisible && playerError == null && overlayError == null,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            SeekHud(
+                deltaMs = seekHudDeltaMs,
+                targetPositionMs = seekHudTargetMs,
+                durationMs = durationMs,
+            )
+        }
         // 控制条与解析失败错误层互斥渲染：错误层盖在控制条上时，
         // 焦点可能落在被遮挡的控件上（看不见却拿到焦点）。
         if (overlayError != null) {
@@ -957,6 +1016,54 @@ private fun PlaybackStateGlyph(
                     modifier = Modifier.size(56.dp),
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun SeekHud(
+    deltaMs: Long,
+    targetPositionMs: Long,
+    durationMs: Long,
+    modifier: Modifier = Modifier,
+) {
+    val isForward = deltaMs >= 0
+    val deltaSec = (kotlin.math.abs(deltaMs) / 1000).coerceAtLeast(1)
+    val deltaText = if (isForward) "+${deltaSec}秒" else "-${deltaSec}秒"
+    val targetText = if (durationMs > 0) {
+        "${formatDuration(targetPositionMs)} / ${formatDuration(durationMs)}"
+    } else {
+        formatDuration(targetPositionMs)
+    }
+
+    Box(
+        modifier = modifier
+            .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 28.dp, vertical = 14.dp)
+            .semantics(mergeDescendants = true) {
+                contentDescription = "${if (isForward) "快进" else "快退"} $deltaText，跳转到 $targetText"
+                liveRegion = LiveRegionMode.Polite
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.foundation.layout.Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = if (isForward) "⏩  $deltaText" else "⏪  $deltaText",
+                color = Color.White,
+                fontSize = 26.sp,
+                lineHeight = 32.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = targetText,
+                color = com.example.mediacenter.ui.theme.TextSecondary,
+                fontSize = 16.sp,
+                lineHeight = 20.sp,
+                fontWeight = FontWeight.Medium,
+            )
         }
     }
 }

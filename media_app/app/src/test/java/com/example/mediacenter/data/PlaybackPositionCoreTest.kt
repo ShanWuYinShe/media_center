@@ -88,4 +88,19 @@ class PlaybackPositionCoreTest {
         val decoded = PlaybackPositionCore.decode(raw)
         assertEquals(60_000L, decoded.getValue("a").positionMs)
     }
+
+    @Test
+    fun remove_clears_single_and_multi_page_entries() {
+        val entries = mapOf(
+            "BV1xx" to PositionEntry(60_000L, now),
+            "BV1xx#p2" to PositionEntry(120_000L, now),
+            "BV1xx#p3" to PositionEntry(180_000L, now),
+            "BV2yy" to PositionEntry(90_000L, now),
+        )
+        val removed = PlaybackPositionCore.remove(entries, "BV1xx")
+        assertEquals(1, removed.size)
+        assertTrue(removed.containsKey("BV2yy"))
+        // 空 id 不变
+        assertEquals(removed, PlaybackPositionCore.remove(removed, ""))
+    }
 }
