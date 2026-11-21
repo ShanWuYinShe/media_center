@@ -35,6 +35,7 @@ description: media_server catalog 分类数据与审核体系。触发：改分�
   - `--category movies` 限定分类、`--limit N` 每分类随机抽样（`--seed` 复现）、`--output` 落 JSON 报告；默认只报告不下架。
   - 失效判定口径：`-404`（视频不存在）= gone；`62002/62012`（稿件不可见/审核中）= invisible；`-352/-412/-403/429` 是风控，不算条目失效（脚本会暂停 30s，连续 3 次中止，避免误下架）。
   - 分P条目（`bvid_pN`）按主 bvid 校验；报告里保留原始 videoId 供下架。
+  - 所有请求统一带 UA：Cloudflare 对无 UA 的 urllib 请求直接 403（公开分类接口也会），改脚本时不要去掉 `request_headers`。
 - **下架**：用 `/internal/catalog/review` 软 reject（`status=rejected`，可人工重新 approve），**不要硬删**（`/internal/catalog/delete` 只用于确需彻底移除的成员）。
   - `/internal/*` 不对公网暴露（nginx 直接 404）：`--apply` 只能在能直达 media_server 的地方执行（服务器上 `docker compose exec -T media_server wget` 或本机 SSH 隧道到容器 8787）。
   - 操作前先备份（部署侧 `make backup`，见 deploy/README.md）。
