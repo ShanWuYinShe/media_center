@@ -220,4 +220,20 @@ class PlayerViewModelTest {
         advanceUntilIdle()
         assertEquals(listOf("A", "A"), repo.resolvedIds)
     }
+
+    @Test
+    fun `详情页选定的清晰度作为起播档位且不受自动上限收敛`() = runTest {
+        val repo = FakeRepository(multiQualityPlayback())
+        val vm = PlayerViewModel(
+            "A",
+            repository = repo,
+            maxInitialQualityQn = 720,
+            initialQualityQn = 1080,
+        )
+        advanceUntilIdle()
+
+        // 手动选档:首解析就按 1080P 请求,不再被自动选档上限(720)收敛。
+        assertEquals(listOf(1080), repo.resolvedQns)
+        assertEquals(1080, vm.uiState.value.playbackResult?.options?.firstOrNull()?.qn)
+    }
 }

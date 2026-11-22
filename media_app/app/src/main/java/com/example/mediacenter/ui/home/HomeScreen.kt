@@ -392,6 +392,7 @@ private fun WatchHistoryManageDialog(
                     label = "从继续观看中移除",
                     primary = true,
                     onClick = onRemove,
+                    fillWidth = true,
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(removeFocus)
@@ -403,6 +404,7 @@ private fun WatchHistoryManageDialog(
                     label = "重新从头播放",
                     primary = false,
                     onClick = onRestart,
+                    fillWidth = true,
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(restartFocus)

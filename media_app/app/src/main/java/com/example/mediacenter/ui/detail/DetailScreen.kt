@@ -1,6 +1,4 @@
 package com.example.mediacenter.ui.detail
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -16,6 +14,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -52,6 +52,7 @@ import kotlinx.coroutines.delay
 import com.example.mediacenter.data.MediaRepositoryHolder
 import com.example.mediacenter.data.PlaybackPrefetcher
 import com.example.mediacenter.data.PlaybackPositionStore
+import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.PlaybackTuning
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.playbackStorageKey
@@ -80,13 +81,15 @@ import kotlinx.coroutines.withContext
 @Composable
 fun DetailScreen(
     video: VideoSummary,
-    onPlay: (page: Int) -> Unit,
+    onPlay: (page: Int, qualityQn: Int?) -> Unit,
     onBack: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
     // 停留 1.2s 才预取播放地址:快速浏览列表不触发,避免把 YouTube 冷解析
     // (占用 extractor 并发)浪费在"只看一眼"的视频上;玩家点"播放"时通常已就绪。
     // 按播放页同一口径的自动选档上限预取首段媒体,播放页才会命中缓存。
+    // 同一份解析结果也用于详情页的清晰度/多P选集展示(见下方 detailPlaybackUi),
+    // 不额外发请求:PlaybackPrefetcher.resolve 等待/复用这次预取。
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
     val prefetchMaxQn = remember(configuration.screenHeightDp, density.density) {
@@ -94,15 +97,18 @@ fun DetailScreen(
             (configuration.screenHeightDp * density.density).roundToInt(),
         )
     }
+    val repository = MediaRepositoryHolder.repository
+    var playbackInfo by remember(video.id) { mutableStateOf<PlaybackResult?>(null) }
     LaunchedEffect(video.id) {
         delay(1200)
         PlaybackPrefetcher.prefetch(
-            MediaRepositoryHolder.repository,
+            repository,
             video.id,
             maxInitialQualityQn = prefetchMaxQn,
         )
+        playbackInfo = PlaybackPrefetcher.resolve(repository, video.id, qn = null)
     }
-    val provider = MediaRepositoryHolder.repository.currentProvider
+    val provider = repository.currentProvider
 
     // 全屏封面做背景(压暗 + 渐隐到页面底色),前景是"封面 + 信息/操作"分栏。
     // 比纯黑底更有内容氛围,也不会像单列长滚动那样把播放按钮推到首屏外。
@@ -143,7 +149,13 @@ fun DetailScreen(
         val backFocus = remember { FocusRequester() }
         val playFocus = remember { FocusRequester() }
         val descFocus = remember { FocusRequester() }
+        val firstQualityFocus = remember { FocusRequester() }
+        val firstEpisodeFocus = remember { FocusRequester() }
         var descOverflowed by remember(video.id) { mutableStateOf(false) }
+        // 详情页上的手动选择:清晰度(qn)与分P下标。null = 跟随自动档/续播页。
+        var selectedQualityQn by remember(video.id) { mutableStateOf<Int?>(null) }
+        var selectedPageOverride by remember(video.id) { mutableStateOf<Int?>(null) }
+        var showEpisodeDialog by remember(video.id) { mutableStateOf(false) }
 
         Column(
             modifier = Modifier
@@ -238,7 +250,6 @@ fun DetailScreen(
                     // 断点续播提示:上次位置有效时告知将从该处继续(传时长过滤"已看完"记录,
                     // 与播放页 READY 时的恢复判定一致,避免提示了却不恢复)。SharedPreferences
                     // 首次访问会同步加载 XML,放 IO 调度器异步读,避免主线程进详情页卡顿。
-                    val context = LocalContext.current
                     var resumePosition by remember(video.id) { mutableLongStateOf(0L) }
                     // 继续观看:上次观看的分页与绝对位置(多P),点击播放时直达该页该处
                     var lastWatchedPage by remember(video.id) { mutableIntStateOf(0) }
@@ -312,12 +323,28 @@ fun DetailScreen(
                             )
                         }
                     }
-                    Spacer(Modifier.height(24.dp))
+                    Spacer(Modifier.height(16.dp))
+
+                    // 播放信息(清晰度/选集):解析结果到达后展示;未到达/失败时不显示
+                    // 占位行,点播放仍由播放页自行解析(不阻塞主操作)。
+                    val detailPlayback = remember(playbackInfo, prefetchMaxQn, resumePage) {
+                        playbackInfo?.let { detailPlaybackUi(it, prefetchMaxQn, resumePage) }
+                    }
+                    val qualityOptions = detailPlayback?.qualityOptions.orEmpty()
+                    val totalPages = detailPlayback?.totalPages ?: 0
+                    val hasEpisodes = totalPages > 1
+                    val currentPage = (selectedPageOverride ?: detailPlayback?.pageIndex ?: 0)
+                        .coerceIn(0, maxOf(totalPages - 1, 0))
+                    val currentQualityQn = selectedQualityQn ?: detailPlayback?.currentQualityQn
+                    // 手选清晰度后按钮文案要跟随选择(否则选了 720P 仍显示自动档的 360P)。
+                    val currentQualityLabel = qualityOptions.firstOrNull { it.qn == currentQualityQn }?.label
+                        ?: detailPlayback?.currentQualityLabel
+
                     // 主操作(播放)获得进入时焦点：简介溢出时上方还有"查看完整简介"按钮，
                     // 不指定焦点路径遥控器会先落在那里，多按一次才能到播放。
                     LaunchedEffect(video.id) { playFocus.requestFocus() }
                     TvActionButton(
-                        label = if (hintText != null) "继续播放" else "播放",
+                        label = buildPlayLabel(hintText != null, currentQualityLabel),
                         primary = true,
                         onClick = {
                             // 登记观看历史(继续观看行):元数据齐全,保留上次观看页;位置由
@@ -327,28 +354,121 @@ fun DetailScreen(
                             // 阻塞首帧;页面随即跳走,不等待写入完成。
                             val entry = WatchEntry(
                                 videoId = video.id,
-                                provider = MediaRepositoryHolder.repository.currentProvider,
+                                provider = repository.currentProvider,
                                 title = video.title,
                                 thumbnailUrl = video.thumbnailUrl.orEmpty(),
                                 durationSeconds = video.durationSeconds ?: 0L,
-                                page = lastWatchedPage,
+                                page = currentPage,
                             )
                             BackgroundWork.scope.launch { WatchHistory.upsert(context, entry) }
-                            onPlay(lastWatchedPage)
+                            onPlay(currentPage, selectedQualityQn)
                         },
                         // TV 详情主操作固定宽度:铺满右栏会变成一条横贯屏幕的蓝带,
-                        // 压过封面与标题的视觉重心;向上方向显式打通至披露按钮或返回键。
+                        // 压过封面与标题的视觉重心;向上方向显式打通至披露按钮或返回键,
+                        // 向下进入清晰度/选集行(没有时保持默认焦点行为)。
                         modifier = Modifier
                             .width(300.dp)
                             .focusRequester(playFocus)
                             .focusProperties {
                                 up = if (descOverflowed) descFocus else backFocus
+                                if (qualityOptions.isNotEmpty()) {
+                                    down = firstQualityFocus
+                                } else if (hasEpisodes) {
+                                    down = firstEpisodeFocus
+                                }
                             },
                     )
+                    // 清晰度/选集用「行内小标签 + chips」的紧凑排版:1080p 电视上
+                    // 播放按钮下方只有约 230px 可视高度,两段都带独立标题行会把选集
+                    // 推到首屏外(用户体感仍是"详情页没有剧集选择")。
+                    if (qualityOptions.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "清晰度",
+                                color = TextSecondary,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                // 与选集行同宽:两行 chips 左边缘对齐,不出现阶梯错位。
+                                modifier = Modifier.width(112.dp),
+                            )
+                            LazyRow(
+                                modifier = Modifier.weight(1f),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                itemsIndexed(qualityOptions, key = { _, quality -> quality.qn }) { index, quality ->
+                                    TvChip(
+                                        label = quality.label,
+                                        selected = quality.qn == currentQualityQn,
+                                        onClick = { selectedQualityQn = quality.qn },
+                                        modifier = if (index == 0) {
+                                            Modifier.focusRequester(firstQualityFocus)
+                                        } else {
+                                            Modifier
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (hasEpisodes) {
+                        Spacer(Modifier.height(6.dp))
+                        // 上一集/下一集在边界时不渲染;焦点固定给第一个出现的动作,
+                        // 播放按钮 DOWN 才能稳定落到选集行。
+                        val episodeActions = buildList<Pair<String, () -> Unit>> {
+                            if (currentPage > 0) {
+                                add("上一集" to { selectedPageOverride = currentPage - 1 })
+                            }
+                            if (currentPage < totalPages - 1) {
+                                add("下一集" to { selectedPageOverride = currentPage + 1 })
+                            }
+                            add("查看全部" to { showEpisodeDialog = true })
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "选集 ${currentPage + 1}/${totalPages}",
+                                color = TextSecondary,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                modifier = Modifier.width(112.dp),
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                episodeActions.forEachIndexed { index, (label, action) ->
+                                    TvChip(
+                                        label = label,
+                                        onClick = action,
+                                        modifier = if (index == 0) {
+                                            Modifier.focusRequester(firstEpisodeFocus)
+                                        } else {
+                                            Modifier
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (showEpisodeDialog && detailPlayback != null) {
+                        EpisodeSelectDialog(
+                            pageTitles = detailPlayback.pageTitles,
+                            totalPages = detailPlayback.totalPages,
+                            currentPage = currentPage,
+                            onSelect = { index ->
+                                selectedPageOverride = index
+                                showEpisodeDialog = false
+                            },
+                            onDismiss = { showEpisodeDialog = false },
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+/** 播放按钮文案:基础动作 + 当前清晰度(与 legacy 详情页口径一致,未解析到清晰度时只显示动作)。 */
+private fun buildPlayLabel(resume: Boolean, qualityLabel: String?): String = buildString {
+    append(if (resume) "继续播放" else "播放")
+    qualityLabel?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
 }
 
 // 完整简介在独立 Dialog 阅读卡片中展示,保留 BACK 关闭路径,不在详情页原布局内撑开。

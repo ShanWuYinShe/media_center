@@ -1,6 +1,6 @@
 ---
 name: media-app-tv-ui
-description: media_app TV 界面专属设计约定：Apple TV 视觉基线、焦点态配色与外框、详情页简介折叠与披露弹层。触发：新增或修改 media_app 的 TV 界面、控件样式、焦点态样式、详情页与播放页布局。
+description: media_app TV 界面专属设计约定：Apple TV 视觉基线、焦点态配色与外框、详情页清晰度/选集与简介折叠披露弹层。触发：新增或修改 media_app 的 TV 界面、控件样式、焦点态样式、详情页与播放页布局。
 ---
 
 # media_app TV UI/UX 设计约定（项目专属）
@@ -9,6 +9,7 @@ description: media_app TV 界面专属设计约定：Apple TV 视觉基线、焦
 
 - **Apple TV 视觉基线**：OLED 深色背景、玻璃灰卡片、Apple Blue 作为**唯一强调色**；文字层级保持 Primary/Secondary/Tertiary 灰阶，不新增不一致的强调色。
 - **TV 焦点态**：统一用 `ui/components` 的 `TvActionButton` / `TvChip` / `TvDialogButton` / `TvIconButton`（Apple Blue + `FocusBorder` #E5E5EA 2dp 外框 + 1.04x）；海报卡用 `VideoCard` 的 focusedBorder（3dp）。`selected` 用暗蓝，只表达当前分类/选项，**不应强过焦点态**。
+- **详情页播放信息**：进入详情页后复用播放地址预取（`PlaybackPrefetcher`）拿到的解析结果展示「清晰度」chips 与多 P「选集」（上一集/下一集/查看全部弹窗，当前集高亮），播放按钮文案带当前清晰度（如「播放 · 高清 720P」）；当前档位必须与播放页同一口径按设备上限收敛（`PlaybackTuning.preferInitialOption`），不能显示会被自动降档的最高档。解析未完成/失败时**不渲染占位行**、不阻塞播放（播放页会重新解析）。详情页手选的清晰度经路由 `qn` 参数作为播放页起播档位（手动选档不受自动上限约束）。
 - **详情展开弹层**：详情页简介超出折叠行数时，用紧凑的「查看完整简介」披露按钮；完整简介在**独立 Dialog 阅读卡片**中展示，需保留 BACK 关闭路径与主按钮焦点，**不得在详情页原布局内撑开**。
 
 ## 排版与色彩
@@ -51,12 +52,14 @@ description: media_app TV 界面专属设计约定：Apple TV 视觉基线、焦
 - `media_app_legacy` 是 **API 19 原生 View/RecyclerView** 变体，不能引入 Compose（minSdk 21）或 Coil 2.x；新版视觉/交互要以同样的 tokens（#111 背景、CardGray、AppleBlue #007AFF、FocusBorder #E5E5EA）、带文字的操作胶囊、蓝色主按钮在旧技术栈里复刻。
 - 首页同样只有顶部分类标签 + 单分类网格：固定 3 列 16:10 大卡片，卡片标题 20sp；**没有 Hero、时长筛选行、「查看全部」入口**。分类 chip 聚焦即切换；首次进入必须把焦点落在当前分类 chip（等真实分类到达后再标记完成，不能把 `__no_category__` 占位 chip 当成完成）。
 - 详情页/播放页同样提供可见的「返回」文字入口；播放页中央状态图标由 `PlayPauseGlyphView` 自绘（暂停 ▶ / 播放 ❚❚），不要用 Unicode 字形。
+- 详情页与新版同一语义：解析完成后展示带时长/清晰度的播放按钮、清晰度 chips 与多 P 选集；解析期间用可聚焦的「正在解析播放地址…」胶囊提示（按 OK 重试），不要再叠一个居中加载遮罩（两段文字会重叠）。
 - 播放页按键与新版一致：←/→ seek 10s（长按连续）、↑/↓ 直接切上一/下一集（不再双击确认）、OK 播放/暂停、MENU 切清晰度；控制层只在 `STATE_READY` 时自动隐藏，缓冲时保持可见。
 - Legacy 的 provider 选择、YouTube 分类与焦点目标（Category/Provider/Settings/Search/Video）应与新版保持同一产品语义；旧设备低内存约束下不要为了“像新版”引入大图预加载/复杂动画。
 
 ## 组件与分层
 
 - 通用控件只在 `ui/components/` 实现：`TvActionButton`（页面动作）、`TvChip`（可选/动作胶囊）、`TvDialogButton`（弹窗）、`TvIconButton`、`PagedVideoGrid`、`VideoCard`、`EmptyStateView`/`ErrorView`。页面不要再重复 Button 的 shape/border/scale/colors。
+- **tv-material Button 内容不自动居中**：库内 Button 的内容 Row 是 wrap-content、由 Surface 的 Box 按 TopStart 摆放（见 tv-material `ButtonImpl`/`SurfaceImpl`），按钮被 `fillMaxWidth`/`widthIn(min)` 撑宽后文字会贴左。规则：全宽按钮让内容自己 `fillMaxWidth()` 再居中（`TvActionButton` 的 Text），弹窗动作按钮用 `TvDialogButton`（内部按 96dp 最小宽居中；纵向铺满时传 `fillWidth = true`），列表类弹窗行（provider/选集）用固定前导槽 + `fillMaxWidth` 文本保证各行左边缘对齐；不要直接用 tv `Button` 塞裸 `Text`。
 - ViewModel 依赖 `MediaRepositoryApi` 接口（单测注入 fake），不直接依赖具体 `MediaRepository`；磁盘历史读写走 IO 调度器（`HomeViewModel.refreshWatchHistory/registerPlayed`）。
 - HTTP 统一用 `data/HttpCall.kt` 的 `Call.await()`，响应体读取放在 IO；不要在页面/VM 手写 OkHttp callback。
 - Player 的 controller 连接（重试/释放幂等）在 `PlayerControllerConnection.kt`，音频焦点在 `PlayerAudioFocus.kt`；`PlayerContent` 只编排播放/控制条，不要继续膨胀。

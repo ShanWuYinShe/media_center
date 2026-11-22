@@ -3,6 +3,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,6 +18,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -33,6 +35,7 @@ import com.example.mediacenter.ui.components.TvDialogButton
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.AppleBlueDark
 import com.example.mediacenter.ui.theme.CardGray
+import com.example.mediacenter.ui.theme.GlassFill
 import com.example.mediacenter.ui.theme.TextPrimary
 
 // 视频源切换弹层:仅当 server 返回多个 provider 时由首页展示。
@@ -76,8 +79,10 @@ fun ProviderSelectDialog(
                                 if (isLast) Modifier.focusProperties { down = cancelFocus } else Modifier,
                             ),
                         colors = ButtonDefaults.colors(
-                            // 当前源非聚焦时用暗蓝 + 对勾图标；亮蓝只留给焦点态
-                            containerColor = if (isCurrent) AppleBlueDark else CardGray,
+                            // 当前源非聚焦时用暗蓝 + 对勾图标；亮蓝只留给焦点态。
+                            // 非当前源用 GlassFill:CardGray 在 CardGray 弹窗上不可见,
+                            // 旧实现只剩一行文字浮着,看着像"没对齐的裸文本"。
+                            containerColor = if (isCurrent) AppleBlueDark else GlassFill,
                             focusedContainerColor = AppleBlue,
                             contentColor = TextPrimary,
                             focusedContentColor = TextPrimary,
@@ -85,20 +90,27 @@ fun ProviderSelectDialog(
                     ) {
                         // 选中态加对勾图标:仅靠底色区分在 TV 亮度/色偏下不易分辨。
                         // 用自绘矢量图标,不用 Unicode "✓" 拼进文本(字体 fallback 风格不一)。
-                        if (isCurrent) {
-                            Icon(
-                                imageVector = Icons.Default.Check,
-                                contentDescription = null,
-                                tint = TextPrimary,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(Modifier.width(6.dp))
+                        // 未选中行也保留同宽的空位,让所有行的视频源名称左边缘对齐
+                        // (旧实现选中行多一个图标,文字整体右移,几行看起来错位)。
+                        Box(modifier = Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+                            if (isCurrent) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    tint = TextPrimary,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
                         }
+                        Spacer(Modifier.width(10.dp))
                         Text(
                             text = provider.name ?: provider.id,
                             color = TextPrimary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            // tv-material Button 内容 Row 不会横向撑满(见 TvDialogButton 注释),
+                            // 这里显式铺满剩余宽度,名称才能全部从同一左边缘开始。
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
                 }

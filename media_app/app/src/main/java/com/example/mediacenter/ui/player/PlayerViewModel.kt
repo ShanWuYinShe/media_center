@@ -47,6 +47,8 @@ class PlayerViewModel(
     // 自动选档的清晰度上限(像素高度):设备档位与屏幕物理高度取小(见 PlayerScreen)。
     // Int.MAX_VALUE 表示不收敛(单元测试/未知屏幕)。
     private val maxInitialQualityQn: Int = Int.MAX_VALUE,
+    // 详情页用户手动选定的清晰度:作为起播档位(不受自动选档上限约束)。
+    initialQualityQn: Int? = null,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(
         PlayerUiState(
@@ -59,7 +61,8 @@ class PlayerViewModel(
 
     // 当前集/清晰度/分页(多P):切换分页时保持已选清晰度。
     private var currentVideoId: String = initialVideoId
-    private var currentQn: Int? = null
+    // 详情页带过来的手动选档:首帧解析就按该档,而不是先播自动档再切。
+    private var currentQn: Int? = initialQualityQn
     private var currentPage: Int = maxOf(initialPage, parsePageId(initialVideoId).second)
     // 已解析结果对应的视频 id:合集切集时 collection 可能先于解析返回,避免用旧
     // 结果的 pages 与新的 collection 拼出错误的"下一集"。
@@ -321,6 +324,7 @@ class PlayerViewModelFactory(
     private val initialTitle: String = "",
     private val initialPosterUrl: String? = null,
     private val maxInitialQualityQn: Int = Int.MAX_VALUE,
+    private val initialQualityQn: Int? = null,
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -330,6 +334,7 @@ class PlayerViewModelFactory(
             initialTitle = initialTitle,
             initialPosterUrl = initialPosterUrl,
             maxInitialQualityQn = maxInitialQualityQn,
+            initialQualityQn = initialQualityQn,
         ) as T
     }
 }
