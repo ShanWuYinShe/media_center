@@ -401,7 +401,10 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
             info.addView(errorInline(it, detailErrorRetry), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(24)))
         }
 
-        if (state.loading) {
+        // 解析播放地址期间信息区已有「正在解析播放地址…」可聚焦胶囊(见 options.isEmpty()
+        // 分支),再叠一个居中 loading 遮罩会和它重叠成两段文字(实测「正在加载」压在
+        // 「正在解析播放地址…」上)。只有已有播放选项、正在刷新时才用居中遮罩。
+        if (state.loading && options.isNotEmpty()) {
             screen.addView(loadingScrim(), FrameLayout.LayoutParams(wrap(), wrap(), Gravity.CENTER))
         }
         setContent(screen)

@@ -63,6 +63,8 @@ fun PlayerScreen(
     initialPage: Int = 0,
     // 首帧前的封面(详情尺寸);为空则不显示封面层。
     posterUrl: String? = null,
+    // 详情页用户选定的清晰度(手动选档不受自动选档上限约束);null = 自动选档。
+    initialQualityQn: Int? = null,
     onBack: () -> Unit,
 ) {
     // 自动选档上限:设备档位与屏幕物理高度取小。1080p 电视不应拉 4K/8K 流
@@ -75,13 +77,14 @@ fun PlayerScreen(
         )
     }
     val viewModel: PlayerViewModel = viewModel(
-        key = "player_${videoId}_p$initialPage",
+        key = "player_${videoId}_p${initialPage}_q${initialQualityQn ?: 0}",
         factory = PlayerViewModelFactory(
             videoId,
             initialPage,
             videoTitle,
             posterUrl,
             maxInitialQualityQn,
+            initialQualityQn,
         ),
     )
     val state by viewModel.uiState.collectAsStateWithLifecycle()

@@ -7,6 +7,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
@@ -51,6 +52,10 @@ fun TvActionButton(
             color = if (enabled) TextPrimary else TextTertiary,
             style = MaterialTheme.typography.titleSmall,
             textAlign = TextAlign.Center,
+            // 详情页播放按钮会带当前清晰度("继续播放 · 高清 720P"):固定宽度下
+            // 必须单行省略,避免标题太长时文字折行把按钮撑高/错位。
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.fillMaxWidth(),
         )
     }

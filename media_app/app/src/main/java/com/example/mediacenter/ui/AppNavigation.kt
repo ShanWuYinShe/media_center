@@ -48,7 +48,7 @@ private val detailEnter: EnterTransition =
 object Routes {
     const val HOME = "home"
     const val DETAIL = "detail/{video}"
-    const val PLAYER = "player/{videoId}?title={title}&page={page}&poster={poster}"
+    const val PLAYER = "player/{videoId}?title={title}&page={page}&poster={poster}&qn={qn}"
     const val SEARCH = "search"
     const val SETTINGS = "settings"
 
@@ -59,12 +59,20 @@ object Routes {
     fun detail(video: VideoSummary) =
         "detail/${videoSummaryType.serializeAsValue(video)}"
 
-    fun player(videoId: String, title: String, page: Int = 0, posterUrl: String? = null): String {
+    fun player(
+        videoId: String,
+        title: String,
+        page: Int = 0,
+        posterUrl: String? = null,
+        // 详情页选定的清晰度 qn;null/<=0 表示按设备自动选档(播放页原行为)。
+        qualityQn: Int? = null,
+    ): String {
         val base = "player/${Uri.encode(videoId, "")}?title=${Uri.encode(title, "")}"
         val pagePart = if (page > 0) "&page=$page" else ""
         val posterPart =
             if (!posterUrl.isNullOrBlank()) "&poster=${Uri.encode(posterUrl, "")}" else ""
-        return base + pagePart + posterPart
+        val qualityPart = if (qualityQn != null && qualityQn > 0) "&qn=$qualityQn" else ""
+        return base + pagePart + posterPart + qualityPart
     }
 }
 
@@ -153,13 +161,14 @@ fun AppNavigation() {
             }
             DetailScreen(
                 video = video,
-                onPlay = { page ->
+                onPlay = { page, qualityQn ->
                     navController.navigate(
                         Routes.player(
                             video.id,
                             video.title,
                             page,
                             video.thumbnailUrlLarge ?: video.thumbnailUrl,
+                            qualityQn,
                         ),
                     )
                 },
@@ -188,6 +197,11 @@ fun AppNavigation() {
                     type = NavType.StringType
                     defaultValue = ""
                 },
+                // 详情页选定的清晰度 qn;0 = 未指定,播放页按设备自动选档。
+                navArgument("qn") {
+                    type = NavType.IntType
+                    defaultValue = 0
+                },
             ),
         ) { backStackEntry ->
             val videoId = backStackEntry.arguments?.getString("videoId") ?: return@composable
@@ -195,11 +209,13 @@ fun AppNavigation() {
             val page = backStackEntry.arguments?.getInt("page") ?: 0
             val posterUrl = backStackEntry.arguments?.getString("poster").orEmpty()
                 .ifBlank { null }
+            val qualityQn = backStackEntry.arguments?.getInt("qn") ?: 0
             PlayerScreen(
                 videoId = videoId,
                 videoTitle = title,
                 initialPage = page,
                 posterUrl = posterUrl,
+                initialQualityQn = qualityQn.takeIf { it > 0 },
                 onBack = { navController.popBackStack() },
                 // 合集连播现在在播放页内部无缝切集(不重建页面/播放服务),
                 // 不再通过导航替换播放页。
