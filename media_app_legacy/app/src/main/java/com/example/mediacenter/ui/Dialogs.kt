@@ -573,3 +573,38 @@ internal fun MainActivity.showUpdateMessage(message: String) {
             close.post { close.requestFocus() }
         }.show()
     }
+
+/**
+ * 更新失败弹窗:下载/安装任一阶段失败时给具体原因 + 「重试」/「知道了」。
+ * 旧实现安装阶段失败只写日志、界面无反馈,用户以为"点了没反应",与 normal 端修复对齐。
+ */
+internal fun MainActivity.showUpdateFailureDialog(message: String) {
+        val activity = this
+        Dialog(activity).apply {
+            requestWindowFeature(Window.FEATURE_NO_TITLE)
+            val card = LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(24), dp(22), dp(24), dp(22))
+                background = rounded(Colors.SURFACE_ELEVATED, 22, 1, Colors.GlassBorder)
+            }
+            card.addView(label(message, 17f, Colors.TEXT_SECONDARY, maxLines = 4), linearMatch())
+            val actions = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                clipChildren = false
+                clipToPadding = false
+            }
+            val retry = primaryPill("重试", heightDp = 44, horizontalPaddingDp = 24) {
+                dismiss()
+                retryUpdateCheck()
+            }
+            val close = pill("知道了", selected = false, heightDp = 44, horizontalPaddingDp = 24) { dismiss() }
+            actions.addView(retry, LinearLayout.LayoutParams(wrap(), dp(44)).withEndMargin(dp(12)))
+            actions.addView(close, LinearLayout.LayoutParams(wrap(), dp(44)))
+            card.addView(actions, LinearLayout.LayoutParams(wrap(), wrap()).withTopMargin(dp(16)))
+            setContentView(card)
+            window?.setBackgroundDrawableResource(android.R.color.transparent)
+            applySafeDialogLayout(0.42f)
+            retry.post { retry.requestFocus() }
+        }.show()
+    }

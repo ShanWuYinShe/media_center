@@ -46,6 +46,7 @@ import com.example.mediacenter.ui.updatePlayerErrorOverlay
 import com.example.mediacenter.ui.updatePlayerRetryOverlay
 import com.example.mediacenter.ui.details.renderDetails
 import com.example.mediacenter.ui.player.renderPlayer
+import com.example.mediacenter.ui.showUpdateFailureDialog
 import com.example.mediacenter.ui.showUpdateMessage
 import com.example.mediacenter.ui.promptInstallUpdate
 import com.example.mediacenter.ui.handleInstallLaunch
@@ -139,9 +140,19 @@ class MainActivity : ComponentActivity() {
             this,
             MediaApi(BuildConfig.MEDIA_SERVER_URL),
             onPendingConfirm = { confirm ->
-                // 确认框必须由前台 Activity 启动(BAL 限制);本 Activity 正在前台。
+                // 确认框/兼容安装 Intent 必须由前台 Activity 启动(BAL 限制);
+                // 本 Activity 正在前台。启动失败也要给用户可操作反馈,不能静默。
                 runCatching { startActivity(confirm) }
-                    .onFailure { AppLog.w("Update", "launch install confirm failed: " + it.message, it) }
+                    .onFailure {
+                        AppLog.w("Update", "launch install confirm failed: " + it.message, it)
+                        root.post {
+                            if (!isFinishing) showUpdateMessage("无法打开系统安装界面，请重试或手动安装更新包")
+                        }
+                    }
+            },
+            onInstallFailed = { message ->
+                // 安装阶段失败(下载已成功):弹「更新失败」+ 重试,不再静默停在旧版本。
+                root.post { if (!isFinishing) showUpdateFailureDialog(message) }
             },
         )
 
@@ -344,7 +355,16 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 首页内容就绪后才开始检查/下载更新:避免启动瞬间与首屏、缩略图抢带宽。
+     * 更新失败弹窗的「重试」入口:复位检查守卫后重新检查/下载。
+     * 安装失败后用户可能已按提示去开启"安装未知应用"权限,重试要能重新走完整流程。
+     */
+    internal fun retryUpdateCheck() {
+        updateCheckStarted = false
+        maybeStartUpdateCheck(force = true)
+    }
+
+    /**
+     * 检查更新:首页内容就绪后才开始,避免启动瞬间与首屏、缩略图抢带宽。
      * 播放/详情/搜索页可见时不启动(下载 + 可能的弹窗会打扰观看);离开播放页
      * 回首页的 render 会再次触发(见 render 的 else 分支)。force=true 是启动兜底。
      */
