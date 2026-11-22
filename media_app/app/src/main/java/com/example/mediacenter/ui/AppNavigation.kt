@@ -105,8 +105,11 @@ fun AppNavigation() {
     val activityContext = LocalContext.current
     LaunchedEffect(pendingConfirm) {
         val intent = pendingConfirm ?: return@LaunchedEffect
-        runCatching { activityContext.startActivity(intent) }
+        // 启动失败(没有对应系统安装器/被策略拦截)也要给出可操作反馈,
+        // 否则更新流程会静默结束、用户以为"点了没反应"。
+        val started = runCatching { activityContext.startActivity(intent) }.isSuccess
         AppUpdateHolder.consumePendingConfirmIntent()
+        if (!started) AppUpdateHolder.reportInstallLaunchFailure()
     }
 
     val navController = rememberNavController()
