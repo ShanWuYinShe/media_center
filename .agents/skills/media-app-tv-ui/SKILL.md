@@ -11,6 +11,7 @@ description: media_app TV 界面专属设计约定：Apple TV 视觉基线、焦
 - **TV 焦点态**：统一用 `ui/components` 的 `TvActionButton` / `TvChip` / `TvDialogButton` / `TvIconButton`（Apple Blue + `FocusBorder` #E5E5EA 2dp 外框 + 1.04x）；海报卡用 `VideoCard` 的 focusedBorder（3dp）。`selected` 用暗蓝，只表达当前分类/选项，**不应强过焦点态**。
 - **详情页播放信息**：进入详情页后复用播放地址预取（`PlaybackPrefetcher`）拿到的解析结果展示「清晰度」chips 与多 P「选集」（上一集/下一集/查看全部弹窗，当前集高亮），播放按钮文案带当前清晰度（如「播放 · 高清 720P」）；当前档位必须与播放页同一口径按设备上限收敛（`PlaybackTuning.preferInitialOption`），不能显示会被自动降档的最高档。解析未完成/失败时**不渲染占位行**、不阻塞播放（播放页会重新解析）。详情页手选的清晰度经路由 `qn` 参数作为播放页起播档位（手动选档不受自动上限约束）。
 - **详情展开弹层**：详情页简介超出折叠行数时，用紧凑的「查看完整简介」披露按钮；完整简介在**独立 Dialog 阅读卡片**中展示，需保留 BACK 关闭路径与主按钮焦点，**不得在详情页原布局内撑开**。
+- **选集文案归一**：分P标题可能是「剧名-00.04.00.000-00.09.30.000-seg01」这类时间段串，直接展示会被单行截断成无意义数字片段；normal 与 legacy 统一走 `episodeDisplayTitle`——时间段式/空标题显示「第 N 集」，可读标题显示「第 N 集 · 原标题」。选集弹窗/行内 chips 不再另加编号列（避免「1 第 1 集」重复）。
 
 ## 排版与色彩
 

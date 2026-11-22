@@ -199,7 +199,7 @@ internal object PreferredIpStore {
         return when {
             order.isEmpty() -> "内置候选（等待测速）"
             ageMs <= 0L -> order.first() + "（" + order.size + " 个候选）"
-            else -> order.first() + " · " + order.size + " 个候选 · " + (ageMs / 60_000) + " 分钟前测速"
+            else -> order.first() + " · " + order.size + " 个候选 · " + formatProbeAge(ageMs)
         }
     }
 
@@ -209,5 +209,18 @@ internal object PreferredIpStore {
         ranked.set(emptyList())
         refreshStarted = false
         appContext = null
+    }
+}
+
+/**
+ * 测速距今时长的可读文案:刚测速完显示「刚刚测速」,超过 1 小时按小时显示,
+ * 避免设置页出现「0 分钟前测速」这种别扭文案(与 normal 端同口径)。
+ */
+internal fun formatProbeAge(ageMs: Long): String {
+    val minutes = ageMs / 60_000
+    return when {
+        minutes <= 0L -> "刚刚测速"
+        minutes < 60L -> minutes.toString() + " 分钟前测速"
+        else -> (minutes / 60).toString() + " 小时前测速"
     }
 }
