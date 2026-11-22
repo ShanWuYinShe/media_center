@@ -85,7 +85,7 @@ adb -s emulator-5554 shell am start -W -n com.example.mediacenter/.ComposeActivi
 1. 装**上一版** release APK（GitHub Release 资产，或 `gh run download <run_id> -n release-apk-<run_id>`），启动后首页应出现「发现新版本」弹窗。
 2. 点「更新」：正常路径是系统安装确认框（PackageInstaller），确认后版本更新、应用数据保留。
 3. 若 PackageInstaller session 被系统拒绝（部分镜像/系统策略返回 `STATUS_FAILURE`），App 自动回退 `ACTION_INSTALL_PACKAGE` 系统安装器；连回退都发不出去时弹「更新失败 + 原因 + 重试」。排查看日志 `MediaCenter.Update: install result: status=… message=…`。
-4. 需要在本机制造「已装版本 < 线上版本」以触发更新流程时：临时把 `media_app/app/build.gradle.kts` 的 versionCode/versionName 改成旧值构建 debug APK（**构建完立即还原，禁止提交**），验证后再用正式 APK 覆盖安装。
+4. 需要在本机制造「已装版本 < 线上版本」以触发更新流程时：临时把对应变体的 `build.gradle.kts`（normal `media_app/app/`、legacy `media_app_legacy/app/`）的 versionCode/versionName 改成旧值构建 debug APK（**构建完立即还原，禁止提交**），验证后再用正式 APK 覆盖安装。两个变体共用同一 applicationId，切换变体验证前先 uninstall。
 5. 跨版本原位升级前先核对两个 APK 证书一致：`apksigner verify --print-certs a.apk b.apk` 的 certificate SHA-256 必须相同；不同则只能卸载重装（应用数据会丢）。
 
 ### 抽查发现"视频加载失败"时的处置
