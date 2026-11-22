@@ -308,12 +308,14 @@ internal fun MainActivity.showSystemInfoDialog() {
 
 internal fun MainActivity.showAllPagesDialog(pages: PlaybackPages) {
     val titles = List(pages.totalPages) { i ->
-        pages.pageTitles.getOrElse(i) { "第${i + 1}集" }
+        episodeDisplayTitle(i, pages.pageTitles.getOrElse(i) { "" })
     }
     showOptionListDialog(
         title = "选集 · 共${pages.totalPages}集",
         options = titles,
         currentIndex = pages.currentPage,
+        // 文案已含「第 N 集」,不再显示编号列(否则出现「1 第 1 集」重复)
+        showIndex = false,
     ) { index -> viewModel.selectPage(index) }
 }
 
@@ -332,6 +334,11 @@ internal fun MainActivity.showOptionListDialog(
     title: String,
     options: List<String>,
     currentIndex: Int?,
+    // 选集等"文案本身已含第 N 集"的场景关掉编号列,避免出现「1  第 1 集」重复;
+    // 清晰度/视频源等纯文本选项保持编号列(默认 true,既有调用行为不变)。
+    // 注意放在 onSelect 之前:既有调用都以尾随 lambda 传 onSelect,尾随 lambda
+    // 只能绑定最后一个参数。
+    showIndex: Boolean = true,
     onSelect: ((Int) -> Unit)?,
 ) {
     val activity = this
@@ -359,8 +366,13 @@ internal fun MainActivity.showOptionListDialog(
                 row.setPadding(dp(4), dp(8), dp(4), dp(8))
                 row.isFocusable = true
                 row.isClickable = true
-                row.addView(idxLabel, LinearLayout.LayoutParams(dp(36), wrap()))
-                titleLabel.layoutParams = LinearLayout.LayoutParams(0, wrap(), 1f).withStartMargin(dp(8))
+                if (showIndex) {
+                    row.addView(idxLabel, LinearLayout.LayoutParams(dp(36), wrap()))
+                    titleLabel.layoutParams = LinearLayout.LayoutParams(0, wrap(), 1f).withStartMargin(dp(8))
+                } else {
+                    idxLabel.visibility = View.GONE
+                    titleLabel.layoutParams = LinearLayout.LayoutParams(0, wrap(), 1f)
+                }
                 row.addView(titleLabel)
                 row.setOnClickListener {
                     if (onSelect != null) {
@@ -394,7 +406,9 @@ internal fun MainActivity.showOptionListDialog(
             fun bind(index: Int) {
                 boundIndex = index
                 boundIsCurrent = index == currentIndex
-                idxLabel.text = String.format(Locale.getDefault(), "%d", index + 1)
+                if (showIndex) {
+                    idxLabel.text = String.format(Locale.getDefault(), "%d", index + 1)
+                }
                 titleLabel.text = options[index]
                 titleLabel.isSelected = false
                 // 非 current 且未聚焦时还原底色(焦点刷新只改 focus 分支)

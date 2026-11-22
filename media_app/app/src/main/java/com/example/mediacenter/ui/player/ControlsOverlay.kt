@@ -47,6 +47,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.ui.components.TvChip
+import com.example.mediacenter.ui.components.episodeDisplayTitle
 import com.example.mediacenter.ui.components.TvDialogButton
 import com.example.mediacenter.ui.theme.CardGray
 import com.example.mediacenter.ui.theme.DividerGray
@@ -199,7 +200,9 @@ internal fun ControlsOverlay(
             Text(
                 text = buildString {
                     append("长按 ← → 连续快退/快进")
-                    if (hasOptions) append(" · 长按 OK 选集/清晰度")
+                    // 遥控器上 MENU 键与长按 OK 都能打开选集/清晰度弹窗,
+                    // 提示里两个入口都写出来,避免用户不知道 MENU 可用。
+                    if (hasOptions) append(" · MENU/长按 OK 选集/清晰度")
                 },
                 color = TextSecondary,
                 fontSize = 13.sp,
@@ -347,7 +350,7 @@ internal fun PlaybackOptionsDialog(
                             key = { index, _ -> index },
                         ) { index, pageTitle ->
                             TvChip(
-                                label = pageTitle.ifBlank { "第 ${index + 1} 集" },
+                                label = episodeDisplayTitle(index, pageTitle),
                                 selected = index == pages.currentPage,
                                 onClick = {
                                     onSelectPage(index)

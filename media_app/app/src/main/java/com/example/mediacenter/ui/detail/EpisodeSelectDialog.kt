@@ -21,18 +21,17 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import com.example.mediacenter.ui.components.TvDialogButton
+import com.example.mediacenter.ui.components.episodeDisplayTitle
 import com.example.mediacenter.ui.theme.AppleBlue
 import com.example.mediacenter.ui.theme.AppleBlueDark
 import com.example.mediacenter.ui.theme.CardGray
 import com.example.mediacenter.ui.theme.GlassFill
 import com.example.mediacenter.ui.theme.TextPrimary
-import com.example.mediacenter.ui.theme.TextTertiary
 import com.example.mediacenter.ui.theme.tvButtonFocusScale
 import com.example.mediacenter.ui.theme.tvPillButtonBorder
 import com.example.mediacenter.ui.theme.tvPillButtonShape
@@ -101,16 +100,11 @@ internal fun EpisodeSelectDialog(
                             focusedContentColor = TextPrimary,
                         ),
                     ) {
+                        // 集数并入文案(「第 N 集」/「第 N 集 · 标题」),不再单列编号:
+                        // 时间段式的分P标题(如 00.04.00.000-00.09.30.000)在单行里
+                        // 截断后完全不可读,用户需要的是"第几集"。
                         Text(
-                            text = "${index + 1}",
-                            color = TextTertiary,
-                            textAlign = TextAlign.Center,
-                            maxLines = 1,
-                            modifier = Modifier.width(40.dp),
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            text = title.ifBlank { "第 ${index + 1} 集" },
+                            text = episodeDisplayTitle(index, title),
                             color = TextPrimary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
