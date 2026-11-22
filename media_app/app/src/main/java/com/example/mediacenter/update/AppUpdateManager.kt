@@ -37,9 +37,16 @@ class AppUpdateManager(
     // (Android 9+ 的后台 Activity 启动限制会静默拦截 receiver 里的 startActivity,
     // 模拟器实测确认框不出现)。
     private val onPendingUserAction: (Intent) -> Unit = {},
+    // 安装最终失败原因回调(session 被系统拒绝且兼容回退也发不出去时):
+    // 由 AppUpdateHolder 弹「安装失败」+ 重试,而不是无反馈地停在旧版本。
+    private val onInstallFailed: (String) -> Unit = {},
 ) {
     // APK 安装逻辑(三种安装方式 + 权限引导)拆到独立类,本类只做版本检查/下载/校验。
-    private val installer = ApkInstaller(context, onPendingUserAction = onPendingUserAction)
+    private val installer = ApkInstaller(
+        context,
+        onPendingUserAction = onPendingUserAction,
+        onInstallFailed = onInstallFailed,
+    )
 
     private companion object {
         // 进程级共享:首页与设置页各自构造 AppUpdateManager 实例,实例级 Mutex 不互斥——

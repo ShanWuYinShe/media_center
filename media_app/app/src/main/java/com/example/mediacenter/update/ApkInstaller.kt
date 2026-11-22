@@ -37,8 +37,17 @@ class ApkInstaller(
     // (模拟器实测:无异常、无 ATM START 记录、对话框不出现),所以不能在 receiver
     // 里直接启动;交给可见的 Activity 启动即豁免。
     private val onPendingUserAction: (Intent) -> Unit,
+    // 安装最终失败的用户可读原因回调。PackageInstaller session 被系统拒绝时,
+    // 先尝试一次 ACTION_INSTALL_PACKAGE 兼容回退(由前台 Activity 启动);
+    // 回退也无法发起(如未允许安装未知应用)或没有兜底路径时才回调这里,
+    // 由 AppUpdateHolder 弹出「安装失败」+ 重试,不再静默停住。
+    private val onInstallFailed: (String) -> Unit = {},
 ) {
     private var installReceiver: BroadcastReceiver? = null
+    // 本次安装的 APK:session 失败时要拿它发起兼容回退,因此随 commit 一起记住。
+    private var pendingApk: File? = null
+    // 回退只尝试一次:失败结果会再次进 receiver,避免无限递归。
+    private var fallbackAttempted = false
     private val installAction = "${context.packageName}.INSTALL_RESULT"
     // 超时注销用主线程 Handler:BroadcastReceiver 注销本身线程安全,排期统一走主线程
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -78,6 +87,8 @@ class ApkInstaller(
     }
 
     suspend fun launchInstaller(apk: File): InstallLaunchResult {
+        pendingApk = apk
+        fallbackAttempted = false
         // 第1优先：PackageInstaller API（API 21+），session-based 安装。
         // minSdk=23,该守卫恒为真,但保留以兼容将来 minSdk 调整时 PackageInstaller 的语义边界。
         val result = tryInstallWithSession(apk)
@@ -143,13 +154,14 @@ class ApkInstaller(
      * 再次安装时旧 receiver 先注销、旧超时回调先移除。
      */
     private fun registerInstallReceiver() {
-        installReceiver?.let { runCatching { context.unregisterReceiver(it) } }
-        receiverTimeout?.let { mainHandler.removeCallbacks(it) }
+        unregisterInstallReceiver(installReceiver)
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
                 @Suppress("InlinedApi")
                 val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
-                AppLog.i("Update", "install result: status=$status")
+                @Suppress("InlinedApi")
+                val statusMessage = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
+                AppLog.i("Update", "install result: status=$status message=${statusMessage?.take(300)}")
                 // STATUS_PENDING_USER_ACTION = 系统需要用户确认(应用没有静默安装
                 // 权限时必然出现):EXTRA_INTENT 里携带确认对话框。**不能在这里直接
                 // startActivity**:receiver 属后台上下文,Android 9+ 的后台 Activity
@@ -165,9 +177,13 @@ class ApkInstaller(
                     }
                     AppLog.w("Update", "pending user action but no confirmation intent")
                 }
-                mainHandler.removeCallbacks(receiverTimeout ?: return)
-                runCatching { ctx.unregisterReceiver(this) }
-                installReceiver = null
+                unregisterInstallReceiver(this)
+                if (status == PackageInstaller.STATUS_SUCCESS) {
+                    AppLog.i("Update", "install succeeded")
+                    pendingApk = null
+                } else {
+                    handleInstallFailure(status, statusMessage)
+                }
             }
         }
         installReceiver = receiver
@@ -176,14 +192,48 @@ class ApkInstaller(
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
         val timeout = Runnable {
-            installReceiver?.let {
-                runCatching { context.unregisterReceiver(it) }
-                installReceiver = null
-                AppLog.w("Update", "install result timeout, receiver unregistered")
-            }
+            unregisterInstallReceiver(receiver)
+            AppLog.w("Update", "install result timeout, receiver unregistered")
         }
         receiverTimeout = timeout
         mainHandler.postDelayed(timeout, TimeUnit.MINUTES.toMillis(INSTALL_RESULT_TIMEOUT_MINUTES))
+    }
+
+    /** 注销安装结果广播并清掉超时兜底(幂等)。 */
+    private fun unregisterInstallReceiver(receiver: BroadcastReceiver?) {
+        receiverTimeout?.let { mainHandler.removeCallbacks(it) }
+        receiverTimeout = null
+        receiver?.let { runCatching { context.unregisterReceiver(it) } }
+        if (receiver === installReceiver) installReceiver = null
+    }
+
+    /** PackageInstaller session 被系统拒绝后的收尾:能兼容回退就交前台 Activity 启动系统安装器,否则上报失败原因。 */
+    private fun handleInstallFailure(status: Int, statusMessage: String?) {
+        val reason = installFailureMessage(status, statusMessage)
+        AppLog.w("Update", "install failed: $reason")
+        val apk = pendingApk
+        // 兼容回退:部分国产 TV/系统策略会直接拒绝 PackageInstaller session。
+        // 回退 Intent 必须由前台 Activity 启动(receiver 直接 startActivity 会被
+        // Android 9+ 的 BAL 限制静默拦截)。未允许安装未知应用时不回退——那样只会
+        // 再失败一次,直接给出可操作提示。
+        val fallbackIntent = if (apk != null && !fallbackAttempted && canInstallPackages()) {
+            buildInstallPackageIntent(apk)
+        } else {
+            null
+        }
+        pendingApk = null
+        if (fallbackIntent != null) {
+            fallbackAttempted = true
+            AppLog.i("Update", "session install rejected, falling back to ACTION_INSTALL_PACKAGE")
+            onPendingUserAction(fallbackIntent)
+            return
+        }
+        val message = if (apk != null && !canInstallPackages()) {
+            "安装失败：请先允许安装未知应用，然后重试"
+        } else {
+            reason
+        }
+        onInstallFailed(message)
     }
 
     /**
@@ -191,20 +241,9 @@ class ApkInstaller(
      * PackageInstaller API 但支持此 intent（比 ACTION_VIEW 兼容性更广）。
      */
     private fun tryInstallWithInstallPackage(apk: File): InstallLaunchResult {
+        val intent = buildInstallPackageIntent(apk)
+            ?: return InstallLaunchResult.Failed("无法打开系统安装器，请手动安装更新包")
         return try {
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                apk,
-            )
-            @Suppress("DEPRECATION")
-            val intent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
-                data = uri
-                putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
-                putExtra(Intent.EXTRA_RETURN_RESULT, true)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
             context.startActivity(intent)
             InstallLaunchResult.Started
         } catch (error: Throwable) {
@@ -212,6 +251,25 @@ class ApkInstaller(
             InstallLaunchResult.Failed("安装失败：${error.message}")
         }
     }
+
+    /** 构造 ACTION_INSTALL_PACKAGE 安装 Intent(首选与 session 失败回退共用);失败返回 null。 */
+    private fun buildInstallPackageIntent(apk: File): Intent? = runCatching {
+        val uri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            apk,
+        )
+        @Suppress("DEPRECATION")
+        Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+            data = uri
+            putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
+            putExtra(Intent.EXTRA_RETURN_RESULT, true)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+    }.onFailure { error ->
+        AppLog.w("Update", "build ACTION_INSTALL_PACKAGE intent failed: ${error.message}", error)
+    }.getOrNull()
 
     private fun tryInstallWithIntent(apk: File): InstallLaunchResult {
         // Android 8+ 无"安装未知应用"权限时 ACTION_VIEW 会静默失败,先引导开权限。
@@ -244,4 +302,30 @@ class ApkInstaller(
         // 结果不再回来(用户取消/系统吞掉),注销 receiver 防止挂到进程结束。
         const val INSTALL_RESULT_TIMEOUT_MINUTES = 10L
     }
+}
+
+/**
+ * 把 PackageInstaller 安装失败状态转成用户可读原因(附带系统原文,便于用户反馈/日志定位)。
+ * 纯函数,JVM 单测覆盖;系统原文截断到 120 字符避免弹窗被撑爆。
+ */
+@Suppress("InlinedApi")
+internal fun installFailureMessage(status: Int, systemMessage: String?): String {
+    val reason = when (status) {
+        PackageInstaller.STATUS_FAILURE_BLOCKED -> "安装被系统拦截"
+        PackageInstaller.STATUS_FAILURE_ABORTED -> "安装被取消"
+        PackageInstaller.STATUS_FAILURE_INVALID -> "安装包无效"
+        PackageInstaller.STATUS_FAILURE_CONFLICT -> "安装包与已安装版本冲突"
+        PackageInstaller.STATUS_FAILURE_STORAGE -> "存储空间不足"
+        PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> "与当前系统不兼容"
+        PackageInstaller.STATUS_FAILURE_TIMEOUT -> "安装超时"
+        else -> "安装失败"
+    }
+    val trimmed = systemMessage?.trim().orEmpty()
+    val detail = if (trimmed.isEmpty()) {
+        "（status=$status）"
+    } else {
+        val raw = if (trimmed.length > 120) trimmed.take(120) + "…" else trimmed
+        "（$raw）"
+    }
+    return reason + detail
 }

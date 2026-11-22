@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import com.example.mediacenter.data.AppUpdateInfo
 import com.example.mediacenter.data.MediaRepositoryHolder
+import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.ui.update.UpdateDialogState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,7 +41,31 @@ object AppUpdateHolder {
             onPendingUserAction = { confirm ->
                 _pendingConfirmIntent.value = confirm
             },
+            onInstallFailed = ::handleInstallFailed,
         )
+    }
+
+    // 本次更新对应的版本信息:安装失败时要用它重新弹「安装失败」弹窗。
+    @Volatile private var lastUpdateInfo: AppUpdateInfo? = null
+
+    /**
+     * 安装阶段失败的统一收尾(可能来自 PackageInstaller 广播线程):
+     * 复位下载/检查守卫并弹失败弹窗,让用户看到原因并能重试,不再静默停在旧版本。
+     */
+    private fun handleInstallFailed(message: String) {
+        updateDownloading = false
+        updateChecked = false
+        val info = lastUpdateInfo
+        if (info == null) {
+            AppLog.w("Update", "install failed without update info: $message")
+            return
+        }
+        _updateState.value = UpdateDialogState.Failed(info, message)
+    }
+
+    /** 兼容回退安装器也没能启动(如系统没有对应 Activity)时由前台页面回调。 */
+    fun reportInstallLaunchFailure(message: String = "无法打开系统安装器，请手动安装更新包") {
+        handleInstallFailed(message)
     }
 
     // 进程级应用作用域:下载/安装序列挂在这里,与任何页面生命周期解耦。
@@ -98,6 +123,7 @@ object AppUpdateHolder {
         if (updateDownloading) return
         updateDownloading = true
         updateDialogHiddenWhileDownloading = false
+        lastUpdateInfo = info
         _updateState.value = UpdateDialogState.Downloading(info, 0f)
         scope.launch {
             when (val result = manager.download(info) { progress ->

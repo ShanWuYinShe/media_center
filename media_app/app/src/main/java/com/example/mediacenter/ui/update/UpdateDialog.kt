@@ -65,7 +65,9 @@ fun UpdateDialog(
                 when (state) {
                     is UpdateDialogState.Available -> "发现新版本 ${state.info.versionName}"
                     is UpdateDialogState.Downloading -> "正在下载 ${state.info.versionName}…"
-                    is UpdateDialogState.Failed -> "下载更新失败"
+                    // 失败可能发生在下载阶段,也可能是系统安装器拒装(session 回退也失败):
+                    // 标题用「更新失败」覆盖两种阶段,具体原因由正文给出。
+                    is UpdateDialogState.Failed -> "更新失败"
                 },
                 color = TextPrimary,
                 maxLines = 2,
