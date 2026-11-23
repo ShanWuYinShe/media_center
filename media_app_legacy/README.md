@@ -43,3 +43,5 @@ B 站单视频（bvid）可能包含多个分 P（如 P1/P2/P3）。App 自动�
 播放前调用 BilibiliApi.resolvePlayback 获取最新播放地址，播放器使用 ExoPlayer `DefaultHttpDataSource` 直接流式读取服务端返回的 URL（经 `player/LegacyPlaybackMediaCache` 的 `CacheDataSource` 包装）。客户端不做下载器；但会做**播放媒体磁盘缓存**：解析成功后预取首段头部 768KB + 尾部 2MB（moov 兜底），播放 write-through 边播边写，重看/续播直接命中本地缓存秒开（LRU 128MB，cacheDir 内，异常自动回退网络，日志 `Perf: media prefetch ...` / `playback cache read`）。
 
 首页内容加载完成后（最迟启动 12s 兜底、且不在播放/详情/搜索页时）App 才会请求 `/api/app/update?versionCode=当前版本&variant=legacy` 检查更新，避免启动瞬间下载 APK 与首屏/缩略图抢带宽；发现新版本时自动下载 APK、校验 SHA-256，然后拉起系统安装器。若下载完成或检查失败时用户正在播放/看详情/搜索，提示会推迟到回到首页再弹出（避免盖住画面、抢走遥控器焦点导致误触）。普通 Android TV 应用不能绕过系统权限静默安装，首次需要用户允许“安装未知应用”并确认安装。安装阶段失败（PackageInstaller session 被系统拒绝等）会弹「更新失败 + 原因」提示并允许重试，session 被拒时自动回退 `ACTION_INSTALL_PACKAGE` 系统安装器；失败原因同时写入 `MediaCenter.Update: install result: status=… message=…` 日志。
+
+自动检查失败同样弹「更新失败 + 原因」并带「重试」（不再只有「知道了」）。「系统诊断信息」弹窗（最左分类连按左键 5 次）里另有「检查更新」手动入口：点击后先关闭诊断弹窗再检查，避免弹窗叠加——发现新版本走上面的下载/安装流程，已是最新弹「已是最新版本」，失败复用同一个「更新失败 + 重试」弹窗；手动检查进行中会先提示「正在检查更新…」。

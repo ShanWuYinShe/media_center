@@ -102,13 +102,14 @@ internal fun MainActivity.circleIconButton(
             setIconColor(Colors.TEXT_PRIMARY)
         }
         button.addView(iconView, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
+        val focusedBackground = focusedPillBackground()
         fun update(focused: Boolean) {
-            button.background = rounded(
-                if (focused) Colors.APPLE_BLUE else Colors.GlassFill,
-                999,
-                if (focused) 3 else 1,
-                if (focused) Colors.GLASS_BORDER_FOCUSED else Colors.GlassBorder,
-            )
+            // 焦点描边走 focusedPillBackground():stroke 不再被 view 边界裁掉一半。
+            button.background = if (focused) {
+                focusedBackground
+            } else {
+                rounded(Colors.GlassFill, 999, 1, Colors.GlassBorder)
+            }
             button.elevationCompat(if (focused) dp(8).toFloat() else 0f)
             button.animate().cancel()
             button.animate().scaleX(if (focused) 1.08f else 1f).scaleY(if (focused) 1.08f else 1f).setDuration(140).start()
@@ -154,15 +155,16 @@ internal fun MainActivity.primaryPill(
                 if (iconView != null) leftMargin = dp(10)
             },
         )
+        val focusedBackground = focusedPillBackground()
         fun update(focused: Boolean) {
             // 与新版一致:主操作常态即 Apple Blue,焦点只增加近白外框/缩放,
-            // 不再用旧版“白底黑字”主按钮。
-            row.background = rounded(
-                Colors.APPLE_BLUE,
-                999,
-                if (focused) 3 else 0,
-                if (focused) Colors.GLASS_BORDER_FOCUSED else Color.TRANSPARENT,
-            )
+            // 不再用旧版“白底黑字”主按钮。焦点描边走 focusedPillBackground(),
+            // 避免 stroke 画在 view 边界上被裁掉一半(见该函数注释)。
+            row.background = if (focused) {
+                focusedBackground
+            } else {
+                rounded(Colors.APPLE_BLUE, 999, 0, Color.TRANSPARENT)
+            }
             row.elevationCompat(if (focused) dp(10).toFloat() else dp(2).toFloat())
             val contentColor = Colors.TEXT_PRIMARY
             textView.setTextColor(contentColor)
@@ -209,7 +211,19 @@ internal fun MainActivity.applyPillFocus(
 
     // 三态背景按 view 记忆(WeakHashMap 不阻止回收):遥控器快速划过几十个 chip 时,
     // 每次焦点切换不再新建 GradientDrawable——弱核 API19 盒子上这正是 GC 卡顿点。
-    private val pillFocusDrawables = java.util.WeakHashMap<View, Array<android.graphics.drawable.GradientDrawable>>()
+    private val pillFocusDrawables = java.util.WeakHashMap<View, Array<android.graphics.drawable.Drawable>>()
+
+    /**
+     * 焦点态胶囊背景:Apple Blue 填充 + 浅色焦点描边。
+     *
+     * GradientDrawable 的 stroke 以 view 边界为中心线绘制,外侧一半会被 view
+     * 裁掉——3dp 描边在 1080p 上实际只看得见 3px(1.5dp),边框像被遮挡了一半,
+     * 且不同缩放/亚像素位置下四边可见厚度还会不一致(实测上下 3px、左右 6px)。
+     * 这里把描边宽度写成 2 倍:被裁掉外侧一半后,可见厚度正好回到设计的 3dp。
+     */
+    private fun MainActivity.focusedPillBackground(): android.graphics.drawable.Drawable {
+        return rounded(Colors.APPLE_BLUE, 999, 6, Colors.GLASS_BORDER_FOCUSED)
+    }
 
 internal fun MainActivity.applyPillFocus(
         view: View,
@@ -220,7 +234,7 @@ internal fun MainActivity.applyPillFocus(
         val states = pillFocusDrawables[view] ?: arrayOf(
             rounded(Colors.GlassFill, 999, 1, Colors.GlassBorder),
             rounded(Colors.GlassFillStrong, 999, 2, Colors.APPLE_BLUE),
-            rounded(Colors.APPLE_BLUE, 999, 3, Colors.GLASS_BORDER_FOCUSED),
+            focusedPillBackground(),
         ).also { pillFocusDrawables[view] = it }
         fun update(focused: Boolean) {
             view.background = when {

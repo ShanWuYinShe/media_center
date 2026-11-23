@@ -121,7 +121,12 @@ class MainActivity : ComponentActivity() {
     internal var pendingUpdatePrompt: AppUpdateResult.ReadyToInstall? = null
     // 更新检查/下载是否已启动(首页就绪后只启动一次)。
     private var updateCheckStarted = false
+    // 检查/下载是否正在进行:自动检查与手动检查(系统诊断弹窗)可能交叉触发,
+    // 并发会重复下载同一 APK 并叠出多个结果弹窗,必须互斥。
+    private var updateCheckInProgress = false
     // 页面忙碌时被推迟的更新失败提示(回到首页再弹,避免抢播放/详情焦点)。
+    private var pendingUpdateFailure: String? = null
+    // 被推迟的无损提示(如手动检查的「已是最新版本」)。
     private var pendingUpdateMessage: String? = null
     // “播放已稳定”计时器:STATE_READY 后延迟触发;只有同一地址连续顺畅播放超过窗口
     // 才把 ViewModel 的恢复额度清零,防止“就绪即失败”的流陷入无限恢复循环。
@@ -346,6 +351,10 @@ class MainActivity : ComponentActivity() {
                     pendingUpdatePrompt = null
                     root.post { if (!isFinishing) promptInstallUpdate(pending) }
                 }
+                pendingUpdateFailure?.let { message ->
+                    pendingUpdateFailure = null
+                    root.post { if (!isFinishing) showUpdateFailureDialog(message) }
+                }
                 pendingUpdateMessage?.let { message ->
                     pendingUpdateMessage = null
                     root.post { if (!isFinishing) showUpdateMessage(message) }
@@ -355,38 +364,78 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 更新失败弹窗的「重试」入口:复位检查守卫后重新检查/下载。
-     * 安装失败后用户可能已按提示去开启"安装未知应用"权限,重试要能重新走完整流程。
+     * 系统诊断弹窗的「检查更新」入口:弹窗关闭后由按钮调用(见 showSystemInfoDialog)。
+     * 用户主动检查必须给出明确结果反馈,因此按手动语义执行:绕过自动检查的一次性
+     * 守卫与"首页必须有内容"限制,发现新版本走下载/安装、已是最新提示、失败可重试。
+     */
+    internal fun checkUpdateManually() {
+        maybeStartUpdateCheck(force = true, manual = true)
+    }
+
+    /**
+     * 更新失败弹窗的「重试」入口:用户主动重试,同样按手动语义执行——重试成功且
+     * 已是最新时也要给「已是最新版本」反馈,不能静默;安装失败后用户可能已按提示
+     * 去开启"安装未知应用"权限,重试要能重新走完整流程。
      */
     internal fun retryUpdateCheck() {
-        updateCheckStarted = false
-        maybeStartUpdateCheck(force = true)
+        maybeStartUpdateCheck(force = true, manual = true)
     }
 
     /**
      * 检查更新:首页内容就绪后才开始,避免启动瞬间与首屏、缩略图抢带宽。
      * 播放/详情/搜索页可见时不启动(下载 + 可能的弹窗会打扰观看);离开播放页
      * 回首页的 render 会再次触发(见 render 的 else 分支)。force=true 是启动兜底。
+     *
+     * manual=true 表示用户在「系统诊断信息」弹窗里主动点「检查更新」或失败弹窗点
+     * 「重试」:不受一次性守卫与首页内容限制,且无论结果都给明确反馈
+     * (自动检查「发现新版本」照常弹安装框,「已是最新」保持静默不打扰用户)。
      */
-    private fun maybeStartUpdateCheck(force: Boolean = false) {
-        if (updateCheckStarted) return
+    private fun maybeStartUpdateCheck(force: Boolean = false, manual: Boolean = false) {
+        // 并发守卫:自动检查可能还在下载时用户又手动检查,重复进入会重复下载
+        // 同一 APK 并叠出多个结果弹窗。
+        if (updateCheckInProgress) {
+            if (manual) Toast.makeText(this, "正在检查更新…", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (updateCheckStarted && !manual) return
         val state = currentState
         if (state.playing != null || state.selected != null || searchVisible) return
-        if (!force && state.items.isEmpty()) return
+        // 手动检查是用户明确操作:首页为空/加载失败时也要给结果反馈。
+        if (!force && !manual && state.items.isEmpty()) return
         updateCheckStarted = true
+        updateCheckInProgress = true
+        if (manual) Toast.makeText(this, "正在检查更新…", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
-            when (val result = appUpdateManager.checkAndDownload()) {
-                AppUpdateResult.NoUpdate -> Unit
-                is AppUpdateResult.Failed -> {
-                    // 失败提示同样延后:播放/详情中弹窗会抢焦点,习惯性按 OK 可能误触。
-                    if (currentState.playing != null || currentState.selected != null || searchVisible) {
-                        pendingUpdateMessage = result.message
-                    } else {
-                        showUpdateMessage(result.message)
-                    }
-                }
+            val result = try {
+                appUpdateManager.checkAndDownload()
+            } finally {
+                updateCheckInProgress = false
+            }
+            when (result) {
+                // 自动检查已是最新保持静默;手动检查必须明确告知。
+                AppUpdateResult.NoUpdate -> if (manual) showUpdateInfo("已是最新版本")
+                // 检查/下载失败统一弹「更新失败 + 原因 + 重试」,不再只能「知道了」。
+                is AppUpdateResult.Failed -> showUpdateFailure(result.message)
                 is AppUpdateResult.ReadyToInstall -> presentUpdatePrompt(result)
             }
+        }
+    }
+
+    /** 更新失败提示:弹窗带「重试」;播放/详情/搜索中先记下,回首页再弹(避免抢焦点)。 */
+    private fun showUpdateFailure(message: String) {
+        if (currentState.playing != null || currentState.selected != null || searchVisible) {
+            pendingUpdateFailure = message
+        } else {
+            showUpdateFailureDialog(message)
+        }
+    }
+
+    /** 无损提示(如手动检查的「已是最新版本」):同样避免在播放/详情里抢焦点。 */
+    private fun showUpdateInfo(message: String) {
+        if (currentState.playing != null || currentState.selected != null || searchVisible) {
+            pendingUpdateMessage = message
+        } else {
+            showUpdateMessage(message)
         }
     }
 
