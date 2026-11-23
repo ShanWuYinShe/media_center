@@ -285,20 +285,38 @@ internal fun MainActivity.showSystemInfoDialog() {
                     }
                 },
             )
+            // 底部操作行:三个按钮横向排列(与「发现新版本」「更新失败」弹窗一致)。
+            // 诊断信息行数多,纵向叠三个按钮会把可视信息压到只剩一两行;横向一行
+            // 不额外占高度,内容区可视行数与加按钮之前保持一致。
+            val actions = LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                clipChildren = false
+                clipToPadding = false
+            }
             clearBtn.setOnKeyListener(scrollKeyListener)
-            card.addView(
-                clearBtn,
-                LinearLayout.LayoutParams(match(), dp(48)).withTopMargin(dp(16)),
+            actions.addView(clearBtn, LinearLayout.LayoutParams(wrap(), dp(48)).withEndMargin(dp(12)))
+
+            // 「检查更新」:手动检查入口(自动检查失败/系统时间等问题的现场排查配套)。
+            // 必须先关诊断弹窗再执行——检查结果/安装提示是独立弹窗,叠加会互相
+            // 抢遥控器焦点;root.post 保证在弹窗真正 dismiss 之后再发起。
+            val checkUpdate = pill(
+                text = "检查更新",
+                selected = false,
+                heightDp = 48,
+                horizontalPaddingDp = 28,
+                onClick = {
+                    dismiss()
+                    root.post { if (!isFinishing) checkUpdateManually() }
+                },
             )
+            checkUpdate.setOnKeyListener(scrollKeyListener)
+            actions.addView(checkUpdate, LinearLayout.LayoutParams(wrap(), dp(48)).withEndMargin(dp(12)))
 
             val close = pill("关闭", selected = true, heightDp = 48, horizontalPaddingDp = 28) { dismiss() }
             close.setOnKeyListener(scrollKeyListener)
-            // 遥控器左右键在「清除媒体缓存」/「关闭」之间互选(两个按钮横向相邻)。
-            clearBtn.id = View.generateViewId()
-            close.id = View.generateViewId()
-            clearBtn.nextFocusRightId = close.id
-            close.nextFocusLeftId = clearBtn.id
-            card.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(20)))
+            actions.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)))
+            card.addView(actions, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(16)))
             setContentView(card)
             window?.setBackgroundDrawableResource(android.R.color.transparent)
             applySafeDialogLayout(0.62f, 0.72f)
