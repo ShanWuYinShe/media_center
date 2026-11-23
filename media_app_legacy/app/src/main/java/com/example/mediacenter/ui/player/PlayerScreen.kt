@@ -405,7 +405,12 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
             }
             visibility = if (nextPlayer.playbackState == Player.STATE_BUFFERING) View.VISIBLE else View.GONE
         }
-        screen.addView(bufferingSpinner, FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER))
+        // 缓冲转圈上移 72dp:中央 96dp 播放/暂停圆盘与它同心叠加,且圆盘后添加、
+        // 画在上层,缓冲前 ~1s 会把转圈整个盖住(看起来像没有缓冲提示)。
+        screen.addView(
+            bufferingSpinner,
+            FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER).apply { bottomMargin = dp(72) },
+        )
         // 中央播放状态：暂停时常驻 ▶，播放时短暂显示 ❚❚ 后淡出。
         val centerGlyph = PlayPauseGlyphView(this)
         val centerGlyphWrap = FrameLayout(this).apply {
@@ -608,8 +613,10 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
             val filledWidth = (trackWidth * fraction).toInt()
             bufferedFill.scaleX = bufferedFraction
             progressFill.scaleX = fraction
-            val maxKnobX = (trackWidth - dp(14)).coerceAtLeast(0).toFloat()
-            progressKnob.translationX = (filledWidth - dp(14) / 2f).coerceIn(0f, maxKnobX)
+            // knob 宽 16dp:上限必须按 16dp 算,否则进度拉满时右缘越出轨道 2dp
+            // (当前靠 progressTrack.clipChildren=false 兜住,不应依赖这一点)。
+            val maxKnobX = (trackWidth - dp(16)).coerceAtLeast(0).toFloat()
+            progressKnob.translationX = (filledWidth - dp(16) / 2f).coerceIn(0f, maxKnobX)
             timeCurrent.setTextIfChanged(formatTime(position))
             timeTotal.setTextIfChanged(formatTime(duration))
         }

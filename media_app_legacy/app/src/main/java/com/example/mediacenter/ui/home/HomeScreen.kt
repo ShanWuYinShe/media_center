@@ -34,6 +34,7 @@ import com.example.mediacenter.ui.components.dp
 import com.example.mediacenter.ui.components.frameMatch
 import com.example.mediacenter.ui.components.label
 import com.example.mediacenter.ui.components.glassText
+import com.example.mediacenter.ui.components.horizontalFocusStrip
 import com.example.mediacenter.ui.components.iconPill
 import com.example.mediacenter.ui.components.gridColumns
 import com.example.mediacenter.ui.components.match
@@ -148,15 +149,16 @@ internal fun MainActivity.renderHome(state: MediaUiState) {
                     frameMatch(),
                 )
                 prefetchVisibleHomeDetails(state.items.take(gridColumns() * 2))
-                state.error?.let { message ->
-                    body.addView(
-                        homeInlineError(message),
-                        FrameLayout.LayoutParams(match(), wrap(), Gravity.BOTTOM).apply {
-                            setMargins(dp(8), 0, dp(8), dp(20))
-                        },
-                    )
-                }
             }
+        }
+        // 旧数据刷新/分页失败时的横幅:之前以 Gravity.BOTTOM 叠在网格之上(后加的子
+        // 画在网格上层),会盖住底部卡片的时长行与 footer;改为 content 的独立一行,
+        // 由 LinearLayout 自动让出空间,不再遮挡任何内容。
+        if (state.error != null && displayItems.isNotEmpty()) {
+            content.addView(
+                homeInlineError(state.error),
+                LinearLayout.LayoutParams(match(), wrap()).apply { bottomMargin = dp(8) },
+            )
         }
 
         if (state.loading && state.items.isNotEmpty()) {
@@ -273,6 +275,9 @@ internal fun MainActivity.homeTopBar(
                 onClick = { showProviderDialog(state.providers, state.currentProvider) },
                 onFocusChange = { focused -> if (focused) homeFocusArea = HomeFocusArea.Search },
             ).apply {
+                // provider.name 来自服务端:过长会挤压右侧「设置/搜索」成空胶囊,
+                // 限制最大宽度并省略,保证顶栏动作按钮始终可读。
+                maxWidth = dp(280)
                 setOnKeyListener { _, keyCode, event ->
                     if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
                     when (keyCode) {
@@ -505,7 +510,9 @@ internal fun MainActivity.homeTopBar(
             // 视口必须裁剪:否则 chipRow 会画到右侧视频源/设置按钮下面。
             clipChildren = true
             addView(chipRow)
-            setPadding(0, 0, dp(4), 0)
+            // 左右各留 4dp:首个/最末 chip 的 1.06 倍焦点放大(最大 ≈3.5dp)
+            // 不会被视口裁掉边框;clipToPadding=false 允许放大画进 padding。
+            setPadding(dp(4), 0, dp(4), 0)
         }
         if (providerChip != null) {
             row.addView(providerChip, LinearLayout.LayoutParams(wrap(), dp(54)).withStartMargin(dp(12)))
@@ -590,12 +597,18 @@ internal fun MainActivity.searchPanel(state: MediaUiState): View {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(22), 0, 0)
+            // 非滚动容器:关闭裁剪,给顶部按钮 1.05/1.06 倍聚焦放大留溢出空间
+            // (旧实现「取消」按钮贴右边界,聚焦时右侧焦点框被行/面板边界裁平)。
+            clipChildren = false
+            clipToPadding = false
         }
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, 0, 0, 0)
+            clipChildren = false
+            clipToPadding = false
         }
         val inputWrap = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -733,18 +746,14 @@ internal fun MainActivity.searchPanel(state: MediaUiState): View {
             if (firstKeywordChip == null) firstKeywordChip = chip
             keywordRow.addView(
                 chip,
-                LinearLayout.LayoutParams(wrap(), dp(44)).withEndMargin(dp(10)),
+                // 之前父级固定 44dp 覆盖了 pill 的 48dp 最小热区,热词 chip 偏矮;
+                // 与 48dp 焦点目标下限对齐。
+                LinearLayout.LayoutParams(wrap(), dp(48)).withEndMargin(dp(10)),
             )
         }
-        panel.addView(
-            HorizontalScrollView(this).apply {
-                isHorizontalScrollBarEnabled = false
-                clipChildren = false
-                clipToPadding = false
-                addView(keywordRow)
-            },
-            linearMatch(),
-        )
+        // 滚动容器必须裁剪(否则滚动时热词会画到页面留白/屏幕边缘),
+        // 用 padding + clipToPadding=false 给 chip 焦点放大留余量。
+        panel.addView(horizontalFocusStrip(keywordRow, padH = 6, padV = 4), linearMatch())
         input.setOnKeyListener { _, keyCode, event ->
             if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
                 searchButton.requestFocus()

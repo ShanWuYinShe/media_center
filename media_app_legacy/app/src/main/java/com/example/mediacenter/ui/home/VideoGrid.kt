@@ -26,6 +26,7 @@ import com.example.mediacenter.ui.components.match
 import com.example.mediacenter.ui.components.posterCardWidth
 import com.example.mediacenter.ui.components.rounded
 import com.example.mediacenter.ui.components.roundedGradient
+import com.example.mediacenter.ui.components.roundedVisibleStroke
 import com.example.mediacenter.ui.components.videoMeta
 import com.example.mediacenter.ui.components.wrap
 import com.example.mediacenter.ui.components.withStartMargin
@@ -147,15 +148,23 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
             // 最小高度 48dp：这是可聚焦行，太矮会让焦点指示几乎不可见
             minimumHeight = dp(48)
             setPadding(dp(24), dp(8), dp(24), dp(8))
-            background = rounded(Colors.GlassFill, 24, 1, Colors.GlassBorder)
+            val normalBackground = rounded(Colors.GlassFill, 24, 1, Colors.GlassBorder)
+            val focusedBackground = roundedVisibleStroke(Colors.GlassFillStrong, 24, 1.5f, Colors.APPLE_BLUE)
+            background = normalBackground
             isFocusable = true
             isClickable = true
             setOnClickListener { onRetry() }
+            // 整行宽度被 RecyclerView 裁切,不能做 1.06 放大(会切掉左右焦点框);
+            // 用底色 + 2dp 蓝色描边表达焦点,保证"焦点在可见行上"。
+            setOnFocusChangeListener { _, focused ->
+                background = if (focused) focusedBackground else normalBackground
+                elevationCompat(if (focused) dp(4).toFloat() else 0f)
+            }
             setOnKeyListener { _, keyCode, event ->
                 if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
                 keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
             }
-            addView(label(message, 14f, Colors.TEXT_SECONDARY, bold = true, maxLines = 1), LinearLayout.LayoutParams(0, wrap(), 1f))
+            addView(label(message, 14f, Colors.TEXT_SECONDARY, bold = true, maxLines = 2), LinearLayout.LayoutParams(0, wrap(), 1f))
             addView(label("重试", 14f, Colors.APPLE_BLUE, bold = true, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(12)))
         }
     }
@@ -305,15 +314,18 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
         private inner class VideoHolder : RecyclerView.ViewHolder(createVideoCardRoot()) {
             private val card: FrameLayout = itemView as FrameLayout
             private val imageWrap = FrameLayout(activity).apply {
+                // 描边由上层 focusRing 统一绘制(图片会盖住 background 上的描边),
+                // 这里只保留圆角渐变底板。
                 background = activity.roundedGradient(
                     Colors.PlaceholderTop,
                     Colors.PlaceholderBottom,
                     16,
-                    1,
-                    Colors.GlassBorder,
                 )
             }
-            private val image = ThumbnailImageView(activity)
+            private val image = ThumbnailImageView(activity).apply {
+                // 卡片是 16dp 圆角,图片必须自己裁圆角,否则方角图会盖住圆角背景。
+                cornerRadiusPx = activity.dp(16).toFloat()
+            }
             private val initials = activity.label("", 42f, Colors.TEXT_TERTIARY, bold = true, maxLines = 1).apply {
                 gravity = Gravity.CENTER
                 alpha = 1f
@@ -325,6 +337,11 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
             private val focusIndicator = View(activity).apply {
                 background = activity.rounded(Colors.APPLE_BLUE, 999)
                 alpha = 0f
+            }
+            // 焦点描边必须画在缩略图之上:原来写在 imageWrap.background 上,被铺满的
+            // 图片整幅盖住,卡片焦点框实际一个像素都看不见(只剩底部蓝条+缩放)。
+            private val focusRing = View(activity).apply {
+                background = activity.rounded(Color.TRANSPARENT, 16, 1, Colors.GlassBorder)
             }
             private var boundVideo: VideoSummary? = null
             private var boundThumbnailUrl: String? = null
@@ -358,6 +375,8 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
                         bottomMargin = activity.dp(0)
                     },
                 )
+                // 最后加的覆盖层:焦点描边在图片与文字之上,保证完整可见。
+                imageWrap.addView(focusRing, activity.frameMatch())
                 card.addView(imageWrap, activity.frameMatch())
 
                 val textBlock = LinearLayout(activity).apply {
@@ -374,9 +393,19 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
                         if (focused) Colors.SURFACE_FOCUSED else Colors.PlaceholderTop,
                         if (focused) Colors.SURFACE_FOCUSED else Colors.PlaceholderBottom,
                         16,
-                        if (focused) 2 else 1,
-                        if (focused) Colors.GLASS_BORDER_FOCUSED else Colors.GlassBorder,
                     )
+                    // 焦点框与全 App 统一为 1.5dp 细描边(10ft 下 2dp+ 显得厚重);
+                    // 常态保留 1dp 玻璃描边;roundedVisibleStroke 保证是真实可见厚度。
+                    focusRing.background = if (focused) {
+                        activity.roundedVisibleStroke(
+                            Color.TRANSPARENT,
+                            16,
+                            1.5f,
+                            Colors.GLASS_BORDER_FOCUSED,
+                        )
+                    } else {
+                        activity.rounded(Color.TRANSPARENT, 16, 1, Colors.GlassBorder)
+                    }
                     imageWrap.elevationCompat(if (focused) activity.dp(14).toFloat() else 0f)
                     val video = boundVideo
                     if (focused && video != null) {

@@ -45,7 +45,9 @@ internal fun MainActivity.errorState(message: String, onRetry: () -> Unit, autoR
         val card = LinearLayout(this).apply {
             gravity = Gravity.CENTER_HORIZONTAL
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(44), dp(40), dp(44), dp(36))
+            // 首页错误态可用高度只有 ≈343dp(顶栏+分类标题之后),旧 padding
+            // 让卡片高达 ≈334dp、elevation 阴影被 body 裁掉;收敛 padding 留出边距。
+            setPadding(dp(32), dp(28), dp(32), dp(26))
             background = roundedGradient(Colors.SURFACE_FOCUSED, Colors.SURFACE_ELEVATED, 30, 1, Colors.GlassBorder)
             minimumWidth = dp(360)
             elevationCompat(dp(18).toFloat())
@@ -97,7 +99,9 @@ internal fun MainActivity.errorInline(message: String, onRetry: () -> Unit): Vie
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(12), 0, 0)
         }
-        row.addView(label(message, 14f, Colors.TEXT_DANGER, maxLines = 2), LinearLayout.LayoutParams(0, wrap(), 1f))
+        // 详情信息列只有 ≈401dp,减去「重试」胶囊后 2 行仅 ≈40 字,异常文案常更长;
+        // 放宽到 3 行避免关键错误信息被省略。
+        row.addView(label(message, 14f, Colors.TEXT_DANGER, maxLines = 3), LinearLayout.LayoutParams(0, wrap(), 1f))
         row.addView(pill("重试", selected = false, heightDp = 48, horizontalPaddingDp = 18, onClick = onRetry), LinearLayout.LayoutParams(wrap(), dp(48)).withStartMargin(dp(12)))
         return row
     }

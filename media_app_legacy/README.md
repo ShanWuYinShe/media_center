@@ -45,3 +45,11 @@ B 站单视频（bvid）可能包含多个分 P（如 P1/P2/P3）。App 自动�
 首页内容加载完成后（最迟启动 12s 兜底、且不在播放/详情/搜索页时）App 才会请求 `/api/app/update?versionCode=当前版本&variant=legacy` 检查更新，避免启动瞬间下载 APK 与首屏/缩略图抢带宽；发现新版本时自动下载 APK、校验 SHA-256，然后拉起系统安装器。若下载完成或检查失败时用户正在播放/看详情/搜索，提示会推迟到回到首页再弹出（避免盖住画面、抢走遥控器焦点导致误触）。普通 Android TV 应用不能绕过系统权限静默安装，首次需要用户允许“安装未知应用”并确认安装。安装阶段失败（PackageInstaller session 被系统拒绝等）会弹「更新失败 + 原因」提示并允许重试，session 被拒时自动回退 `ACTION_INSTALL_PACKAGE` 系统安装器；失败原因同时写入 `MediaCenter.Update: install result: status=… message=…` 日志。
 
 自动检查失败同样弹「更新失败 + 原因」并带「重试」（不再只有「知道了」）。「系统诊断信息」弹窗（最左分类连按左键 5 次）里另有「检查更新」手动入口：点击后先关闭诊断弹窗再检查，避免弹窗叠加——发现新版本走上面的下载/安装流程，已是最新弹「已是最新版本」，失败复用同一个「更新失败 + 重试」弹窗；手动检查进行中会先提示「正在检查更新…」。
+
+## UI 细节约定(防裁切/遮挡)
+
+legacy 用原生 View 绘制,以下三类写法会让元素「看起来被裁掉/被遮挡」,改 UI 时按约定处理:
+
+- **描边统一走 `rounded()/roundedGradient()`**(见 `ui/components/UiUtils.kt`):GradientDrawable 的 stroke 以 view 边界为中心线,外侧一半会被裁掉;工具函数内部把宽度按 2 倍绘制,调用方只写设计值,不要直接 `setStroke()`。
+- **焦点放大**:`applyPillFocus`/`applyCardFocus` 会 scale 1.04~1.08。放大元素要放在**非滚动容器**里并让父链 `clipChildren=false`,或给容器留 ≥ 元素宽度 3% 的 padding;滚动容器(RecyclerView/HorizontalScrollView/ScrollView)**必须保持 clipChildren=true**(否则滚动内容会画出视口盖住别的元素),用 padding + `clipToPadding=false` 给放大留余量(横向列表统一用 `horizontalFocusStrip()`)。
+- **图片圆角**:方角图片会盖住父容器的圆角背景与 1dp 描边。缩略图/大图用 `ThumbnailImageView.cornerRadiusPx` 自裁剪;焦点描边要画在图片之上的覆盖层(见 `ui/home/VideoGrid.kt` 的 `focusRing`)。
