@@ -75,7 +75,32 @@ internal fun MainActivity.rounded(
     return GradientDrawable().apply {
         setColor(color)
         cornerRadius = dp(radiusDp).toFloat()
-        if (strokeDp > 0) setStroke(dp(strokeDp), strokeColor)
+        // 描边宽度按 2 倍绘制:GradientDrawable 的 stroke 以 view 边界为中心线,
+        // 外侧一半会被 view 裁掉,直接按设计值画只可见一半(1dp 边框只剩 0.5dp,
+        // 2dp 焦点框只剩 1dp),看起来像"边框被遮挡了一部分"。2 倍后可见厚度
+        // 正好等于调用方写的设计值,全 App 描边一致。
+        if (strokeDp > 0) setStroke(dp(strokeDp) * 2, strokeColor)
+    }
+}
+
+/**
+ * 指定「可见厚度」(dp,支持 0.5dp 步进)的圆角描边背景。
+ *
+ * 与 [rounded] 同一套 2 倍补偿原理(补偿 GradientDrawable 中位线描边被 view
+ * 边界裁掉的外侧一半),用于焦点框这类对厚度敏感的细节:3dp 全可见描边在 10ft
+ * 电视上偏粗、像"白块",统一改成 1.5dp 细描边 + 底色/缩放/阴影表达焦点。
+ */
+internal fun MainActivity.roundedVisibleStroke(
+    color: Int,
+    radiusDp: Int,
+    visibleStrokeDp: Float,
+    strokeColor: Int,
+): GradientDrawable {
+    return GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(radiusDp).toFloat()
+        val strokePx = (visibleStrokeDp * tvDensity * 2f + 0.5f).toInt()
+        if (strokePx > 0) setStroke(strokePx, strokeColor)
     }
 }
 
@@ -91,7 +116,8 @@ internal fun MainActivity.roundedGradient(
         intArrayOf(topColor, bottomColor),
     ).apply {
         cornerRadius = dp(radiusDp).toFloat()
-        if (strokeDp > 0) setStroke(dp(strokeDp), strokeColor)
+        // 与 rounded() 相同:2 倍描边补偿中位线绘制导致的外侧裁掉一半。
+        if (strokeDp > 0) setStroke(dp(strokeDp) * 2, strokeColor)
     }
 }
 

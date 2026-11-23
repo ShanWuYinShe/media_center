@@ -214,15 +214,15 @@ internal fun MainActivity.applyPillFocus(
     private val pillFocusDrawables = java.util.WeakHashMap<View, Array<android.graphics.drawable.Drawable>>()
 
     /**
-     * 焦点态胶囊背景:Apple Blue 填充 + 浅色焦点描边。
+     * 焦点态胶囊背景:Apple Blue 填充 + 1.5dp 浅色焦点描边。
      *
-     * GradientDrawable 的 stroke 以 view 边界为中心线绘制,外侧一半会被 view
-     * 裁掉——3dp 描边在 1080p 上实际只看得见 3px(1.5dp),边框像被遮挡了一半,
-     * 且不同缩放/亚像素位置下四边可见厚度还会不一致(实测上下 3px、左右 6px)。
-     * 这里把描边宽度写成 2 倍:被裁掉外侧一半后,可见厚度正好回到设计的 3dp。
+     * 描边只是"焦点在哪"的提示,10ft 距离下 3dp 全可见描边显得又粗又重(像贴了
+     * 一圈白胶布),1.5dp 细描边 + 填充色变化 + 1.05~1.08 倍放大 + elevation
+     * 阴影已经足够表达焦点,视觉也更干净;roundedVisibleStroke 保证 1.5dp 是
+     * 真实可见厚度(不是被裁一半后的 0.75dp)。
      */
     private fun MainActivity.focusedPillBackground(): android.graphics.drawable.Drawable {
-        return rounded(Colors.APPLE_BLUE, 999, 6, Colors.GLASS_BORDER_FOCUSED)
+        return roundedVisibleStroke(Colors.APPLE_BLUE, 999, 1.5f, Colors.GLASS_BORDER_FOCUSED)
     }
 
 internal fun MainActivity.applyPillFocus(
@@ -257,6 +257,27 @@ internal fun MainActivity.applyPillFocus(
         view.setOnFocusChangeListener { _, focused ->
             update(focused)
             onFocusChange?.invoke(focused)
+        }
+    }
+
+/**
+ * 横向可滚动的「焦点条」(分类 chip / 清晰度 chip / 热词等共用)。
+ *
+ * 滚动容器**必须保持 clipChildren=true**(否则滚动时内容会画出视口、盖住其它
+ * 元素);用 padding + clipToPadding=false 给子项 1.06 倍焦点放大留出溢出空间,
+ * 避免首/末项焦点框被视口裁掉。padH 需大于最大 chip 宽度的 3%(约 4~6dp)。
+ */
+internal fun MainActivity.horizontalFocusStrip(
+        content: View,
+        padH: Int = 6,
+        padV: Int = 4,
+    ): android.widget.HorizontalScrollView {
+        return android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            clipChildren = true
+            clipToPadding = false
+            setPadding(dp(padH), dp(padV), dp(padH), dp(padV))
+            addView(content)
         }
     }
 

@@ -25,6 +25,7 @@ import com.example.mediacenter.ui.components.errorInline
 import com.example.mediacenter.ui.components.loadingScrim
 import com.example.mediacenter.ui.components.dp
 import com.example.mediacenter.ui.components.frameMatch
+import com.example.mediacenter.ui.components.horizontalFocusStrip
 import com.example.mediacenter.ui.components.label
 import com.example.mediacenter.ui.components.letterSpacingCompat
 import com.example.mediacenter.ui.components.pill
@@ -135,7 +136,10 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
             )
             elevationCompat(dp(22).toFloat())
         }
-        val heroImage = ThumbnailImageView(this)
+        val heroImage = ThumbnailImageView(this).apply {
+            // hero 是 22dp 圆角,图片必须自己裁圆角,否则方角图会盖住圆角背景。
+            cornerRadiusPx = dp(22).toFloat()
+        }
         val heroInitials = label(details.title.take(2).ifBlank { "影" }, 64f, Colors.TEXT_TERTIARY, bold = true, maxLines = 1).apply {
             gravity = Gravity.CENTER
             alpha = 1f
@@ -160,6 +164,11 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
             },
             frameMatch(),
         )
+        // 描边画在最上层:图片会盖住 hero 背景上的 1dp 玻璃边框。
+        hero.addView(
+            View(this).apply { background = rounded(Color.TRANSPARENT, 22, 1, Colors.GlassBorder) },
+            frameMatch(),
+        )
         row.addView(hero, LinearLayout.LayoutParams(heroW, heroH).withEndMargin(heroEndGap))
 
         val info = LinearLayout(this).apply {
@@ -171,8 +180,12 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
         val infoScroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
-            clipChildren = false
+            // 滚动容器必须裁剪(旧实现 clipChildren=false,滚出视口的信息会画到
+            // 96dp 留白区,像"内容漂浮在页边");用上下 padding + clipToPadding=false
+            // 给焦点放大留余量。
+            clipChildren = true
             clipToPadding = false
+            setPadding(0, dp(6), 0, dp(6))
         }
         infoScroll.addView(info, ViewGroup.LayoutParams(match(), wrap()))
         row.addView(infoScroll, LinearLayout.LayoutParams(0, match(), 1f))
@@ -188,21 +201,44 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
             },
             linearMatch(),
         )
+        val descriptionText = details.description ?: ""
+        val descLabel = label(
+            descriptionText.takeIf { it.isNotBlank() } ?: "暂无简介",
+            descSize,
+            Colors.TEXT_SECONDARY,
+            maxLines = descLines,
+        ).apply {
+            setLineSpacing(dp(4).toFloat(), 1f)
+        }
         info.addView(
-            label(details.description?.takeIf { it.isNotBlank() } ?: "暂无简介", descSize, Colors.TEXT_SECONDARY, maxLines = descLines).apply {
-                setLineSpacing(dp(4).toFloat(), 1f)
-            },
+            descLabel,
             LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(gapDesc)),
         )
-
-        val descriptionText = details.description ?: ""
-        if (descriptionText.length > 96) {
-            info.addView(
-                pill("查看完整简介", selected = false, heightDp = chipH, horizontalPaddingDp = chipHPad) {
-                    showDescriptionDialog(details.title, descriptionText)
-                },
-                LinearLayout.LayoutParams(wrap(), dp(chipH)).withTopMargin(dp(gapDisclosure)),
-            )
+        // 「查看完整简介」入口按**实际布局是否省略**决定,而不是字符数阈值:
+        // 401dp 列宽下 3 行只能显示 ≈67 个汉字,旧阈值 96 会让 67~96 字的简介
+        // 被静默截断且没有入口。先 GONE 加入,布局完成后再按末行 ellipsis 显示。
+        val descriptionDisclosure = pill(
+            "查看完整简介",
+            selected = false,
+            heightDp = chipH,
+            horizontalPaddingDp = chipHPad,
+        ) {
+            showDescriptionDialog(details.title, descriptionText)
+        }
+        descriptionDisclosure.visibility = View.GONE
+        info.addView(
+            descriptionDisclosure,
+            LinearLayout.LayoutParams(wrap(), dp(chipH)).withTopMargin(dp(gapDisclosure)),
+        )
+        descLabel.post {
+            val textLayout = descLabel.layout ?: return@post
+            val lastLine = descLabel.maxLines - 1
+            val truncated = lastLine >= 0 &&
+                textLayout.lineCount >= descLabel.maxLines &&
+                textLayout.getEllipsisCount(lastLine) > 0
+            if (truncated) {
+                descriptionDisclosure.visibility = View.VISIBLE
+            }
         }
 
         var detailErrorRetry: () -> Unit = viewModel::refreshSelectedPlayback
@@ -281,10 +317,11 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                 option
             }
             val playButton = primaryPill(
+                // 只放「播放 + 时长」:401dp 的信息列放不下「播放 + 时长 + 清晰度」,
+                // 单行省略会把清晰度吃掉;清晰度由下方 chips 高亮表达。
                 text = buildString {
                     append("播放")
                     durationText?.let { append(" $it") }
-                    playOption.label.takeIf { it.isNotBlank() }?.let { append(" · $it") }
                 },
                 heightDp = playH,
                 horizontalPaddingDp = playHPad,
@@ -296,7 +333,15 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                 onClick = { viewModel.play(playOption) },
             )
             registerDetailFocus(DetailFocusTarget.Play, playButton)
-            info.addView(playButton, LinearLayout.LayoutParams(wrap(), dp(playH)).withTopMargin(dp(gapPlay)))
+            // 左右留 10dp:主按钮 1.05 倍聚焦放大(≈9.5dp)不会被 infoScroll 视口裁掉。
+            info.addView(
+                playButton,
+                LinearLayout.LayoutParams(match(), dp(playH)).apply {
+                    leftMargin = dp(10)
+                    rightMargin = dp(10)
+                    topMargin = dp(gapPlay)
+                },
+            )
 
             // 清晰度 chips:优先用 playurl 返回的可用清晰度列表(availableQualities,
             // 之前恒返回单选项导致这里永不渲染);兼容非 B 站 provider 的多选项
@@ -357,7 +402,10 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                         LinearLayout.LayoutParams(wrap(), dp(chipH)).withEndMargin(dp(14)),
                     )
                 }
-                info.addView(optionRow, linearMatch())
+                // 401dp 信息列放不下 4~5 档清晰度:B 站 1080P 视频通常 4~5 档,
+                // 旧实现 LinearLayout 会把超出宽度的 chip 压成 0 宽(只剩空胶囊,
+                // 仍可聚焦)。改为横向焦点条,支持滚动且放大不被裁。
+                info.addView(horizontalFocusStrip(optionRow, padH = 6, padV = 0), linearMatch())
             }
 
             // 多P选集:分P数量多时用导航+弹窗替代水平一排按钮
@@ -391,7 +439,7 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                     }
                     pageRow.addView(allChip, LinearLayout.LayoutParams(wrap(), dp(chipH)))
                     if (pageRow.isNotEmpty()) {
-                        info.addView(pageRow, linearMatch())
+                        info.addView(horizontalFocusStrip(pageRow, padH = 6, padV = 0), linearMatch())
                     }
                 }
             }

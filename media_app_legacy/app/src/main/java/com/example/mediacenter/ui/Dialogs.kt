@@ -38,6 +38,7 @@ import com.example.mediacenter.ui.components.linearMatch
 import com.example.mediacenter.ui.components.pill
 import com.example.mediacenter.ui.components.primaryPill
 import com.example.mediacenter.ui.components.rounded
+import com.example.mediacenter.ui.components.roundedVisibleStroke
 import com.example.mediacenter.ui.components.wrap
 import com.example.mediacenter.ui.components.withStartMargin
 import com.example.mediacenter.ui.components.withEndMargin
@@ -171,7 +172,7 @@ internal fun MainActivity.showSystemInfoDialog() {
                     LinearLayout.LayoutParams(0, wrap(), 0.42f),
                 )
                 val valueColor = if (highlight) Colors.APPLE_BLUE else Colors.TEXT_PRIMARY
-                val valueView = label(value, 16f, valueColor, maxLines = 2)
+                val valueView = label(value, 16f, valueColor, maxLines = 3)
                 rowLayout.addView(
                     valueView,
                     LinearLayout.LayoutParams(0, wrap(), 0.58f),
@@ -224,8 +225,12 @@ internal fun MainActivity.showSystemInfoDialog() {
             val scroll = ScrollView(activity).apply {
                 isVerticalScrollBarEnabled = false
                 overScrollMode = View.OVER_SCROLL_NEVER
-                clipChildren = false
+                // 滚动容器必须裁剪:旧实现 clipChildren=false 时,滚出视口的
+                // 信息行会画到卡片 padding 区、压过副标题与底部按钮。
+                clipChildren = true
+                // 上下 padding + clipToPadding=false 给内容一点呼吸空间。
                 clipToPadding = false
+                setPadding(0, dp(6), 0, dp(6))
                 addView(content, ViewGroup.LayoutParams(match(), wrap()))
             }
             card.addView(scroll, LinearLayout.LayoutParams(match(), 0, 1f).withTopMargin(dp(8)))
@@ -377,7 +382,8 @@ internal fun MainActivity.showOptionListDialog(
                 gravity = Gravity.CENTER
                 minWidth = dp(36)
             }
-            private val titleLabel = label("", 15f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1)
+            // 选集行是「第 N 集 · 原标题」,单行会把原标题整段吃掉,允许两行。
+            private val titleLabel = label("", 15f, Colors.TEXT_PRIMARY, bold = true, maxLines = 2)
 
             init {
                 row.gravity = Gravity.CENTER_VERTICAL
@@ -400,15 +406,18 @@ internal fun MainActivity.showOptionListDialog(
                 }
                 // 焦点态:AppleBlue 背景 + 白色文字 + 微放大,与 pill 风格一致
                 row.setOnFocusChangeListener { _, focused ->
-                    row.background = rounded(
-                        when {
-                            focused -> Colors.APPLE_BLUE
-                            boundIsCurrent -> ColorUtils.setAlphaComponent(Colors.APPLE_BLUE, 38)
-                            else -> Color.TRANSPARENT
-                        }, 12,
-                        if (focused) 2 else 0,
-                        if (focused) Colors.GLASS_BORDER_FOCUSED else Color.TRANSPARENT,
-                    )
+                    row.background = if (focused) {
+                        // 行是整条宽块,2dp 白框显得厚重;1.5dp 细描边 + 蓝底足够。
+                        roundedVisibleStroke(Colors.APPLE_BLUE, 12, 1.5f, Colors.GLASS_BORDER_FOCUSED)
+                    } else {
+                        rounded(
+                            if (boundIsCurrent) ColorUtils.setAlphaComponent(Colors.APPLE_BLUE, 38)
+                            else Color.TRANSPARENT,
+                            12,
+                            0,
+                            Color.TRANSPARENT,
+                        )
+                    }
                     row.elevationCompat(if (focused) dp(6).toFloat() else 0f)
                     idxLabel.setTextColor(if (focused) Colors.TEXT_PRIMARY else Colors.TEXT_TERTIARY)
                     titleLabel.setTextColor(
@@ -429,9 +438,14 @@ internal fun MainActivity.showOptionListDialog(
                 }
                 titleLabel.text = options[index]
                 titleLabel.isSelected = false
-                // 非 current 且未聚焦时还原底色(焦点刷新只改 focus 分支)
-                if (!boundIsCurrent && !row.isFocused) {
-                    row.background = rounded(Color.TRANSPARENT, 12, 0, Color.TRANSPARENT)
+                // 非聚焦行按 current 态设置底色:旧实现只处理「非 current」,
+                // 新建行背景为 null → 首次打开时当前项没有淡蓝底,看不出当前值。
+                if (!row.isFocused) {
+                    row.background = if (boundIsCurrent) {
+                        rounded(ColorUtils.setAlphaComponent(Colors.APPLE_BLUE, 38), 12, 0, Color.TRANSPARENT)
+                    } else {
+                        rounded(Color.TRANSPARENT, 12, 0, Color.TRANSPARENT)
+                    }
                 }
             }
         }
@@ -441,6 +455,9 @@ internal fun MainActivity.showOptionListDialog(
             override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): OptionRowHolder {
                 val row = LinearLayout(activity).apply {
                     orientation = LinearLayout.HORIZONTAL
+                    // 显式 match 宽度:整行高亮是 TV 列表的焦点范式,也让标题的
+                    // weight=1 真正填满;否则行宽退化成 wrap,焦点框只有一小条。
+                    layoutParams = RecyclerView.LayoutParams(match(), wrap())
                 }
                 return OptionRowHolder(row)
             }
@@ -452,6 +469,11 @@ internal fun MainActivity.showOptionListDialog(
         val recycler = RecyclerView(activity).apply {
             layoutManager = LinearLayoutManager(activity)
             this.adapter = listAdapter
+            // 行聚焦会放大 1.04 倍:旧实现 RV 无 padding + clipChildren=true,
+            // 左右各 ≈10dp 焦点框被裁,只剩上下两条边。12dp 侧 padding 覆盖
+            // 放大溢出,clipToPadding=false 允许画进 padding 区。
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            clipToPadding = false
         }
         card.addView(recycler, LinearLayout.LayoutParams(match(), 0, 1f).withTopMargin(dp(12)))
         val close = primaryPill("关闭", heightDp = 48, horizontalPaddingDp = 28) { dismiss() }
@@ -538,7 +560,9 @@ internal fun MainActivity.promptInstallUpdate(result: AppUpdateResult.ReadyToIns
             )
             val notes = result.update.releaseNotes?.takeIf { it.isNotBlank() } ?: "已下载更新包，安装后可继续使用最新版本。"
             card.addView(
-                label(notes, 16f, Colors.TEXT_SECONDARY, maxLines = 5).apply {
+                // 上游 releaseNotes 上限 200 字符(见 release-app.yml):5 行只够
+                // ≈110 字,再多会被省略;放宽到 10 行,弹窗高度 wrap 不会裁按钮。
+                label(notes, 16f, Colors.TEXT_SECONDARY, maxLines = 10).apply {
                     setLineSpacing(dp(4).toFloat(), 1f)
                 },
                 LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(12)),
@@ -596,7 +620,7 @@ internal fun MainActivity.showUpdateMessage(message: String) {
                 setPadding(dp(24), dp(22), dp(24), dp(22))
                 background = rounded(Colors.SURFACE_ELEVATED, 22, 1, Colors.GlassBorder)
             }
-            card.addView(label(message, 17f, Colors.TEXT_SECONDARY, maxLines = 3), linearMatch())
+            card.addView(label(message, 17f, Colors.TEXT_SECONDARY, maxLines = 6), linearMatch())
             val close = pill("知道了", selected = true, heightDp = 44, horizontalPaddingDp = 24) { dismiss() }
             card.addView(close, LinearLayout.LayoutParams(wrap(), dp(44)).withTopMargin(dp(16)))
             setContentView(card)
@@ -619,7 +643,7 @@ internal fun MainActivity.showUpdateFailureDialog(message: String) {
                 setPadding(dp(24), dp(22), dp(24), dp(22))
                 background = rounded(Colors.SURFACE_ELEVATED, 22, 1, Colors.GlassBorder)
             }
-            card.addView(label(message, 17f, Colors.TEXT_SECONDARY, maxLines = 4), linearMatch())
+            card.addView(label(message, 17f, Colors.TEXT_SECONDARY, maxLines = 6), linearMatch())
             val actions = LinearLayout(activity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL

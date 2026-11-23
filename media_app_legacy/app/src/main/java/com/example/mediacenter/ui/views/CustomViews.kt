@@ -27,9 +27,24 @@ class ThumbnailImageView(context: Context) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val src = Rect()
     private val dst = RectF()
+    private val roundPath = Path()
+    private val roundRect = RectF()
     private var bitmap: Bitmap? = null
     private var loadJob: Job? = null
     private var loadDetachListener: OnAttachStateChangeListener? = null
+
+    /**
+     * 圆角半径(px),0 = 方角。图片是按 view 矩形整幅绘制的,父容器的圆角背景
+     * 会被方角图片盖住(卡片/详情大图的圆角、1dp 描边因此"消失")。这里由图片
+     * 自己按圆角路径裁剪,保证视觉圆角与父容器圆角一致。
+     */
+    var cornerRadiusPx: Float = 0f
+        set(value) {
+            if (field != value) {
+                field = value
+                invalidate()
+            }
+        }
 
     fun setThumbnailBitmap(value: Bitmap?) {
         if (bitmap === value) return
@@ -82,7 +97,18 @@ class ThumbnailImageView(context: Context) : View(context) {
             src.set(0, top, current.width, top + cropHeight)
         }
         dst.set(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
-        canvas.drawBitmap(current, src, dst, paint)
+        if (cornerRadiusPx > 0f) {
+            // 凸路径 clipPath 在 API 18+ 硬件加速下可用,项目 minSdk 19 满足。
+            roundPath.reset()
+            roundRect.set(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
+            roundPath.addRoundRect(roundRect, cornerRadiusPx, cornerRadiusPx, Path.Direction.CW)
+            canvas.save()
+            canvas.clipPath(roundPath)
+            canvas.drawBitmap(current, src, dst, paint)
+            canvas.restore()
+        } else {
+            canvas.drawBitmap(current, src, dst, paint)
+        }
     }
 }
 
@@ -152,7 +178,10 @@ class PillIconView(
                 for (i in 0 until 8) {
                     val angle = i * Math.PI / 4.0
                     val inner = radius * 1.35f
-                    val outer = radius * 1.85f
+                    // 1.85 倍会让轴向齿末端(18.3 + 半笔宽)超出 18dp 绘制区,
+                    // 4 个轴向齿被裁掉一半,齿轮看起来像"4 长斜齿 + 4 短平齿"。
+                    // 1.55 倍时末端 < 绘制区,8 个齿长度一致。
+                    val outer = radius * 1.55f
                     canvas.drawLine(
                         (cx + Math.cos(angle) * inner).toFloat(),
                         (cy + Math.sin(angle) * inner).toFloat(),
