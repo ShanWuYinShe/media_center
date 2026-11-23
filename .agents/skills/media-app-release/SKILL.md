@@ -27,8 +27,7 @@ description: media_app 版本号与 APK 发版部署流程。触发：发版、�
 
 ## 部署 APK
 
-APK 有 **normal + legacy 两个变体**：normal 源码即本目录；legacy 为 Android 4.4.2
-兼容变体，源码在 `media_app_legacy/`。
+APK 有 **normal + legacy 两个变体**：normal 源码即本目录；legacy 为低版本兼容变体，源码在 `media_app_legacy/`（API 级别以该模块 `app/build.gradle.kts` 的 `minSdk` 为准）。
 
 - **上传位置**：`media_app/` 有变更时，编译 APK 上传到服务器工作用户 HOME 下
   `media_center/deploy/data/generated/`（compose 挂载为 media_server 的 /config，manifest 与 APK
@@ -60,12 +59,13 @@ BT=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
 ### 模拟器与安装
 
 ```bash
-"$ANDROID_HOME/emulator/emulator" -avd MediaCenterTV -no-window -no-audio -no-boot-anim -no-snapshot-save &
+"$ANDROID_HOME/emulator/emulator" -avd <AVD> -no-window -no-audio -no-boot-anim -no-snapshot-save &   # AVD 用 emulator -list-avds 现查
 adb wait-for-device   # 不等于系统可用
-adb -s emulator-5554 shell getprop sys.boot_completed   # 轮询到 1
-adb -s emulator-5554 install -r -t /tmp/app.apk
-adb -s emulator-5554 shell dumpsys package com.example.mediacenter | grep versionName
-adb -s emulator-5554 shell am start -W -n com.example.mediacenter/.ComposeActivity   # legacy 用 .MainActivity
+SERIAL=$(adb devices | awk 'NR>1 && $2=="device"{print $1; exit}')   # 目标用 adb devices 现查
+adb -s "$SERIAL" shell getprop sys.boot_completed   # 轮询到 1
+adb -s "$SERIAL" install -r -t /tmp/app.apk
+adb -s "$SERIAL" shell dumpsys package com.example.mediacenter | grep versionName
+adb -s "$SERIAL" shell am start -W -n com.example.mediacenter/.ComposeActivity   # legacy 用 .MainActivity
 ```
 
 ### 走查检查单（发现过真 bug 的项标 ★）

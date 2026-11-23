@@ -25,7 +25,7 @@ App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部�
 
 - 本地（提交前，秒级）：
   - Go：`gofmt -l media_server/`（应无输出）+ `cd media_server && go build ./... && go vet ./...`（本机实测约 6s / 2s）。
-  - Python：`python3 -m py_compile vod_extractor/server.py`（秒级）；本机未装 ruff 时交 CI（CI 固定 `ruff==0.16.8`）。
+  - Python：`python3 -m py_compile vod_extractor/server.py`（秒级）；本机未装 ruff 时交 CI（ruff 版本以 workflow 为准，现取：`grep -rn 'ruff' .github/workflows/`）。
   - Android：日常不跑 Gradle（`assembleDebug`/`assembleRelease`、单测、lint 均由 CI 执行）；APK 发版由 CI 在 tag 上构建（见「APK 发版（GitHub Actions）」）。
   - **不跑**：`go test ./...`（全量/含 `-race`）、Gradle 构建与单测、`docker build`。
 - CI 覆盖（`.github/workflows/ci.yml`，`push: main` + `pull_request: main`，共 3 个 job）：
