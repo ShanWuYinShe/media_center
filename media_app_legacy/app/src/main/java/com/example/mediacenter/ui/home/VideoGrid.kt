@@ -473,7 +473,10 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
                     card.setOnLongClickListener {
                         activity.showWatchHistoryManageDialog(
                             video,
-                            onRestart = { activity.viewModel.restartWatchHistory(video.id) },
+                            onRestart = {
+                                activity.viewModel.restartWatchHistory(video.id)
+                                activity.viewModel.openDetails(video, autoPlay = true, page = 0)
+                            },
                             onRemove = { activity.viewModel.removeWatchHistory(video.id) },
                         )
                         true
@@ -490,7 +493,10 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
                     if (isContinue && (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_INFO)) {
                         activity.showWatchHistoryManageDialog(
                             video,
-                            onRestart = { activity.viewModel.restartWatchHistory(video.id) },
+                            onRestart = {
+                                activity.viewModel.restartWatchHistory(video.id)
+                                activity.viewModel.openDetails(video, autoPlay = true, page = 0)
+                            },
                             onRemove = { activity.viewModel.removeWatchHistory(video.id) },
                         )
                         return@setOnKeyListener true

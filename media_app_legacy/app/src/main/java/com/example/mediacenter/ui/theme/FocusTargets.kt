@@ -27,6 +27,7 @@ sealed class HomeFocusTarget {
 
 sealed class DetailFocusTarget {
     object Back : DetailFocusTarget()
+    object Description : DetailFocusTarget()
     object Play : DetailFocusTarget()
     object PlayFromStart : DetailFocusTarget()
     object Refresh : DetailFocusTarget()

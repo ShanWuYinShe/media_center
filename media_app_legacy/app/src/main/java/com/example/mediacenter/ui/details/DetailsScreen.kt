@@ -14,7 +14,9 @@ import android.widget.LinearLayout
 import android.graphics.drawable.GradientDrawable
 import com.example.mediacenter.MainActivity
 import com.example.mediacenter.data.PlaybackOption
+import com.example.mediacenter.data.PlaybackPositionStore
 import com.example.mediacenter.data.WatchHistory
+import com.example.mediacenter.data.playbackStorageKey
 import com.example.mediacenter.ui.player.loadPlaybackPositionFor
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.setContent
@@ -95,12 +97,24 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
             clipChildren = false
         }
         screen.addView(row, frameMatch())
+        var playButtonRef: View? = null
+        var descriptionDisclosureRef: View? = null
+
         // 与新版一致:返回入口带文字，触摸/鼠标可直接点；遥控器可 D-pad 聚焦，仍有 BACK 键。
         val backButton = pill("返回", selected = false, heightDp = 48, horizontalPaddingDp = 20) {
             viewModel.back()
         }.apply {
             onFocusChangeListener = View.OnFocusChangeListener { _, focused ->
                 if (focused) detailFocusTarget = DetailFocusTarget.Back
+            }
+            setOnKeyListener { _, keyCode, event ->
+                if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                    if (descriptionDisclosureRef?.visibility == View.VISIBLE) {
+                        descriptionDisclosureRef?.requestFocus() == true
+                    } else {
+                        playButtonRef?.requestFocus() == true
+                    }
+                } else false
             }
         }
         screen.addView(
@@ -227,10 +241,28 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
             selected = false,
             heightDp = chipH,
             horizontalPaddingDp = chipHPad,
+            onFocusChange = { focused ->
+                if (focused) detailFocusTarget = DetailFocusTarget.Description
+            },
         ) {
             showDescriptionDialog(details.title, descriptionText)
         }
         descriptionDisclosure.visibility = View.GONE
+        descriptionDisclosureRef = descriptionDisclosure
+        registerDetailFocus(DetailFocusTarget.Description, descriptionDisclosure)
+        descriptionDisclosure.setOnKeyListener { _, keyCode, event ->
+            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+            when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> {
+                    backButton.requestFocus()
+                    true
+                }
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    playButtonRef?.requestFocus() == true
+                }
+                else -> false
+            }
+        }
         info.addView(
             descriptionDisclosure,
             LinearLayout.LayoutParams(wrap(), dp(chipH)).withTopMargin(dp(gapDisclosure)),
@@ -265,6 +297,7 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                     },
                     onClick = { viewModel.refreshSelectedPlayback() },
                 )
+                playButtonRef = parsingPill
                 registerDetailFocus(DetailFocusTarget.Play, parsingPill)
                 info.addView(
                     parsingPill,
@@ -292,6 +325,7 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                         viewModel.refreshSelectedPlayback()
                     },
                 )
+                playButtonRef = refresh
                 registerDetailFocus(DetailFocusTarget.Refresh, refresh)
                 info.addView(refresh, LinearLayout.LayoutParams(wrap(), dp(chipH)).withTopMargin(dp(12)))
             }
@@ -350,7 +384,11 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                 },
                 onClick = { viewModel.play(playOption) },
             )
+            playButtonRef = playButton
             registerDetailFocus(DetailFocusTarget.Play, playButton)
+
+            var firstQualityChip: View? = null
+            var firstEpisodeChip: View? = null
 
             val playFromStartButton = if (hasResume) {
                 pill(
@@ -362,10 +400,14 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                         if (focused) detailFocusTarget = DetailFocusTarget.PlayFromStart
                     },
                     onClick = {
+                        val page = state.currentPages?.currentPage ?: 0
+                        PlaybackPositionStore.remove(this, playbackStorageKey(details.id, page))
+                        PlaybackPositionStore.remove(this, details.id)
                         getSharedPreferences("playback", Context.MODE_PRIVATE).edit {
                             remove("pos_${details.id}")
+                            currentPlayerOptionId?.let { remove("pos_$it") }
                         }
-                        WatchHistory.updatePosition(this, details.id, 0L, (details.durationSeconds ?: 0L), page = 0)
+                        WatchHistory.resetProgress(this, details.id)
                         viewModel.play(playOption)
                     },
                 ).also {
@@ -377,14 +419,21 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                 if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
                 when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_UP -> {
-                        backButton.requestFocus()
-                        true
+                        if (descriptionDisclosureRef?.visibility == View.VISIBLE) {
+                            descriptionDisclosureRef?.requestFocus() == true
+                        } else {
+                            backButton.requestFocus()
+                            true
+                        }
                     }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> {
                         if (playFromStartButton != null) {
                             playFromStartButton.requestFocus()
                             true
                         } else false
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        (firstQualityChip ?: firstEpisodeChip)?.requestFocus() == true
                     }
                     else -> false
                 }
@@ -393,21 +442,22 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                 if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
                 when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_UP -> {
-                        backButton.requestFocus()
-                        true
+                        if (descriptionDisclosureRef?.visibility == View.VISIBLE) {
+                            descriptionDisclosureRef?.requestFocus() == true
+                        } else {
+                            backButton.requestFocus()
+                            true
+                        }
                     }
                     KeyEvent.KEYCODE_DPAD_LEFT -> {
                         playButton.requestFocus()
                         true
                     }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        (firstQualityChip ?: firstEpisodeChip)?.requestFocus() == true
+                    }
                     else -> false
                 }
-            }
-            backButton.setOnKeyListener { _, keyCode, event ->
-                if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                    playButton.requestFocus()
-                    true
-                } else false
             }
 
             val buttonRow = LinearLayout(this).apply {
@@ -454,7 +504,22 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                             detailFocusTarget = DetailFocusTarget.Option("quality-${quality.qn}")
                             invalidateUi()
                         },
-                    )
+                    ).apply {
+                        setOnKeyListener { _, keyCode, event ->
+                            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                            when (keyCode) {
+                                KeyEvent.KEYCODE_DPAD_UP -> {
+                                    playButton.requestFocus()
+                                    true
+                                }
+                                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                                    firstEpisodeChip?.requestFocus() == true
+                                }
+                                else -> false
+                            }
+                        }
+                    }
+                    if (firstQualityChip == null) firstQualityChip = chip
                     registerDetailFocus(DetailFocusTarget.Option("quality-${quality.qn}"), chip)
                     qualityChips.add(chip)
                 }
@@ -474,7 +539,22 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                             detailFocusTarget = DetailFocusTarget.Option(optionItem.id)
                             invalidateUi()
                         },
-                    )
+                    ).apply {
+                        setOnKeyListener { _, keyCode, event ->
+                            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                            when (keyCode) {
+                                KeyEvent.KEYCODE_DPAD_UP -> {
+                                    playButton.requestFocus()
+                                    true
+                                }
+                                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                                    firstEpisodeChip?.requestFocus() == true
+                                }
+                                else -> false
+                            }
+                        }
+                    }
+                    if (firstQualityChip == null) firstQualityChip = chip
                     registerDetailFocus(DetailFocusTarget.Option(optionItem.id), chip)
                     qualityChips.add(chip)
                 }
@@ -511,23 +591,36 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                     }
                     val canPrev = pages.currentPage > 0
                     val canNext = pages.currentPage < pages.totalPages - 1
+                    fun bindEpisodeKeyNav(chip: View) {
+                        chip.setOnKeyListener { _, keyCode, event ->
+                            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                            when (keyCode) {
+                                KeyEvent.KEYCODE_DPAD_UP -> {
+                                    (firstQualityChip ?: playButton).requestFocus()
+                                    true
+                                }
+                                else -> false
+                            }
+                        }
+                        if (firstEpisodeChip == null) firstEpisodeChip = chip
+                    }
                     if (canPrev) {
                         val chip = pill("上一集", selected = false, heightDp = chipH, horizontalPaddingDp = chipHPad) {
                             selectedPlaybackOptionId = null
                             viewModel.selectPage(pages.currentPage - 1)
-                        }
+                        }.also(::bindEpisodeKeyNav)
                         pageRow.addView(chip, LinearLayout.LayoutParams(wrap(), dp(chipH)).withEndMargin(dp(12)))
                     }
                     if (canNext) {
                         val chip = pill("下一集", selected = false, heightDp = chipH, horizontalPaddingDp = chipHPad) {
                             selectedPlaybackOptionId = null
                             viewModel.selectPage(pages.currentPage + 1)
-                        }
+                        }.also(::bindEpisodeKeyNav)
                         pageRow.addView(chip, LinearLayout.LayoutParams(wrap(), dp(chipH)).withEndMargin(dp(12)))
                     }
                     val allChip = pill("查看全部", selected = false, heightDp = chipH, horizontalPaddingDp = chipHPad) {
                         showAllPagesDialog(pages)
-                    }
+                    }.also(::bindEpisodeKeyNav)
                     pageRow.addView(allChip, LinearLayout.LayoutParams(wrap(), dp(chipH)))
                     if (pageRow.isNotEmpty()) {
                         info.addView(horizontalFocusStrip(pageRow, padH = 6, padV = 0), linearMatch())

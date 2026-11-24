@@ -95,6 +95,14 @@ object WatchHistoryCore {
     /** 某视频最后观看的分页(0 起始,无记录/未登记返回 0)。 */
     fun pageOf(entries: List<WatchEntry>, videoId: String): Int =
         entries.firstOrNull { it.videoId == videoId }?.page ?: 0
+
+    /** 重置单条观看历史进度至 0(从头播放时使用,位置归零不进继续观看)。 */
+    fun resetProgress(entries: List<WatchEntry>, videoId: String): List<WatchEntry> {
+        if (videoId.isBlank()) return entries
+        val old = entries.firstOrNull { it.videoId == videoId } ?: return entries
+        val updated = old.copy(positionSeconds = 0L, page = 0, updatedAt = System.currentTimeMillis())
+        return listOf(updated) + entries.filterNot { it.videoId == videoId }
+    }
 }
 
 /**
@@ -153,6 +161,19 @@ object WatchHistory {
                 KEY_ENTRIES,
                 WatchHistoryCore.encode(
                     WatchHistoryCore.remove(entries(context), videoId),
+                ),
+            )
+        }
+    }
+
+    /** 重置单条观看历史进度(从头播放)。 */
+    fun resetProgress(context: Context, videoId: String) {
+        if (videoId.isBlank()) return
+        prefs(context).edit {
+            putString(
+                KEY_ENTRIES,
+                WatchHistoryCore.encode(
+                    WatchHistoryCore.resetProgress(entries(context), videoId),
                 ),
             )
         }
