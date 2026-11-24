@@ -339,12 +339,25 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
             val option = selectedOption!!
             selectedPlaybackOptionId = option.id
             detailErrorRetry = { viewModel.play(option) }
-            val currentDuration = state.currentPages?.currentPageDurationSeconds ?: details.durationSeconds
+            val pages = state.currentPages
+            val totalPages = pages?.totalPages ?: 0
+            val currentPage = pages?.currentPage ?: 0
+            val lastWatchedPage = WatchHistory.pageOf(this, details.id)
+            val effectiveTargetPage = if (totalPages > 1 && currentPage == 0 && lastWatchedPage > 0 && lastWatchedPage < totalPages) {
+                lastWatchedPage
+            } else {
+                currentPage
+            }
+            val currentDuration = pages?.currentPageDurationSeconds ?: details.durationSeconds
             val durationText = currentDuration?.let { formatDurationSeconds(it) }
-            val resumePositionMs = loadPlaybackPositionFor(details.id)
+            val resumePositionMs = loadPlaybackPositionFor(details.id, effectiveTargetPage)
             val hasResume = resumePositionMs >= 30_000L
             if (hasResume) {
-                val resumeHint = "上次播放到 ${formatDurationSeconds(resumePositionMs / 1000L)}，播放将从此处继续"
+                val resumeHint = if (effectiveTargetPage > 0) {
+                    "上次看到第 ${effectiveTargetPage + 1} 集 ${formatDurationSeconds(resumePositionMs / 1000L)}，播放将从此处继续"
+                } else {
+                    "上次播放到 ${formatDurationSeconds(resumePositionMs / 1000L)}，播放将从此处继续"
+                }
                 info.addView(
                     label(resumeHint, 14f, Colors.APPLE_BLUE, bold = true, maxLines = 1).apply {
                         background = rounded(Color.argb(40, 0, 122, 255), 8)
@@ -382,7 +395,13 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                 onFocusChange = { focused ->
                     if (focused) detailFocusTarget = DetailFocusTarget.Play
                 },
-                onClick = { viewModel.play(playOption) },
+                onClick = {
+                    if (totalPages > 1 && effectiveTargetPage != currentPage) {
+                        viewModel.selectPage(effectiveTargetPage)
+                    } else {
+                        viewModel.play(playOption)
+                    }
+                },
             )
             playButtonRef = playButton
             registerDetailFocus(DetailFocusTarget.Play, playButton)
@@ -408,7 +427,11 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                             currentPlayerOptionId?.let { remove("pos_$it") }
                         }
                         WatchHistory.resetProgress(this, details.id)
-                        viewModel.play(playOption)
+                        if (totalPages > 1 && currentPage != 0) {
+                            viewModel.selectPage(0)
+                        } else {
+                            viewModel.play(playOption)
+                        }
                     },
                 ).also {
                     registerDetailFocus(DetailFocusTarget.PlayFromStart, it)

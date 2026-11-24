@@ -67,8 +67,9 @@ internal fun MainActivity.renderHome(state: MediaUiState) {
         ) {
             val allCats = listOf(ContentCategory(HomeContinueTabId, "继续观看")) + state.categories
             val initialCategory = state.selectedCategoryId
-                ?.takeIf { id -> allCats.any { it.id == id } }
-                ?: allCats.first().id
+                ?.takeIf { id -> id == HomeContinueTabId || state.categories.any { it.id == id } }
+                ?: state.categories.firstOrNull()?.id
+                ?: HomeContinueTabId
             homeFocusArea = HomeFocusArea.Category
             pendingHomeFocus = HomeFocusTarget.Category(initialCategory)
         }

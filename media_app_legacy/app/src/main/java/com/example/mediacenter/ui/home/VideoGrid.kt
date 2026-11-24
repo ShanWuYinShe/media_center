@@ -474,8 +474,9 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
                         activity.showWatchHistoryManageDialog(
                             video,
                             onRestart = {
-                                activity.viewModel.restartWatchHistory(video.id)
-                                activity.viewModel.openDetails(video, autoPlay = true, page = 0)
+                                activity.viewModel.restartWatchHistory(video.id) {
+                                    activity.viewModel.openDetails(video, autoPlay = true, page = 0)
+                                }
                             },
                             onRemove = { activity.viewModel.removeWatchHistory(video.id) },
                         )
@@ -494,8 +495,9 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
                         activity.showWatchHistoryManageDialog(
                             video,
                             onRestart = {
-                                activity.viewModel.restartWatchHistory(video.id)
-                                activity.viewModel.openDetails(video, autoPlay = true, page = 0)
+                                activity.viewModel.restartWatchHistory(video.id) {
+                                    activity.viewModel.openDetails(video, autoPlay = true, page = 0)
+                                }
                             },
                             onRemove = { activity.viewModel.removeWatchHistory(video.id) },
                         )

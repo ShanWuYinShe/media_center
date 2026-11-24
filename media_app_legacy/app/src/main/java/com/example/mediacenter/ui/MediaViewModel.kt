@@ -376,7 +376,14 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
             val entries = context?.let { WatchHistory.entries(it) } ?: emptyList()
             val continueItems = entries
                 .filter { it.provider == mutableState.value.currentProvider && it.positionSeconds >= 30 }
-                .map { it.toVideoSummary() }
+                .map { entry ->
+                    val summary = entry.toVideoSummary()
+                    if (entry.page > 0) {
+                        summary.copy(title = "第 ${entry.page + 1} 集 · ${summary.title}")
+                    } else {
+                        summary
+                    }
+                }
             mutableState.update {
                 it.copy(
                     query = "",
@@ -645,7 +652,14 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
             val entries = context?.let { WatchHistory.entries(it) } ?: emptyList()
             val continueItems = entries
                 .filter { it.provider == mutableState.value.currentProvider && it.positionSeconds >= 30 }
-                .map { it.toVideoSummary() }
+                .map { entry ->
+                    val summary = entry.toVideoSummary()
+                    if (entry.page > 0) {
+                        summary.copy(title = "第 ${entry.page + 1} 集 · ${summary.title}")
+                    } else {
+                        summary
+                    }
+                }
             mutableState.update {
                 it.copy(
                     query = "",
@@ -708,7 +722,14 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
             if (current.selectedCategoryId == HomeContinueTabId) {
                 val continueItems = entries
                     .filter { it.provider == current.currentProvider && it.positionSeconds >= 30 }
-                    .map { it.toVideoSummary() }
+                    .map { entry ->
+                        val summary = entry.toVideoSummary()
+                        if (entry.page > 0) {
+                            summary.copy(title = "第 ${entry.page + 1} 集 · ${summary.title}")
+                        } else {
+                            summary
+                        }
+                    }
                 if (continueItems.isEmpty() && current.categories.isNotEmpty() && !current.loading) {
                     selectCategory(current.categories.first())
                 } else {
@@ -739,7 +760,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         }
     }
 
-    fun restartWatchHistory(videoId: String) {
+    fun restartWatchHistory(videoId: String, onDone: (() -> Unit)? = null) {
         val context = MediaCenterApp.instance ?: return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
@@ -750,6 +771,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                 }
             }
             refreshWatchHistory()
+            onDone?.invoke()
         }
     }
 
@@ -903,6 +925,8 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                     val p = cached.pages
                     if (page > 0 && p != null && page < p.totalPages) {
                         selectPage(page)
+                    } else if (p != null && p.currentPage != 0 && page == 0) {
+                        selectPage(0)
                     } else {
                         cached.options.firstOrNull()?.let { play(it) }
                     }
@@ -938,6 +962,8 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                         val p = result.pages
                         if (page > 0 && p != null && page < p.totalPages) {
                             selectPage(page)
+                        } else if (p != null && p.currentPage != 0 && page == 0) {
+                            selectPage(0)
                         } else {
                             result.options.firstOrNull()?.let { play(it) }
                         }

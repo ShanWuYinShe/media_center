@@ -391,7 +391,7 @@ fun DetailScreen(
                                     PlaybackPositionStore.remove(context, playbackStorageKey(video.id, currentPage))
                                     PlaybackPositionStore.remove(context, video.id)
                                     WatchHistory.resetProgress(context, video.id)
-                                    onPlay(currentPage, selectedQualityQn)
+                                    onPlay(0, selectedQualityQn)
                                 },
                                 modifier = Modifier
                                     .width(140.dp)
