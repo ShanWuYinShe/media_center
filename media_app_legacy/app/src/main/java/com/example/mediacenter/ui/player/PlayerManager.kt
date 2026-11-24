@@ -36,17 +36,20 @@ internal fun MainActivity.playbackPosKey() = currentPlayerOptionId?.let { "pos_$
 
 internal fun MainActivity.savePlaybackPosition(pos: Long) {
         val videoId = currentState.playingVideo?.id ?: currentState.selected?.id
-        val page = currentState.currentPages?.currentPage ?: 0
+        val pages = currentState.currentPages
+        val page = pages?.currentPage ?: 0
         if (!videoId.isNullOrBlank()) {
             val storageKey = playbackStorageKey(videoId, page)
             PlaybackPositionStore.save(this, storageKey, pos)
+            val offsetSec = pages?.pageDurations?.take(page)?.sum() ?: 0L
+            val totalPageSec = pages?.pageDurations?.sum() ?: 0L
             val duration = player?.duration?.takeIf { it > 0 }
                 ?: (currentState.selected?.durationSeconds?.let { it * 1000L } ?: 0L)
             WatchHistory.updatePosition(
                 this,
                 videoId,
-                pos / 1000L,
-                duration / 1000L,
+                offsetSec + pos / 1000L,
+                if (totalPageSec > 0) totalPageSec else duration / 1000L,
                 page,
             )
         }
@@ -61,11 +64,16 @@ internal fun MainActivity.loadPlaybackPositionFor(videoId: String, page: Int = 0
     val storageKey = playbackStorageKey(videoId, page)
     val stored = PlaybackPositionStore.resumePosition(this, storageKey)
     if (stored >= 30_000L) return stored
-    val saved = prefs().getLong("pos_$videoId", 0L)
-    if (saved >= 30_000L) return saved
-    val entry = WatchHistory.entries(this).firstOrNull { it.videoId == videoId }
-    val entryPos = (entry?.positionSeconds ?: 0L) * 1000L
-    return if (entryPos >= 30_000L) entryPos else 0L
+    if (page == 0) {
+        val saved = prefs().getLong("pos_$videoId", 0L)
+        if (saved >= 30_000L) return saved
+        val entry = WatchHistory.entries(this).firstOrNull { it.videoId == videoId }
+        if (entry != null && entry.page == 0) {
+            val entryPos = entry.positionSeconds * 1000L
+            if (entryPos >= 30_000L) return entryPos
+        }
+    }
+    return 0L
 }
 
 internal fun MainActivity.loadPlaybackPosition(): Long {

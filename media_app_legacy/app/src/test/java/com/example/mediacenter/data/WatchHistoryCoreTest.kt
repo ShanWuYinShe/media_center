@@ -106,6 +106,14 @@ class WatchHistoryCoreTest {
         assertEquals(listOf("a", "b"), result.map { it.videoId })
     }
 
+    @Test
+    fun page_of_returns_last_watched_page() {
+        val entries = listOf(entry("a").copy(page = 3), entry("b"))
+        assertEquals(3, WatchHistoryCore.pageOf(entries, "a"))
+        assertEquals(0, WatchHistoryCore.pageOf(entries, "b"))
+        assertEquals(0, WatchHistoryCore.pageOf(entries, "unknown"))
+    }
+
     // ── encode/decode ──
 
     @Test
