@@ -345,9 +345,12 @@ fun HomeScreen(
                 managingContinueVideo = null
             },
             onRestart = {
-                viewModel.restartWatchHistory(targetVideo.id)
                 managingContinueVideo = null
-                onPlayVideo(targetVideo, 0)
+                // 等断点重置落盘后再起播:进入播放页会异步读取断点,先跳转会与
+                // restartWatchHistory 的 IO 重置竞争,可能又恢复旧进度。
+                viewModel.restartWatchHistory(targetVideo.id) {
+                    onPlayVideo(targetVideo, 0)
+                }
             },
         )
     }

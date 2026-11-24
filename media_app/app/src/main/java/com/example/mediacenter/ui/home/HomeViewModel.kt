@@ -231,8 +231,12 @@ class HomeViewModel(
         }
     }
 
-    /** 重置单条观看历史进度(清除断点,从头播放)。 */
-    fun restartWatchHistory(videoId: String) {
+    /**
+     * 重置单条观看历史进度(清除断点,从头播放)。
+     * 播放器起播时会异步读取断点,[onDone] 在重置落盘后回调,调用方应在此再跳转播放页,
+     * 避免跳转与重置竞争导致旧断点被恢复。
+     */
+    fun restartWatchHistory(videoId: String, onDone: (() -> Unit)? = null) {
         val context = MediaRepositoryHolder.applicationContext ?: return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
@@ -240,6 +244,7 @@ class HomeViewModel(
                 WatchHistory.resetProgress(context, videoId)
             }
             refreshWatchHistory()
+            onDone?.invoke()
         }
     }
 
