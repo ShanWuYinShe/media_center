@@ -115,7 +115,11 @@ internal fun MainActivity.homeInlineError(message: String): View {
         }
     }
 
-internal fun MainActivity.emptyState(message: String, action: Pair<String, (() -> Unit)>? = null): View {
+internal fun MainActivity.emptyState(
+    message: String,
+    detail: String? = null,
+    action: Pair<String, (() -> Unit)>? = null,
+): View {
         val card = LinearLayout(this).apply {
             gravity = Gravity.CENTER
             orientation = LinearLayout.VERTICAL
@@ -123,7 +127,8 @@ internal fun MainActivity.emptyState(message: String, action: Pair<String, (() -
             background = rounded(Colors.GlassFill, 28, 1, Colors.GlassBorder)
         }
         card.addView(label(message, 18f, Colors.TEXT_TERTIARY, bold = true, maxLines = 1), linearWrap())
-        card.addView(label("换个分类或关键词试试", 13f, Colors.TEXT_TERTIARY, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withTopMargin(dp(8)))
+        val sub = detail ?: "换个分类或关键词试试"
+        card.addView(label(sub, 13f, Colors.TEXT_TERTIARY, maxLines = 1), LinearLayout.LayoutParams(wrap(), wrap()).withTopMargin(dp(8)))
         // 空态恢复动作(如"清除筛选")：给用户一个可聚焦的直接出口，
         // 不用靠猜"按上键回到筛选栏"。
         if (action != null) {

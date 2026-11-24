@@ -1,5 +1,7 @@
 package com.example.mediacenter.ui
 
+import android.content.Context
+import androidx.core.content.edit
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -12,11 +14,15 @@ import com.example.mediacenter.data.PlaybackPages
 import com.example.mediacenter.data.PlaybackQuality
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.ProviderInfo
+import com.example.mediacenter.data.SearchHistory
 import com.example.mediacenter.data.VideoDetails
 import com.example.mediacenter.MediaCenterApp
 import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.data.WatchEntry
+import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.player.LegacyPlaybackMediaCache
+import com.example.mediacenter.ui.theme.HomeContinueTabId
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +49,7 @@ data class MediaUiState(
     // 自动取列表首项作为默认分类。
     val selectedCategoryId: String? = null,
     val items: List<VideoSummary> = emptyList(),
+    val watchEntries: List<WatchEntry> = emptyList(),
     val selected: VideoDetails? = null,
     val playing: PlaybackOption? = null,
     val loading: Boolean = false,
@@ -244,6 +251,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         // 凭证单独在后台拉取:不再阻塞首页 bootstrap(旧实现 await 凭证,
         // 弱网下首屏会被凭证接口的 15s×3 重试拖到半分钟以上)。
         viewModelScope.launch { repository.refreshCredentials() }
+        refreshWatchHistory()
         viewModelScope.launch {
             // 冷启动 SWR:先用上次首屏快照渲染,再后台静默刷新;快照不可用则走原流程。
             val restored = restoreHomeSnapshot()
@@ -359,8 +367,34 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
             )
             return
         }
+        if (query.isNotBlank()) {
+            MediaCenterApp.instance?.let { SearchHistory.record(it, query) }
+        }
+        if (query.isBlank() && categoryId == HomeContinueTabId) {
+            val context = MediaCenterApp.instance
+            val entries = context?.let { WatchHistory.entries(it) } ?: emptyList()
+            val continueItems = entries
+                .filter { it.provider == mutableState.value.currentProvider && it.positionSeconds >= 30 }
+                .map { it.toVideoSummary() }
+            mutableState.update {
+                it.copy(
+                    query = "",
+                    selectedCategoryId = HomeContinueTabId,
+                    items = continueItems,
+                    watchEntries = entries,
+                    page = 1,
+                    canLoadMore = false,
+                    loading = false,
+                    loadingMore = false,
+                    loadMoreError = null,
+                    error = null,
+                )
+            }
+            return
+        }
         // 防御:服务端要求 q / category 至少一个,空 + null 直接拒绝避免反复 400。
-        if (query.isBlank() && categoryId == null) {
+        val effectiveCategoryId = if (categoryId == HomeContinueTabId) null else categoryId
+        if (query.isBlank() && effectiveCategoryId == null) {
             if (!silentRefresh) {
                 mutableState.update {
                     it.copy(loading = false, error = "请选择一个分类或输入关键词")
@@ -411,7 +445,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                     }
                 }
                 runCatchingCancellable {
-                    repository.search(query, categoryId, page = 1, pageSize = PageSize)
+                    repository.search(query, effectiveCategoryId, page = 1, pageSize = PageSize)
                 }
                     .onSuccess { response ->
                         // 关键词搜索一般是一次性聚合不分页;例外是 bilibili 全站实时搜索
@@ -517,6 +551,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         // YouTube 分类是单页实时 ytsearch,没有翻页令牌。
         if (repository.currentProvider == "youtube") return false
         val current = mutableState.value
+        if (current.selectedCategoryId == HomeContinueTabId) return false
         if (current.loading || current.loadingMore || !current.canLoadMore || current.loadMoreError != null) return false
         val nextPage = current.page + 1
         mutableState.update { it.copy(loadingMore = true, loadMoreError = null, error = null) }
@@ -597,6 +632,40 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
             AppLog.w("Nav", "ignore selectCategory while content screen is visible")
             return
         }
+        if (category.id == HomeContinueTabId) {
+            pendingCategoryId = category.id
+            detailsJob?.cancel()
+            recoveryJob?.cancel()
+            loadMoreJob?.cancel()
+            searchJob?.cancel()
+            categoryRefreshJob?.cancel()
+            pendingAutoAdvanceFromId = null
+            val context = MediaCenterApp.instance
+            val entries = context?.let { WatchHistory.entries(it) } ?: emptyList()
+            val continueItems = entries
+                .filter { it.provider == mutableState.value.currentProvider && it.positionSeconds >= 30 }
+                .map { it.toVideoSummary() }
+            mutableState.update {
+                it.copy(
+                    query = "",
+                    selectedCategoryId = HomeContinueTabId,
+                    items = continueItems,
+                    watchEntries = entries,
+                    page = 1,
+                    canLoadMore = false,
+                    loading = false,
+                    loadingMore = false,
+                    loadMoreError = null,
+                    error = null,
+                    selected = null,
+                    playing = null,
+                    playingVideo = null,
+                    currentPages = null,
+                    availableQualities = emptyList(),
+                )
+            }
+            return
+        }
         pendingCategoryId = category.id
         val cached = categoryListCache[category.id]
         if (cached != null && cached.items.isNotEmpty()) {
@@ -626,6 +695,58 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                 // 无缓存(首次进入):正常阻塞加载。
                 search(query = "", categoryId = category.id)
             }
+        }
+    }
+
+    fun refreshWatchHistory() {
+        val context = MediaCenterApp.instance ?: return
+        viewModelScope.launch {
+            val entries = withContext(Dispatchers.IO) { WatchHistory.entries(context) }
+            mutableState.update { it.copy(watchEntries = entries) }
+            val current = mutableState.value
+            if (current.selectedCategoryId == HomeContinueTabId) {
+                val continueItems = entries
+                    .filter { it.provider == current.currentProvider && it.positionSeconds >= 30 }
+                    .map { it.toVideoSummary() }
+                if (continueItems.isEmpty() && current.categories.isNotEmpty() && !current.loading) {
+                    selectCategory(current.categories.first())
+                } else {
+                    mutableState.update {
+                        it.copy(
+                            items = continueItems,
+                            canLoadMore = false,
+                            loading = false,
+                            error = null,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun removeWatchHistory(videoId: String) {
+        val context = MediaCenterApp.instance ?: return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                WatchHistory.remove(context, videoId)
+                context.getSharedPreferences("playback", Context.MODE_PRIVATE).edit {
+                    remove("pos_$videoId")
+                }
+            }
+            refreshWatchHistory()
+        }
+    }
+
+    fun restartWatchHistory(videoId: String) {
+        val context = MediaCenterApp.instance ?: return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                WatchHistory.updatePosition(context, videoId, 0L, 0L, page = 0)
+                context.getSharedPreferences("playback", Context.MODE_PRIVATE).edit {
+                    remove("pos_$videoId")
+                }
+            }
+            refreshWatchHistory()
         }
     }
 
@@ -747,7 +868,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
             }
     }
 
-    fun openDetails(video: VideoSummary, autoPlay: Boolean = false) {
+    fun openDetails(video: VideoSummary, autoPlay: Boolean = false, page: Int = 0) {
         detailsJob?.cancel()
         detailsJob = viewModelScope.launch {
             // 切换视频时清掉上一个视频的选集/清晰度,否则解析完成前详情页会
@@ -775,14 +896,20 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                             currentPages = cached.pages,
                             availableQualities = cached.availableQualities)
                 }
-                if (autoPlay) cached.options.firstOrNull()?.let { play(it) }
+                if (autoPlay) {
+                    val p = cached.pages
+                    if (page > 0 && p != null && page < p.totalPages) {
+                        selectPage(page)
+                    } else {
+                        cached.options.firstOrNull()?.let { play(it) }
+                    }
+                }
                 return@launch
             }
             // 未预取:解析播放地址期间保持 loading=true。详情页会盖加载态遮罩,
             // 避免 1~3s 内把「暂无可播放视频」误报成错误(此前会闪错误态,
             // 解析成功整页重建后焦点还会丢失)。
             mutableState.update { it.copy(selected = details, loading = true) }
-            var autoPlayOption: PlaybackOption? = null
             runCatchingCancellable { repository.playbackOptions(details) }
                 .onSuccess { result ->
                     currentPlaybackQn = result.options.firstOrNull()?.qn ?: 0
@@ -804,7 +931,14 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                                    currentPages = result.pages,
                                    availableQualities = result.availableQualities)
                     }
-                    if (autoPlay) autoPlayOption = result.options.firstOrNull()
+                    if (autoPlay) {
+                        val p = result.pages
+                        if (page > 0 && p != null && page < p.totalPages) {
+                            selectPage(page)
+                        } else {
+                            result.options.firstOrNull()?.let { play(it) }
+                        }
+                    }
                 }
                 .onFailure { error ->
                     mutableState.update { state ->
@@ -815,7 +949,6 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
                         )
                     }
                 }
-            autoPlayOption?.let { play(it) }
         }
     }
 
@@ -1366,6 +1499,10 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
 
     fun retry() {
         val current = mutableState.value
+        if (current.selectedCategoryId == HomeContinueTabId) {
+            refreshWatchHistory()
+            return
+        }
         if (current.items.isNotEmpty() && current.loadMoreError != null) {
             retryLoadMore()
             return

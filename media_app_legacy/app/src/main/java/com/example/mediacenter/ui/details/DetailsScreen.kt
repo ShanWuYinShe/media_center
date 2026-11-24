@@ -1,9 +1,12 @@
 package com.example.mediacenter.ui.details
 
 import android.graphics.Color
+import android.content.Context
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import androidx.core.content.edit
 import androidx.core.view.isNotEmpty
 import android.widget.ScrollView
 import android.widget.FrameLayout
@@ -11,6 +14,8 @@ import android.widget.LinearLayout
 import android.graphics.drawable.GradientDrawable
 import com.example.mediacenter.MainActivity
 import com.example.mediacenter.data.PlaybackOption
+import com.example.mediacenter.data.WatchHistory
+import com.example.mediacenter.ui.player.loadPlaybackPositionFor
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.setContent
 import com.example.mediacenter.ui.showAllPagesDialog
@@ -90,14 +95,13 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
             clipChildren = false
         }
         screen.addView(row, frameMatch())
-        // 与新版一致:返回入口带文字，触摸/鼠标可直接点；遥控器仍有 BACK 键。
-        val backButton = label("返回", 17f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
-            gravity = Gravity.CENTER
-            setPadding(dp(20), 0, dp(20), 0)
-            background = rounded(Colors.GlassFill, 999, 1, Colors.GlassBorder)
-            isFocusable = false
-            isClickable = true
-            setOnClickListener { viewModel.back() }
+        // 与新版一致:返回入口带文字，触摸/鼠标可直接点；遥控器可 D-pad 聚焦，仍有 BACK 键。
+        val backButton = pill("返回", selected = false, heightDp = 48, horizontalPaddingDp = 20) {
+            viewModel.back()
+        }.apply {
+            onFocusChangeListener = View.OnFocusChangeListener { _, focused ->
+                if (focused) detailFocusTarget = DetailFocusTarget.Back
+            }
         }
         screen.addView(
             backButton,
@@ -125,6 +129,7 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                 view.post(focusRunnable)
             }
         }
+        registerDetailFocus(DetailFocusTarget.Back, backButton)
 
         val hero = FrameLayout(this).apply {
             background = roundedGradient(
@@ -302,6 +307,18 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
             detailErrorRetry = { viewModel.play(option) }
             val currentDuration = state.currentPages?.currentPageDurationSeconds ?: details.durationSeconds
             val durationText = currentDuration?.let { formatDurationSeconds(it) }
+            val resumePositionMs = loadPlaybackPositionFor(details.id)
+            val hasResume = resumePositionMs >= 30_000L
+            if (hasResume) {
+                val resumeHint = "上次播放到 ${formatDurationSeconds(resumePositionMs / 1000L)}，播放将从此处继续"
+                info.addView(
+                    label(resumeHint, 14f, Colors.APPLE_BLUE, bold = true, maxLines = 1).apply {
+                        background = rounded(Color.argb(40, 0, 122, 255), 8)
+                        setPadding(dp(12), dp(6), dp(12), dp(6))
+                    },
+                    LinearLayout.LayoutParams(wrap(), wrap()).withTopMargin(dp(gapDisclosure)),
+                )
+            }
             // 用户选了清晰度 chip:用该 qn 合成播放 option。play() 发现 qn 与当前
             // 流不同时会按新 qn 重新解析 playurl;相同则直接用已缓存流,不重复请求。
             val selectedQuality = state.availableQualities.firstOrNull { it.qn == selectedQualityQn }
@@ -316,15 +333,16 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
             } else {
                 option
             }
+            val playButtonText = buildString {
+                if (hasResume) append("继续播放") else append("播放")
+                durationText?.let { append(" $it") }
+            }
             val playButton = primaryPill(
                 // 只放「播放 + 时长」:401dp 的信息列放不下「播放 + 时长 + 清晰度」,
                 // 单行省略会把清晰度吃掉;清晰度由下方 chips 高亮表达。
-                text = buildString {
-                    append("播放")
-                    durationText?.let { append(" $it") }
-                },
+                text = playButtonText,
                 heightDp = playH,
-                horizontalPaddingDp = playHPad,
+                horizontalPaddingDp = if (hasResume) 22 else playHPad,
                 textSizeSp = playTextSize,
                 icon = PillIcon.Play,
                 onFocusChange = { focused ->
@@ -333,9 +351,82 @@ internal fun MainActivity.renderDetails(state: MediaUiState) {
                 onClick = { viewModel.play(playOption) },
             )
             registerDetailFocus(DetailFocusTarget.Play, playButton)
+
+            val playFromStartButton = if (hasResume) {
+                pill(
+                    text = "从头播放",
+                    selected = false,
+                    heightDp = playH,
+                    horizontalPaddingDp = 20,
+                    onFocusChange = { focused ->
+                        if (focused) detailFocusTarget = DetailFocusTarget.PlayFromStart
+                    },
+                    onClick = {
+                        getSharedPreferences("playback", Context.MODE_PRIVATE).edit {
+                            remove("pos_${details.id}")
+                        }
+                        WatchHistory.updatePosition(this, details.id, 0L, (details.durationSeconds ?: 0L), page = 0)
+                        viewModel.play(playOption)
+                    },
+                ).also {
+                    registerDetailFocus(DetailFocusTarget.PlayFromStart, it)
+                }
+            } else null
+
+            playButton.setOnKeyListener { _, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        backButton.requestFocus()
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        if (playFromStartButton != null) {
+                            playFromStartButton.requestFocus()
+                            true
+                        } else false
+                    }
+                    else -> false
+                }
+            }
+            playFromStartButton?.setOnKeyListener { _, keyCode, event ->
+                if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        backButton.requestFocus()
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        playButton.requestFocus()
+                        true
+                    }
+                    else -> false
+                }
+            }
+            backButton.setOnKeyListener { _, keyCode, event ->
+                if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                    playButton.requestFocus()
+                    true
+                } else false
+            }
+
+            val buttonRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                clipChildren = false
+                clipToPadding = false
+            }
+            buttonRow.addView(
+                playButton,
+                LinearLayout.LayoutParams(if (hasResume) 0 else match(), dp(playH), if (hasResume) 1f else 0f).withEndMargin(if (hasResume) dp(12) else 0),
+            )
+            if (playFromStartButton != null) {
+                buttonRow.addView(playFromStartButton, LinearLayout.LayoutParams(wrap(), dp(playH)))
+            }
+
             // 左右留 10dp:主按钮 1.05 倍聚焦放大(≈9.5dp)不会被 infoScroll 视口裁掉。
             info.addView(
-                playButton,
+                buttonRow,
                 LinearLayout.LayoutParams(match(), dp(playH)).apply {
                     leftMargin = dp(10)
                     rightMargin = dp(10)

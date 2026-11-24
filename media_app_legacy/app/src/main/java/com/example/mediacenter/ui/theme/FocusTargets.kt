@@ -26,11 +26,14 @@ sealed class HomeFocusTarget {
 }
 
 sealed class DetailFocusTarget {
+    object Back : DetailFocusTarget()
     object Play : DetailFocusTarget()
+    object PlayFromStart : DetailFocusTarget()
     object Refresh : DetailFocusTarget()
     data class Option(val id: String) : DetailFocusTarget()
 }
 
+const val HomeContinueTabId = "__continue__"
 const val HomeFocusNoCategoryKey = "__no_category__"
 
 // 面向 B 站全站搜索语义:泛类型词(动作/爱情等)在全站搜索下会命中大量

@@ -8,6 +8,7 @@ import android.view.Gravity
 import com.google.android.exoplayer2.Player
 import com.google.android.exoplayer2.video.VideoSize
 import com.example.mediacenter.MainActivity
+import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.ui.config.PlaybackStabilityResetMs
 
@@ -33,15 +34,38 @@ internal fun MainActivity.playbackPosKey() = currentPlayerOptionId?.let { "pos_$
 
 internal fun MainActivity.savePlaybackPosition(pos: Long) {
         val key = playbackPosKey()
-        if (key.isEmpty()) return
-        prefs().edit { putLong(key, pos) }
-        AppLog.i("Player", "saved position $pos for $key")
+        if (key.isNotEmpty()) {
+            prefs().edit { putLong(key, pos) }
+            AppLog.i("Player", "saved position $pos for $key")
+        }
+        val videoId = currentState.playingVideo?.id ?: currentState.selected?.id
+        if (!videoId.isNullOrBlank()) {
+            val duration = player?.duration?.takeIf { it > 0 }
+                ?: (currentState.selected?.durationSeconds?.let { it * 1000L } ?: 0L)
+            val page = currentState.currentPages?.currentPage ?: 0
+            WatchHistory.updatePosition(
+                this,
+                videoId,
+                pos / 1000L,
+                duration / 1000L,
+                page,
+            )
+        }
     }
+
+internal fun MainActivity.loadPlaybackPositionFor(videoId: String): Long {
+    val saved = prefs().getLong("pos_$videoId", 0L)
+    if (saved > 0L) return saved
+    val entry = WatchHistory.entries(this).firstOrNull { it.videoId == videoId }
+    return (entry?.positionSeconds ?: 0L) * 1000L
+}
 
 internal fun MainActivity.loadPlaybackPosition(): Long {
         val key = playbackPosKey()
-        if (key.isEmpty()) return 0L
-        return prefs().getLong(key, 0L)
+        val saved = if (key.isNotEmpty()) prefs().getLong(key, 0L) else 0L
+        if (saved > 0L) return saved
+        val videoId = currentState.playingVideo?.id ?: currentState.selected?.id ?: return 0L
+        return loadPlaybackPositionFor(videoId)
     }
 
 internal fun MainActivity.applyPlayerVideoRotation() {

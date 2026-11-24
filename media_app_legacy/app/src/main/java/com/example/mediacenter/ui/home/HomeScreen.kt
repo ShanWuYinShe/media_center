@@ -12,6 +12,7 @@ import android.view.inputmethod.EditorInfo
 import android.util.TypedValue
 import com.example.mediacenter.MainActivity
 import com.example.mediacenter.data.ContentCategory
+import com.example.mediacenter.data.SearchHistory
 import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.exitSearchMode
@@ -52,6 +53,7 @@ import com.example.mediacenter.ui.theme.Colors
 import com.example.mediacenter.ui.theme.HomeFocusArea
 import com.example.mediacenter.ui.theme.HomeFocusNoCategoryKey
 import com.example.mediacenter.ui.theme.HomeFocusTarget
+import com.example.mediacenter.ui.theme.HomeContinueTabId
 import com.example.mediacenter.ui.theme.SEARCH_HOT_KEYWORDS
 import com.example.mediacenter.ui.theme.YOUTUBE_SEARCH_HOT_KEYWORDS
 import com.example.mediacenter.ui.views.PillIcon
@@ -63,9 +65,10 @@ internal fun MainActivity.renderHome(state: MediaUiState) {
         if (!homeInitialFocusApplied && !searchVisible && state.query.isBlank() &&
             state.playing == null && state.selected == null && state.categories.isNotEmpty()
         ) {
+            val allCats = listOf(ContentCategory(HomeContinueTabId, "继续观看")) + state.categories
             val initialCategory = state.selectedCategoryId
-                ?.takeIf { id -> state.categories.any { it.id == id } }
-                ?: state.categories.first().id
+                ?.takeIf { id -> allCats.any { it.id == id } }
+                ?: allCats.first().id
             homeFocusArea = HomeFocusArea.Category
             pendingHomeFocus = HomeFocusTarget.Category(initialCategory)
         }
@@ -126,16 +129,36 @@ internal fun MainActivity.renderHome(state: MediaUiState) {
             resetHomeDetailsPrefetch()
         }
         val displayItems = state.items
+        val isContinue = state.selectedCategoryId == HomeContinueTabId
         when {
             state.loading && state.items.isEmpty() -> body.addView(centeredLoading("正在加载…"), frameMatch())
             state.error != null && state.items.isEmpty() -> body.addView(errorState(state.error, viewModel::retry, state.autoRetrying), frameMatch())
-            displayItems.isEmpty() -> body.addView(
-                emptyState(
-                    if (state.query.isNotBlank()) "没有找到相关内容" else "当前分类暂无内容",
-                    action = null,
-                ),
-                frameMatch(),
-            )
+            displayItems.isEmpty() -> {
+                val firstNormal = state.categories.firstOrNull()
+                val emptyMsg = when {
+                    state.query.isNotBlank() -> "没有找到相关内容"
+                    isContinue -> "还没有观看记录"
+                    else -> "当前分类暂无内容"
+                }
+                val emptyDetail = if (isContinue) "看过的视频会自动出现在这里，方便接着看" else null
+                val emptyAction = if (isContinue && firstNormal != null) {
+                    "浏览推荐" to {
+                        cancelPendingCategorySelect()
+                        rememberedCategoryId = firstNormal.id
+                        homeFocusArea = HomeFocusArea.Category
+                        pendingHomeFocus = HomeFocusTarget.Category(firstNormal.id)
+                        viewModel.selectCategory(firstNormal)
+                    }
+                } else null
+                body.addView(
+                    emptyState(
+                        emptyMsg,
+                        detail = emptyDetail,
+                        action = emptyAction,
+                    ),
+                    frameMatch(),
+                )
+            }
             else -> {
                 body.addView(
                     videoGrid(
@@ -145,6 +168,7 @@ internal fun MainActivity.renderHome(state: MediaUiState) {
                         loadMoreError = state.loadMoreError,
                         onRetryLoadMore = viewModel::retryLoadMore,
                         focusTarget = focusTarget,
+                        isContinue = isContinue,
                     ),
                     frameMatch(),
                 )
@@ -221,7 +245,11 @@ internal fun MainActivity.homeTopBar(
         state: MediaUiState,
         registerFocusTarget: (HomeFocusTarget, View) -> Unit,
     ): View {
-        val categories = state.categories
+        val categories = if (state.categories.isNotEmpty()) {
+            listOf(ContentCategory(HomeContinueTabId, "继续观看")) + state.categories
+        } else {
+            state.categories
+        }
         val selectedId = state.selectedCategoryId
         // 新版 TopBar 的两段式:品牌 + 右侧动作一行,分类 chip 独立一行。
         // 这样分类横向滚动不会画到视频源/设置按钮下面(旧版单行会重叠)。
@@ -649,6 +677,7 @@ internal fun MainActivity.searchPanel(state: MediaUiState): View {
                 input.requestFocus()
                 return true
             }
+            SearchHistory.record(this, keyword)
             searchVisible = false
             homeFocusArea = HomeFocusArea.Video
             pendingHomeFocus = null
@@ -672,6 +701,7 @@ internal fun MainActivity.searchPanel(state: MediaUiState): View {
             submitSearch(input.text.toString())
         }
         var firstKeywordChip: View? = null
+        var firstRecentChip: View? = null
         row.addView(searchButton, LinearLayout.LayoutParams(wrap(), dp(48)).withStartMargin(dp(14)))
         val cancelButton = pill("取消", selected = false, heightDp = 58, horizontalPaddingDp = 28) {
             searchVisible = false
@@ -694,7 +724,7 @@ internal fun MainActivity.searchPanel(state: MediaUiState): View {
                     true
                 }
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    firstKeywordChip?.requestFocus() == true
+                    (firstRecentChip ?: firstKeywordChip)?.requestFocus() == true
                 }
                 else -> false
             }
@@ -711,14 +741,73 @@ internal fun MainActivity.searchPanel(state: MediaUiState): View {
                     true
                 }
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    firstKeywordChip?.requestFocus() == true
+                    (firstRecentChip ?: firstKeywordChip)?.requestFocus() == true
                 }
                 else -> false
             }
         }
         panel.addView(row, linearMatch())
 
-        panel.addView(label("热门关键词", 13f, Colors.TEXT_TERTIARY, bold = true, maxLines = 1), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(28)))
+        val recentSearches = SearchHistory.entries(this)
+        if (recentSearches.isNotEmpty()) {
+            val historyHeader = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, 0, 0, 0)
+                clipChildren = false
+                clipToPadding = false
+            }
+            historyHeader.addView(
+                label("最近搜索", 13f, Colors.TEXT_TERTIARY, bold = true, maxLines = 1),
+                LinearLayout.LayoutParams(0, wrap(), 1f),
+            )
+            val clearHistoryChip = pill("清空历史", selected = false, heightDp = 36, horizontalPaddingDp = 14) {
+                SearchHistory.clear(this)
+                invalidateUi()
+            }
+            historyHeader.addView(clearHistoryChip, LinearLayout.LayoutParams(wrap(), dp(36)))
+            panel.addView(historyHeader, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(22)))
+
+            val historyRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(8), 0, 0)
+                clipChildren = false
+                clipToPadding = false
+            }
+            recentSearches.forEach { query ->
+                val chip = pill(query, selected = false, heightDp = 48, horizontalPaddingDp = 20) {
+                    submitSearch(query)
+                }.apply {
+                    setOnKeyListener { _, keyCode, event ->
+                        if (event.action == KeyEvent.ACTION_DOWN) {
+                            when (keyCode) {
+                                KeyEvent.KEYCODE_DPAD_UP -> {
+                                    searchButton.requestFocus()
+                                    true
+                                }
+                                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                                    firstKeywordChip?.requestFocus() == true
+                                }
+                                else -> false
+                            }
+                        } else false
+                    }
+                }
+                if (firstRecentChip == null) firstRecentChip = chip
+                historyRow.addView(
+                    chip,
+                    LinearLayout.LayoutParams(wrap(), dp(48)).withEndMargin(dp(10)),
+                )
+            }
+            panel.addView(horizontalFocusStrip(historyRow, padH = 6, padV = 4), linearMatch())
+        }
+
+        val providerTitle = state.providers.firstOrNull { it.id == state.currentProvider }?.let { it.name ?: it.id } ?: state.currentProvider
+        val hotTitle = if (providerTitle.isNotBlank()) "热门搜索 · $providerTitle" else "热门关键词"
+        panel.addView(
+            label(hotTitle, 13f, Colors.TEXT_TERTIARY, bold = true, maxLines = 1),
+            LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(if (recentSearches.isNotEmpty()) 18 else 28)),
+        )
         val keywordRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, dp(12), 0, 0)
@@ -736,7 +825,7 @@ internal fun MainActivity.searchPanel(state: MediaUiState): View {
             }.apply {
                 setOnKeyListener { _, keyCode, event ->
                     if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                        searchButton.requestFocus()
+                        (firstRecentChip ?: searchButton).requestFocus()
                         true
                     } else {
                         false
@@ -827,10 +916,14 @@ internal fun MainActivity.prefetchVisibleHomeDetails(videos: List<VideoSummary>)
 
 /** 分类标题：让用户一眼知道当前看的是哪一类，而不是只靠顶部选中的小胶囊。 */
 internal fun MainActivity.homeSectionHeader(state: MediaUiState): View {
-    val title = state.categories
-        .firstOrNull { it.id == state.selectedCategoryId }
-        ?.title
-        ?: "视频"
+    val title = if (state.selectedCategoryId == HomeContinueTabId) {
+        "继续观看"
+    } else {
+        state.categories
+            .firstOrNull { it.id == state.selectedCategoryId }
+            ?.title
+            ?: "视频"
+    }
     return LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(0, dp(18), 0, dp(6))

@@ -18,6 +18,7 @@ import com.example.mediacenter.ui.components.roundedGradient
 import com.example.mediacenter.ui.components.wrap
 import com.example.mediacenter.ui.components.withTopMargin
 import com.example.mediacenter.ui.theme.Colors
+import com.example.mediacenter.ui.theme.HomeContinueTabId
 import com.example.mediacenter.ui.theme.HomeFocusArea
 import com.example.mediacenter.ui.theme.HomeFocusNoCategoryKey
 import com.example.mediacenter.ui.theme.HomeFocusTarget
@@ -169,6 +170,9 @@ internal fun MainActivity.homeFocusTargetFor(state: MediaUiState): HomeFocusTarg
     }
 
 internal fun MainActivity.homeDefaultCategoryTarget(state: MediaUiState): HomeFocusTarget? {
+        if (rememberedCategoryId == HomeContinueTabId || state.selectedCategoryId == HomeContinueTabId) {
+            return HomeFocusTarget.Category(HomeContinueTabId)
+        }
         val categoryId = rememberedCategoryId
             ?.takeIf { id -> state.categories.any { it.id == id } }
             ?: state.selectedCategoryId?.takeIf { id -> state.categories.any { it.id == id } }
