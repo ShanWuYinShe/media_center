@@ -388,10 +388,9 @@ fun DetailScreen(
                                 label = "从头播放",
                                 primary = false,
                                 onClick = {
-                                    BackgroundWork.scope.launch {
-                                        PlaybackPositionStore.save(context, playbackStorageKey(video.id, currentPage), 0L)
-                                        WatchHistory.updatePosition(context, video.id, 0L, (video.durationSeconds ?: 0L), currentPage)
-                                    }
+                                    PlaybackPositionStore.remove(context, playbackStorageKey(video.id, currentPage))
+                                    PlaybackPositionStore.remove(context, video.id)
+                                    WatchHistory.resetProgress(context, video.id)
                                     onPlay(currentPage, selectedQualityQn)
                                 },
                                 modifier = Modifier

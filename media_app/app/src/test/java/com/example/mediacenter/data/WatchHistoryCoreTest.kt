@@ -97,6 +97,16 @@ class WatchHistoryCoreTest {
         assertEquals(entries, WatchHistoryCore.updateProgress(entries, "zzz", positionSeconds = 300, durationSeconds = 600))
     }
 
+    @Test
+    fun reset_progress_sets_position_and_page_to_zero() {
+        val entries = listOf(entry("a", positionSeconds = 500).copy(page = 3), entry("b"))
+        val result = WatchHistoryCore.resetProgress(entries, "a")
+        val resetEntry = result.first { it.videoId == "a" }
+        assertEquals(0L, resetEntry.positionSeconds)
+        assertEquals(0, resetEntry.page)
+        assertEquals(listOf("a", "b"), result.map { it.videoId })
+    }
+
     // ── encode/decode ──
 
     fun page_of_returns_last_watched_page() {

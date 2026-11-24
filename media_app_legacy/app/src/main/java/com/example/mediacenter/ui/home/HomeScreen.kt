@@ -448,12 +448,21 @@ internal fun MainActivity.homeTopBar(
                         }
                         KeyEvent.KEYCODE_DPAD_DOWN -> {
                             // 分类栏直接进入下方网格首个视频；没有 Hero/筛选行，
-                            // 老人按一次下键就能开始选片。
+                            // 老人按一次下键就能开始选片；分类为空时落到空态恢复动作(如"浏览推荐")。
                             cancelPendingCategorySelect()
                             homeFocusArea = HomeFocusArea.Video
-                            currentState.items.firstOrNull()?.id
-                                ?.let { requestHomeFocus(HomeFocusTarget.Video(it)) }
-                            true
+                            val firstVideoId = currentState.items.firstOrNull()?.id
+                            if (firstVideoId != null) {
+                                requestHomeFocus(HomeFocusTarget.Video(firstVideoId))
+                                true
+                            } else {
+                                val emptyAction = window?.decorView?.findViewWithTag<View>("empty_action")
+                                if (emptyAction != null && emptyAction.requestFocus()) {
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
                         }
                         KeyEvent.KEYCODE_DPAD_LEFT -> {
                             // 焦点已在最左分类时再按左键:边界拦截(焦点不动),
@@ -702,6 +711,7 @@ internal fun MainActivity.searchPanel(state: MediaUiState): View {
         }
         var firstKeywordChip: View? = null
         var firstRecentChip: View? = null
+        var clearHistoryChipView: View? = null
         row.addView(searchButton, LinearLayout.LayoutParams(wrap(), dp(48)).withStartMargin(dp(14)))
         val cancelButton = pill("取消", selected = false, heightDp = 58, horizontalPaddingDp = 28) {
             searchVisible = false
@@ -741,7 +751,7 @@ internal fun MainActivity.searchPanel(state: MediaUiState): View {
                     true
                 }
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    (firstRecentChip ?: firstKeywordChip)?.requestFocus() == true
+                    (clearHistoryChipView ?: firstRecentChip ?: firstKeywordChip)?.requestFocus() == true
                 }
                 else -> false
             }
@@ -764,7 +774,26 @@ internal fun MainActivity.searchPanel(state: MediaUiState): View {
             val clearHistoryChip = pill("清空历史", selected = false, heightDp = 36, horizontalPaddingDp = 14) {
                 SearchHistory.clear(this)
                 invalidateUi()
+            }.apply {
+                setOnKeyListener { _, keyCode, event ->
+                    if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_UP -> {
+                            cancelButton.requestFocus()
+                            true
+                        }
+                        KeyEvent.KEYCODE_DPAD_LEFT -> {
+                            (firstRecentChip ?: searchButton).requestFocus()
+                            true
+                        }
+                        KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            firstKeywordChip?.requestFocus() == true
+                        }
+                        else -> false
+                    }
+                }
             }
+            clearHistoryChipView = clearHistoryChip
             historyHeader.addView(clearHistoryChip, LinearLayout.LayoutParams(wrap(), dp(36)))
             panel.addView(historyHeader, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(22)))
 
@@ -774,7 +803,7 @@ internal fun MainActivity.searchPanel(state: MediaUiState): View {
                 clipChildren = false
                 clipToPadding = false
             }
-            recentSearches.forEach { query ->
+            recentSearches.forEachIndexed { idx, query ->
                 val chip = pill(query, selected = false, heightDp = 48, horizontalPaddingDp = 20) {
                     submitSearch(query)
                 }.apply {
@@ -782,8 +811,16 @@ internal fun MainActivity.searchPanel(state: MediaUiState): View {
                         if (event.action == KeyEvent.ACTION_DOWN) {
                             when (keyCode) {
                                 KeyEvent.KEYCODE_DPAD_UP -> {
-                                    searchButton.requestFocus()
-                                    true
+                                    if (idx == recentSearches.size - 1 && clearHistoryChipView != null) {
+                                        clearHistoryChipView?.requestFocus() == true
+                                    } else {
+                                        searchButton.requestFocus()
+                                    }
+                                }
+                                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                    if (idx == recentSearches.size - 1 && clearHistoryChipView != null) {
+                                        clearHistoryChipView?.requestFocus() == true
+                                    } else false
                                 }
                                 KeyEvent.KEYCODE_DPAD_DOWN -> {
                                     firstKeywordChip?.requestFocus() == true

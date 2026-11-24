@@ -8,7 +8,9 @@ import android.view.Gravity
 import com.google.android.exoplayer2.Player
 import com.google.android.exoplayer2.video.VideoSize
 import com.example.mediacenter.MainActivity
+import com.example.mediacenter.data.PlaybackPositionStore
 import com.example.mediacenter.data.WatchHistory
+import com.example.mediacenter.data.playbackStorageKey
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.ui.config.PlaybackStabilityResetMs
 
@@ -33,16 +35,13 @@ internal fun MainActivity.prefs() = getSharedPreferences("playback", Context.MOD
 internal fun MainActivity.playbackPosKey() = currentPlayerOptionId?.let { "pos_$it" } ?: ""
 
 internal fun MainActivity.savePlaybackPosition(pos: Long) {
-        val key = playbackPosKey()
-        if (key.isNotEmpty()) {
-            prefs().edit { putLong(key, pos) }
-            AppLog.i("Player", "saved position $pos for $key")
-        }
         val videoId = currentState.playingVideo?.id ?: currentState.selected?.id
+        val page = currentState.currentPages?.currentPage ?: 0
         if (!videoId.isNullOrBlank()) {
+            val storageKey = playbackStorageKey(videoId, page)
+            PlaybackPositionStore.save(this, storageKey, pos)
             val duration = player?.duration?.takeIf { it > 0 }
                 ?: (currentState.selected?.durationSeconds?.let { it * 1000L } ?: 0L)
-            val page = currentState.currentPages?.currentPage ?: 0
             WatchHistory.updatePosition(
                 this,
                 videoId,
@@ -51,21 +50,35 @@ internal fun MainActivity.savePlaybackPosition(pos: Long) {
                 page,
             )
         }
+        val key = playbackPosKey()
+        if (key.isNotEmpty()) {
+            prefs().edit { putLong(key, pos) }
+            AppLog.i("Player", "saved position $pos for $key")
+        }
     }
 
-internal fun MainActivity.loadPlaybackPositionFor(videoId: String): Long {
+internal fun MainActivity.loadPlaybackPositionFor(videoId: String, page: Int = 0): Long {
+    val storageKey = playbackStorageKey(videoId, page)
+    val stored = PlaybackPositionStore.resumePosition(this, storageKey)
+    if (stored >= 30_000L) return stored
     val saved = prefs().getLong("pos_$videoId", 0L)
-    if (saved > 0L) return saved
+    if (saved >= 30_000L) return saved
     val entry = WatchHistory.entries(this).firstOrNull { it.videoId == videoId }
-    return (entry?.positionSeconds ?: 0L) * 1000L
+    val entryPos = (entry?.positionSeconds ?: 0L) * 1000L
+    return if (entryPos >= 30_000L) entryPos else 0L
 }
 
 internal fun MainActivity.loadPlaybackPosition(): Long {
+        val videoId = currentState.playingVideo?.id ?: currentState.selected?.id
+        val page = currentState.currentPages?.currentPage ?: 0
+        if (!videoId.isNullOrBlank()) {
+            val pos = loadPlaybackPositionFor(videoId, page)
+            if (pos > 0L) return pos
+        }
         val key = playbackPosKey()
         val saved = if (key.isNotEmpty()) prefs().getLong(key, 0L) else 0L
         if (saved > 0L) return saved
-        val videoId = currentState.playingVideo?.id ?: currentState.selected?.id ?: return 0L
-        return loadPlaybackPositionFor(videoId)
+        return 0L
     }
 
 internal fun MainActivity.applyPlayerVideoRotation() {

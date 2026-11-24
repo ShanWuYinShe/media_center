@@ -2,11 +2,15 @@ package com.example.mediacenter.ui.components
 
 import android.graphics.Color
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import com.example.mediacenter.MainActivity
+import com.example.mediacenter.ui.homeDefaultCategoryTarget
+import com.example.mediacenter.ui.requestHomeFocus
+import com.example.mediacenter.ui.theme.HomeFocusArea
 import com.example.mediacenter.ui.components.dp
 import com.example.mediacenter.ui.components.label
 import com.example.mediacenter.ui.components.pill
@@ -132,8 +136,20 @@ internal fun MainActivity.emptyState(
         // 空态恢复动作(如"清除筛选")：给用户一个可聚焦的直接出口，
         // 不用靠猜"按上键回到筛选栏"。
         if (action != null) {
+            val actionPill = pill(action.first, selected = false, heightDp = 48, horizontalPaddingDp = 24, onClick = action.second).apply {
+                tag = "empty_action"
+                setOnKeyListener { _, keyCode, event ->
+                    if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                        homeDefaultCategoryTarget(currentState)?.let { target ->
+                            homeFocusArea = HomeFocusArea.Category
+                            requestHomeFocus(target)
+                            true
+                        } ?: false
+                    } else false
+                }
+            }
             card.addView(
-                pill(action.first, selected = false, heightDp = 48, horizontalPaddingDp = 24, onClick = action.second),
+                actionPill,
                 LinearLayout.LayoutParams(wrap(), dp(48)).withTopMargin(dp(16)),
             )
         }

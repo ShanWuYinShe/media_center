@@ -237,7 +237,7 @@ class HomeViewModel(
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 PlaybackPositionStore.remove(context, videoId)
-                WatchHistory.updatePosition(context, videoId, 0L, 0L, page = 0)
+                WatchHistory.resetProgress(context, videoId)
             }
             refreshWatchHistory()
         }

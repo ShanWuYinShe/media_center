@@ -170,12 +170,12 @@ internal fun MainActivity.homeFocusTargetFor(state: MediaUiState): HomeFocusTarg
     }
 
 internal fun MainActivity.homeDefaultCategoryTarget(state: MediaUiState): HomeFocusTarget? {
-        if (rememberedCategoryId == HomeContinueTabId || state.selectedCategoryId == HomeContinueTabId) {
+        if (state.selectedCategoryId == HomeContinueTabId) {
             return HomeFocusTarget.Category(HomeContinueTabId)
         }
-        val categoryId = rememberedCategoryId
+        val categoryId = state.selectedCategoryId
             ?.takeIf { id -> state.categories.any { it.id == id } }
-            ?: state.selectedCategoryId?.takeIf { id -> state.categories.any { it.id == id } }
+            ?: rememberedCategoryId?.takeIf { id -> state.categories.any { it.id == id } }
             ?: state.categories.firstOrNull()?.id
         return categoryId?.let(HomeFocusTarget::Category)
             // categories 为空(加载失败)时把焦点落到占位 chip,保证分类栏

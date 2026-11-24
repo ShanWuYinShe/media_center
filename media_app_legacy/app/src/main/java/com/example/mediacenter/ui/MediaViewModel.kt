@@ -11,6 +11,7 @@ import com.example.mediacenter.data.HomeSnapshot
 import com.example.mediacenter.data.MediaRepositoryApi
 import com.example.mediacenter.data.PlaybackOption
 import com.example.mediacenter.data.PlaybackPages
+import com.example.mediacenter.data.PlaybackPositionStore
 import com.example.mediacenter.data.PlaybackQuality
 import com.example.mediacenter.data.PlaybackResult
 import com.example.mediacenter.data.ProviderInfo
@@ -729,6 +730,7 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 WatchHistory.remove(context, videoId)
+                PlaybackPositionStore.remove(context, videoId)
                 context.getSharedPreferences("playback", Context.MODE_PRIVATE).edit {
                     remove("pos_$videoId")
                 }
@@ -741,7 +743,8 @@ class MediaViewModel(private val repository: MediaRepositoryApi) : ViewModel() {
         val context = MediaCenterApp.instance ?: return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                WatchHistory.updatePosition(context, videoId, 0L, 0L, page = 0)
+                WatchHistory.resetProgress(context, videoId)
+                PlaybackPositionStore.remove(context, videoId)
                 context.getSharedPreferences("playback", Context.MODE_PRIVATE).edit {
                     remove("pos_$videoId")
                 }
