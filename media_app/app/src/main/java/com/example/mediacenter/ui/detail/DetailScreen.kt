@@ -271,9 +271,9 @@ fun DetailScreen(
                     val resumePage = resumePageIndex(video.id, provider, lastWatchedPage)
                     val hintText = when {
                         lastWatchedPage > 0 && lastWatchedSeconds >= 30 ->
-                            "上次看到第 ${lastWatchedPage + 1} 页 ${formatDuration(lastWatchedSeconds)}，播放将从此处继续"
+                            "上次看到第 ${lastWatchedPage + 1} 集 ${formatDuration(lastWatchedSeconds)}，播放将从此处继续"
                         resumePosition > 0 && resumePage > 0 ->
-                            "上次看到第 ${resumePage + 1} 页 ${formatDuration(resumePosition)}，播放将从此处继续"
+                            "上次看到第 ${resumePage + 1} 集 ${formatDuration(resumePosition)}，播放将从此处继续"
                         resumePosition > 0 ->
                             "上次播放到 ${formatDuration(resumePosition)}，播放将从此处继续"
                         else -> null
@@ -343,41 +343,70 @@ fun DetailScreen(
                     // 主操作(播放)获得进入时焦点：简介溢出时上方还有"查看完整简介"按钮，
                     // 不指定焦点路径遥控器会先落在那里，多按一次才能到播放。
                     LaunchedEffect(video.id) { playFocus.requestFocus() }
-                    TvActionButton(
-                        label = buildPlayLabel(hintText != null, currentQualityLabel),
-                        primary = true,
-                        onClick = {
-                            // 登记观看历史(继续观看行):元数据齐全,保留上次观看页;位置由
-                            // 播放器退出时回写。provider 取点击时刻的当前源,首页继续观看行
-                            // 按当前源过滤展示。
-                            // 写盘放应用级 IO 作用域:onClick 在主线程,SP + JSON 编解码不能
-                            // 阻塞首帧;页面随即跳走,不等待写入完成。
-                            val entry = WatchEntry(
-                                videoId = video.id,
-                                provider = repository.currentProvider,
-                                title = video.title,
-                                thumbnailUrl = video.thumbnailUrl.orEmpty(),
-                                durationSeconds = video.durationSeconds ?: 0L,
-                                page = currentPage,
-                            )
-                            BackgroundWork.scope.launch { WatchHistory.upsert(context, entry) }
-                            onPlay(currentPage, selectedQualityQn)
-                        },
-                        // TV 详情主操作固定宽度:铺满右栏会变成一条横贯屏幕的蓝带,
-                        // 压过封面与标题的视觉重心;向上方向显式打通至披露按钮或返回键,
-                        // 向下进入清晰度/选集行(没有时保持默认焦点行为)。
-                        modifier = Modifier
-                            .width(300.dp)
-                            .focusRequester(playFocus)
-                            .focusProperties {
-                                up = if (descOverflowed) descFocus else backFocus
-                                if (qualityOptions.isNotEmpty()) {
-                                    down = firstQualityFocus
-                                } else if (hasEpisodes) {
-                                    down = firstEpisodeFocus
-                                }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TvActionButton(
+                            label = buildPlayLabel(hintText != null, currentQualityLabel),
+                            primary = true,
+                            onClick = {
+                                // 登记观看历史(继续观看行):元数据齐全,保留上次观看页;位置由
+                                // 播放器退出时回写。provider 取点击时刻的当前源,首页继续观看行
+                                // 按当前源过滤展示。
+                                // 写盘放应用级 IO 作用域:onClick 在主线程,SP + JSON 编解码不能
+                                // 阻塞首帧;页面随即跳走,不等待写入完成。
+                                val entry = WatchEntry(
+                                    videoId = video.id,
+                                    provider = repository.currentProvider,
+                                    title = video.title,
+                                    thumbnailUrl = video.thumbnailUrl.orEmpty(),
+                                    durationSeconds = video.durationSeconds ?: 0L,
+                                    page = currentPage,
+                                )
+                                BackgroundWork.scope.launch { WatchHistory.upsert(context, entry) }
+                                onPlay(currentPage, selectedQualityQn)
                             },
-                    )
+                            // TV 详情主操作固定宽度:铺满右栏会变成一条横贯屏幕的蓝带,
+                            // 压过封面与标题的视觉重心;向上方向显式打通至披露按钮或返回键,
+                            // 向下进入清晰度/选集行(没有时保持默认焦点行为)。
+                            modifier = Modifier
+                                .width(if (hintText != null) 220.dp else 300.dp)
+                                .focusRequester(playFocus)
+                                .focusProperties {
+                                    up = if (descOverflowed) descFocus else backFocus
+                                    if (qualityOptions.isNotEmpty()) {
+                                        down = firstQualityFocus
+                                    } else if (hasEpisodes) {
+                                        down = firstEpisodeFocus
+                                    }
+                                },
+                        )
+                        if (hintText != null) {
+                            TvActionButton(
+                                label = "从头播放",
+                                primary = false,
+                                onClick = {
+                                    BackgroundWork.scope.launch {
+                                        PlaybackPositionStore.save(context, playbackStorageKey(video.id, currentPage), 0L)
+                                        WatchHistory.updatePosition(context, video.id, 0L, (video.durationSeconds ?: 0L), currentPage)
+                                    }
+                                    onPlay(currentPage, selectedQualityQn)
+                                },
+                                modifier = Modifier
+                                    .width(140.dp)
+                                    .focusProperties {
+                                        up = if (descOverflowed) descFocus else backFocus
+                                        if (qualityOptions.isNotEmpty()) {
+                                            down = firstQualityFocus
+                                        } else if (hasEpisodes) {
+                                            down = firstEpisodeFocus
+                                        }
+                                    },
+                            )
+                        }
+                    }
                     // 清晰度/选集用「行内小标签 + chips」的紧凑排版:1080p 电视上
                     // 播放按钮下方只有约 230px 可视高度,两段都带独立标题行会把选集
                     // 推到首屏外(用户体感仍是"详情页没有剧集选择")。

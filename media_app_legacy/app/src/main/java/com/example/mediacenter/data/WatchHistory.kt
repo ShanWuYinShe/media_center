@@ -1,0 +1,163 @@
+package com.example.mediacenter.data
+
+import android.content.Context
+import androidx.core.content.edit
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
+/** 一条观看历史(首页"继续观看"行的数据源)。与 media_app 格式保持一致。 */
+@Serializable
+data class WatchEntry(
+    val videoId: String,
+    val provider: String,
+    val title: String,
+    val thumbnailUrl: String,
+    val durationSeconds: Long = 0,
+    val positionSeconds: Long = 0,
+    // 多P视频:最后观看的分页(0 起始)。继续观看点击后带页码直达该页。
+    val page: Int = 0,
+    val updatedAt: Long = 0,
+) {
+    /** 转成首页卡片所需的 VideoSummary(继续观看行复用 VideoGrid)。 */
+    fun toVideoSummary() = VideoSummary(
+        id = videoId,
+        title = title,
+        thumbnailUrl = thumbnailUrl.ifEmpty { null },
+        durationSeconds = durationSeconds,
+    )
+}
+
+/**
+ * 观看历史的核心逻辑(纯函数,不依赖 Android,可在 JVM 单测):
+ * JSON 数组字符串 <-> 条目列表,新的在前,容量上限淘汰最旧。
+ */
+object WatchHistoryCore {
+    val json = Json { ignoreUnknownKeys = true }
+    const val DEFAULT_CAP = 20
+    // 与断点续播同口径:不足 30s 的位置没有"继续观看"价值
+    const val MIN_KEPT_SECONDS = 30L
+    // 距结尾不足 15s 视为看完,看完的条目从继续观看中移除
+    const val TAIL_IGNORE_SECONDS = 15L
+    // 条目过期(与断点续播位置的 7 天有效期同口径):过期条目的位置已不可恢复
+    const val DEFAULT_MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
+
+    /** 移除超过 maxAgeMs 未更新的条目(过期条目的位置已不可靠)。 */
+    fun dropExpired(
+        entries: List<WatchEntry>,
+        nowMs: Long = System.currentTimeMillis(),
+        maxAgeMs: Long = DEFAULT_MAX_AGE_MS,
+    ): List<WatchEntry> = entries.filter { nowMs - it.updatedAt <= maxAgeMs }
+
+    fun decode(raw: String?): List<WatchEntry> =
+        raw?.let { runCatching { json.decodeFromString<List<WatchEntry>>(it) }.getOrNull() } ?: emptyList()
+
+    fun encode(entries: List<WatchEntry>): String = json.encodeToString(entries)
+
+    /** 新条目(或已存在条目的新版本)提到最前,超容量淘汰最旧。 */
+    fun upsert(entries: List<WatchEntry>, entry: WatchEntry, cap: Int = DEFAULT_CAP): List<WatchEntry> {
+        if (entry.videoId.isBlank()) return entries
+        val stamped = if (entry.updatedAt != 0L) entry else entry.copy(updatedAt = System.currentTimeMillis())
+        return (listOf(stamped) + entries.filterNot { it.videoId == entry.videoId }).take(cap)
+    }
+
+    /** 移除指定视频的观看历史。 */
+    fun remove(entries: List<WatchEntry>, videoId: String): List<WatchEntry> {
+        if (videoId.isBlank()) return entries
+        return entries.filterNot { it.videoId == videoId }
+    }
+
+    /**
+     * 回写播放进度:只更新已存在的条目(条目创建于详情页点击播放时,元数据齐全),
+     * 提到最前;看完(时长已知且距结尾不足 15s)则移除。位置不足 30s 忽略。
+     * 多P视频 positionSeconds 为绝对位置(前面各页时长累加),page 记录最后观看页。
+     */
+    fun updateProgress(
+        entries: List<WatchEntry>,
+        videoId: String,
+        positionSeconds: Long,
+        durationSeconds: Long,
+        page: Int = 0,
+    ): List<WatchEntry> {
+        if (videoId.isBlank() || positionSeconds < MIN_KEPT_SECONDS) return entries
+        val old = entries.firstOrNull { it.videoId == videoId } ?: return entries
+        if (durationSeconds > 0 && positionSeconds >= durationSeconds - TAIL_IGNORE_SECONDS) {
+            return entries.filterNot { it.videoId == videoId }
+        }
+        val updated = old.copy(
+            positionSeconds = positionSeconds,
+            page = page,
+            updatedAt = System.currentTimeMillis(),
+        )
+        return listOf(updated) + entries.filterNot { it.videoId == videoId }
+    }
+
+    /** 某视频最后观看的分页(0 起始,无记录/未登记返回 0)。 */
+    fun pageOf(entries: List<WatchEntry>, videoId: String): Int =
+        entries.firstOrNull { it.videoId == videoId }?.page ?: 0
+}
+
+/**
+ * 观看历史的 SharedPreferences 持久化单例。
+ * normal 和 legacy 共享同一 watch_history 表与 JSON schema。
+ */
+object WatchHistory {
+    private const val PREFS = "watch_history"
+    private const val KEY_ENTRIES = "entries"
+
+    private fun prefs(context: Context) =
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    fun entries(context: Context): List<WatchEntry> =
+        WatchHistoryCore.dropExpired(WatchHistoryCore.decode(prefs(context).getString(KEY_ENTRIES, null)))
+
+    fun upsert(context: Context, entry: WatchEntry, cap: Int = WatchHistoryCore.DEFAULT_CAP) {
+        prefs(context).edit {
+            putString(
+                KEY_ENTRIES,
+                WatchHistoryCore.encode(WatchHistoryCore.upsert(entries(context), entry, cap)),
+            )
+        }
+    }
+
+    fun updatePosition(
+        context: Context,
+        videoId: String,
+        positionSeconds: Long,
+        durationSeconds: Long,
+        page: Int = 0,
+    ) {
+        prefs(context).edit {
+            putString(
+                KEY_ENTRIES,
+                WatchHistoryCore.encode(
+                    WatchHistoryCore.updateProgress(
+                        entries(context),
+                        videoId,
+                        positionSeconds,
+                        durationSeconds,
+                        page,
+                    ),
+                ),
+            )
+        }
+    }
+
+    fun pageOf(context: Context, videoId: String): Int =
+        WatchHistoryCore.pageOf(entries(context), videoId)
+
+    fun remove(context: Context, videoId: String) {
+        prefs(context).edit {
+            putString(
+                KEY_ENTRIES,
+                WatchHistoryCore.encode(
+                    WatchHistoryCore.remove(entries(context), videoId),
+                ),
+            )
+        }
+    }
+
+    fun clear(context: Context) {
+        prefs(context).edit { remove(KEY_ENTRIES) }
+    }
+}

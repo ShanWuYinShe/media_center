@@ -276,7 +276,7 @@ fun HomeScreen(
                         val videos = continueEntries.map { entry ->
                             val summary = entry.toVideoSummary()
                             if (entry.page > 0) {
-                                summary.copy(title = "第 ${entry.page + 1} 页 · ${summary.title}")
+                                summary.copy(title = "第 ${entry.page + 1} 集 · ${summary.title}")
                             } else {
                                 summary
                             }

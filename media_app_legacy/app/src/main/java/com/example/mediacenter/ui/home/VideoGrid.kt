@@ -34,6 +34,7 @@ import com.example.mediacenter.ui.config.ViewTypeFooter
 import com.example.mediacenter.ui.homeCategoryKey
 import com.example.mediacenter.ui.homeDefaultCategoryTarget
 import com.example.mediacenter.ui.requestHomeFocus
+import com.example.mediacenter.ui.showWatchHistoryManageDialog
 import com.example.mediacenter.ui.config.FooterStableId
 import com.example.mediacenter.ui.config.ViewTypeVideo
 import com.example.mediacenter.ui.theme.Colors
@@ -53,6 +54,7 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
         loadMoreError: String?,
         onRetryLoadMore: () -> Unit,
         focusTarget: HomeFocusTarget?,
+        isContinue: Boolean = false,
     ): View {
         val columns = gridColumns()
         val cardWidth = posterCardWidth(columns)
@@ -63,6 +65,7 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
             cardWidth = cardWidth,
             cardHeight = cardHeight,
             onRetryLoadMore = onRetryLoadMore,
+            isContinue = isContinue,
         )
         val layoutManager = GridLayoutManager(this, columns).apply {
             isItemPrefetchEnabled = false
@@ -175,6 +178,7 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
         private val cardWidth: Int,
         private val cardHeight: Int,
         private val onRetryLoadMore: () -> Unit,
+        private val isContinue: Boolean = false,
     ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         private var items: List<VideoSummary> = emptyList()
         private var canLoadMore: Boolean = false
@@ -338,6 +342,13 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
                 background = activity.rounded(Colors.APPLE_BLUE, 999)
                 alpha = 0f
             }
+            private val progressTrack = FrameLayout(activity).apply {
+                background = activity.rounded(Color.argb(120, 0, 0, 0), 2)
+                visibility = View.GONE
+            }
+            private val progressBar = View(activity).apply {
+                background = activity.rounded(Colors.APPLE_BLUE, 2)
+            }
             // 焦点描边必须画在缩略图之上:原来写在 imageWrap.background 上,被铺满的
             // 图片整幅盖住,卡片焦点框实际一个像素都看不见(只剩底部蓝条+缩放)。
             private val focusRing = View(activity).apply {
@@ -373,6 +384,15 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
                         leftMargin = activity.dp(12)
                         rightMargin = activity.dp(12)
                         bottomMargin = activity.dp(0)
+                    },
+                )
+                progressTrack.addView(progressBar, FrameLayout.LayoutParams(0, match(), Gravity.START))
+                imageWrap.addView(
+                    progressTrack,
+                    FrameLayout.LayoutParams(match(), activity.dp(4), Gravity.BOTTOM).apply {
+                        leftMargin = activity.dp(12)
+                        rightMargin = activity.dp(12)
+                        bottomMargin = activity.dp(6)
                     },
                 )
                 // 最后加的覆盖层:焦点描边在图片与文字之上,保证完整可见。
@@ -432,12 +452,49 @@ private const val VIDEO_VIEW_CACHE_SIZE = 6
                 if (card.isAttachedToWindow) {
                     loadVisibleThumbnail()
                 }
-                card.setOnClickListener {
-                    activity.cancelPendingCategorySelect()
-                    activity.viewModel.openDetails(video)
+
+                val watchEntry = activity.currentState.watchEntries.firstOrNull { it.videoId == video.id }
+                if (watchEntry != null && watchEntry.durationSeconds > 0 && watchEntry.positionSeconds >= 30) {
+                    val ratio = (watchEntry.positionSeconds.toFloat() / watchEntry.durationSeconds).coerceIn(0f, 1f)
+                    progressTrack.visibility = View.VISIBLE
+                    val trackW = (cardWidth - activity.dp(24))
+                    val fillW = (trackW * ratio).toInt().coerceAtLeast(activity.dp(4))
+                    progressBar.layoutParams = FrameLayout.LayoutParams(fillW, match(), Gravity.START)
+                } else {
+                    progressTrack.visibility = View.GONE
+                }
+
+                if (isContinue) {
+                    card.setOnClickListener {
+                        activity.cancelPendingCategorySelect()
+                        val page = watchEntry?.page ?: 0
+                        activity.viewModel.openDetails(video, autoPlay = true, page = page)
+                    }
+                    card.setOnLongClickListener {
+                        activity.showWatchHistoryManageDialog(
+                            video,
+                            onRestart = { activity.viewModel.restartWatchHistory(video.id) },
+                            onRemove = { activity.viewModel.removeWatchHistory(video.id) },
+                        )
+                        true
+                    }
+                } else {
+                    card.setOnClickListener {
+                        activity.cancelPendingCategorySelect()
+                        activity.viewModel.openDetails(video)
+                    }
+                    card.setOnLongClickListener(null)
                 }
                 card.setOnKeyListener { _, keyCode, event ->
                     if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                    if (isContinue && (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_INFO)) {
+                        activity.showWatchHistoryManageDialog(
+                            video,
+                            onRestart = { activity.viewModel.restartWatchHistory(video.id) },
+                            onRemove = { activity.viewModel.removeWatchHistory(video.id) },
+                        )
+                        return@setOnKeyListener true
+                    }
                     // loadMore 追加后,bind 时捕获的 index/itemCount 会变陈旧,
                     // 用实时的 binding 位置和适配器数量判断边界,避免中部 item 被
                     // 误判为末项而挡住右移。

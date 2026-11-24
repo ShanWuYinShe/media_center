@@ -7,6 +7,7 @@ import android.widget.ScrollView
 import android.app.Dialog
 import android.content.Context
 import android.os.Build
+import android.widget.Toast
 import android.graphics.Color
 import android.view.Gravity
 import android.view.View
@@ -28,6 +29,9 @@ import java.util.Locale
 import com.example.mediacenter.MainActivity
 import com.example.mediacenter.data.PlaybackPages
 import com.example.mediacenter.data.ProviderInfo
+import com.example.mediacenter.data.SearchHistory
+import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.ui.components.dp
 import com.example.mediacenter.ui.components.elevationCompat
 import com.example.mediacenter.ui.components.frameMatch
@@ -301,6 +305,21 @@ internal fun MainActivity.showSystemInfoDialog() {
             }
             clearBtn.setOnKeyListener(scrollKeyListener)
             actions.addView(clearBtn, LinearLayout.LayoutParams(wrap(), dp(48)).withEndMargin(dp(12)))
+
+            val clearHistoryBtn = pill(
+                text = "清空历史",
+                selected = false,
+                heightDp = 48,
+                horizontalPaddingDp = 24,
+                onClick = {
+                    WatchHistory.clear(this@showSystemInfoDialog)
+                    SearchHistory.clear(this@showSystemInfoDialog)
+                    viewModel.refreshWatchHistory()
+                    Toast.makeText(this@showSystemInfoDialog, "观看与搜索历史已清空", Toast.LENGTH_SHORT).show()
+                },
+            )
+            clearHistoryBtn.setOnKeyListener(scrollKeyListener)
+            actions.addView(clearHistoryBtn, LinearLayout.LayoutParams(wrap(), dp(48)).withEndMargin(dp(12)))
 
             // 「检查更新」:手动检查入口(自动检查失败/系统时间等问题的现场排查配套)。
             // 必须先关诊断弹窗再执行——检查结果/安装提示是独立弹窗,叠加会互相
@@ -664,3 +683,52 @@ internal fun MainActivity.showUpdateFailureDialog(message: String) {
             retry.post { retry.requestFocus() }
         }.show()
     }
+
+internal fun MainActivity.showWatchHistoryManageDialog(
+    video: VideoSummary,
+    onRestart: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    val activity = this
+    Dialog(activity).apply {
+        requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val card = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(28), dp(24), dp(28), dp(24))
+            background = rounded(Colors.SURFACE_ELEVATED, 24, 1, Colors.GlassBorder)
+            clipChildren = false
+            clipToPadding = false
+        }
+        card.addView(label(video.title, 22f, Colors.TEXT_PRIMARY, bold = true, maxLines = 2))
+        card.addView(
+            label("管理该视频的观看记录与进度：", 16f, Colors.TEXT_SECONDARY, maxLines = 1),
+            LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(10)),
+        )
+        val actions = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            clipChildren = false
+            clipToPadding = false
+        }
+        val removeBtn = primaryPill("从继续观看中移除", heightDp = 48, horizontalPaddingDp = 24) {
+            dismiss()
+            onRemove()
+        }
+        val restartBtn = pill("重新从头播放", selected = false, heightDp = 48, horizontalPaddingDp = 24) {
+            dismiss()
+            onRestart()
+        }
+        val cancelBtn = pill("取消", selected = false, heightDp = 48, horizontalPaddingDp = 24) {
+            dismiss()
+        }
+        actions.addView(removeBtn, LinearLayout.LayoutParams(match(), dp(48)).withTopMargin(dp(16)))
+        actions.addView(restartBtn, LinearLayout.LayoutParams(match(), dp(48)).withTopMargin(dp(10)))
+        actions.addView(cancelBtn, LinearLayout.LayoutParams(match(), dp(48)).withTopMargin(dp(10)))
+        card.addView(actions, linearMatch())
+        setContentView(card)
+        applySafeDialogLayout(0.46f)
+        setOnShowListener {
+            removeBtn.requestFocus()
+        }
+        show()
+    }
+}

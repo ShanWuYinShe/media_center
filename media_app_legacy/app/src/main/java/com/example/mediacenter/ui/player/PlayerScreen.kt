@@ -32,6 +32,9 @@ import com.example.mediacenter.R
 import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.ui.config.containsHeader
 import com.example.mediacenter.data.PlaybackOption
+import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.data.WatchEntry
+import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.setContent
 import com.example.mediacenter.ui.showOptionListDialog
@@ -82,6 +85,27 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
             playerRotationVideoId = playingVideoId
             playerVideoRotationDegrees = 0
             playerVideoRotationUserSet = false
+        }
+        val currentVideo = state.playingVideo ?: state.selected?.let { sel ->
+            VideoSummary(
+                id = sel.id,
+                title = sel.title,
+                thumbnailUrl = sel.thumbnailUrl,
+                thumbnailUrlLarge = sel.thumbnailUrlLarge,
+                durationSeconds = sel.durationSeconds,
+            )
+        }
+        if (currentVideo != null) {
+            val page = state.currentPages?.currentPage ?: 0
+            val entry = WatchEntry(
+                videoId = currentVideo.id,
+                provider = state.currentProvider,
+                title = currentVideo.title,
+                thumbnailUrl = currentVideo.thumbnailUrl.orEmpty(),
+                durationSeconds = currentVideo.durationSeconds ?: 0L,
+                page = page,
+            )
+            WatchHistory.upsert(this, entry)
         }
         AppLog.i(
             "Player",
@@ -582,8 +606,16 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
         }
         bottom.addView(scrubberRow, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(24)))
 
+        val pages = state.currentPages
+        val hasPages = pages != null && pages.totalPages > 1
+        val hasPrevious = if (hasPages) (pages?.currentPage ?: 0) > 0 else false
+        val hasNext = if (hasPages) (pages?.currentPage ?: 0) < (pages?.totalPages ?: 0) - 1 else false
+        val hintParts = mutableListOf("← 快退10秒", "→ 快进10秒")
+        if (hasPrevious) hintParts.add("↑ 上一集")
+        if (hasNext) hintParts.add("↓ 下一集")
+        hintParts.add("OK 播放/暂停")
         val keyHints = label(
-            "← 快退10秒    → 快进10秒    ↑ 上一集    ↓ 下一集    OK 播放/暂停",
+            hintParts.joinToString("    "),
             17f,
             Colors.TEXT_PRIMARY,
             maxLines = 1,
@@ -592,7 +624,7 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
         val secondaryHint = label(
             buildString {
                 append("长按 ← → 连续快退/快进")
-                append(" · 长按 OK 播放设置")
+                append(" · MENU/长按 OK 选集/清晰度")
             },
             14f,
             Colors.TEXT_SECONDARY,
