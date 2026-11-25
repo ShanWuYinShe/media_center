@@ -127,7 +127,12 @@ adb -s "$SERIAL" shell getprop sys.boot_completed   # 轮询到 1
 2. 点「更新」：正常路径是系统安装确认框（PackageInstaller），确认后版本更新、应用数据保留。
 3. 若 PackageInstaller session 被系统拒绝（部分镜像/系统策略返回 `STATUS_FAILURE`），App 自动回退 `ACTION_INSTALL_PACKAGE` 系统安装器；连回退都发不出去时弹「更新失败 + 原因 + 重试」。排查看日志 `MediaCenter.Update: install result: status=… message=…`。
 4. 需要在本机制造「已装版本 < 线上版本」以触发更新流程时：临时把对应变体的 `build.gradle.kts`（normal `media_app/app/`、legacy `media_app_legacy/app/`）的 versionCode/versionName 改成旧值构建 debug APK（**构建完立即还原，禁止提交**），验证后再用正式 APK 覆盖安装。两个变体共用同一 applicationId，切换变体验证前先 uninstall。
-5. 跨版本原位升级前先核对两个 APK 证书一致：`apksigner verify --print-certs a.apk b.apk` 的 certificate SHA-256 必须相同；不同则只能卸载重装（应用数据会丢）。
+5. 走查**更新流程 UI**（发现新版本/下载进度/后台下载）时不必真发新版本，也不要改 build.gradle，用本机 mock 更新服务即可：
+   - 宿主机起 HTTPS mock（`https://10.0.2.2:8443`，自签证书带 `IP:10.0.2.2` SAN；legacy 的 SoftFailTrustManager 接受、normal 不接受自签）；
+   - `/api/v1/*` 代理真实 `media.chaoset.com`（目录接口预热缓存，否则首页会卡「正在加载」十几秒，和更新流程混在一起无法判断）；只覆写 `/api/v1/app/update` 返回更大 versionCode 的清单，以及更新包下载地址按固定码率节流（如 320KB/s）——不节流时本地下载瞬完，截不到百分比中间态；
+   - APK 用 `-PMEDIA_SERVER_URL=https://10.0.2.2:8443/api/v1` 构建；改前/改后 APK 必须共用同一 mock、同一码率、同一更新包，才是同条件对比；
+   - 进度截图在同一条脚本里「按更新 → 固定间隔 `screencap`」，人工操作间隔会跨过整个下载窗口；走查结束杀掉 mock 进程。
+6. 跨版本原位升级前先核对两个 APK 证书一致：`apksigner verify --print-certs a.apk b.apk` 的 certificate SHA-256 必须相同；不同则只能卸载重装（应用数据会丢）。
 
 ### 抽查发现"视频加载失败"时的处置
 
