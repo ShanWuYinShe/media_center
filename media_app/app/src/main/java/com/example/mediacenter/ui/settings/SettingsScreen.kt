@@ -294,10 +294,11 @@ fun SettingsScreen(onBack: () -> Unit) {
                 SectionTitle("网络加速")
                 ActionRow(
                     label = if (testingSpeed) "正在测速优选…" else "网络测速与节点优选",
-                    enabled = !testingSpeed,
+                    busy = testingSpeed,
                     focusRequester = firstActionFocus,
                     upFocusRequester = backFocus,
                     onClick = {
+                        if (testingSpeed) return@ActionRow
                         testingSpeed = true
                         scope.launch {
                             preferredIpStatus = com.example.mediacenter.net.PreferredIpStore.retest()
@@ -311,7 +312,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 SectionTitle("版本更新")
                 ActionRow(
                     label = if (checkingUpdate) "正在检查更新…" else "检查更新",
-                    enabled = !checkingUpdate,
+                    busy = checkingUpdate,
                     onClick = { checkForUpdate() },
                 )
             }
@@ -465,17 +466,17 @@ private fun InfoRow(label: String, value: String) {
 @Composable
 private fun ActionRow(
     label: String,
-    enabled: Boolean = true,
+    busy: Boolean = false,
     focusRequester: FocusRequester? = null,
     upFocusRequester: FocusRequester? = null,
     onClick: () -> Unit,
 ) {
+    // 忙碌态保持 enabled=true 以免 Compose TV Button 失去可聚焦性导致 D-pad 焦点丢失。
     Button(
         shape = tvPillButtonShape(),
         border = tvPillButtonBorder(),
         scale = tvButtonFocusScale(),
         onClick = onClick,
-        enabled = enabled,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = ScreenHorizontalPadding, vertical = 2.dp)
@@ -493,7 +494,7 @@ private fun ActionRow(
     ) {
         Text(
             text = label,
-            color = if (enabled) TextPrimary else TextTertiary,
+            color = if (!busy) TextPrimary else TextTertiary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
@@ -501,7 +502,7 @@ private fun ActionRow(
         Icon(
             imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
             contentDescription = null,
-            tint = if (enabled) TextSecondary else TextTertiary,
+            tint = if (!busy) TextSecondary else TextTertiary,
             modifier = Modifier.size(20.dp),
         )
     }

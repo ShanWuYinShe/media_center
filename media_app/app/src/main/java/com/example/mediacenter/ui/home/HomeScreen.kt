@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -127,9 +128,10 @@ fun HomeScreen(
     var lastBackPressTime by remember { mutableLongStateOf(0L) }
     var isTopBarFocused by remember { mutableStateOf(false) }
     var isActionFocused by remember { mutableStateOf(false) }
+    var isGridFocused by remember { mutableStateOf(false) }
     BackHandler {
         val now = System.currentTimeMillis()
-        val hasContentOrTopBarFocus = lastFocusedVideoId != null || isTopBarFocused || isActionFocused
+        val hasContentOrTopBarFocus = isGridFocused || isTopBarFocused || isActionFocused
         val (result, updatedBackPressTime) = TvNavigationPolicy.evaluateHomeBack(
             hasContentOrTopBarFocus = hasContentOrTopBarFocus,
             nowMs = now,
@@ -140,6 +142,7 @@ fun HomeScreen(
                 lastFocusedVideoId = null
                 isTopBarFocused = false
                 isActionFocused = false
+                isGridFocused = false
                 runCatching { selectedTabFocus.requestFocus() }
             }
             TvNavigationPolicy.HomeBackResult.SHOW_EXIT_TOAST -> {
@@ -312,7 +315,9 @@ fun HomeScreen(
                             isLoadingMore = false,
                             loadMoreFailed = false,
                             onRetryLoadMore = {},
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .onFocusChanged { isGridFocused = it.hasFocus },
                             firstItemFocusRequester = gridFirstFocus,
                             firstItemUpFocusRequester = selectedTabFocus,
                             progressById = continueProgressById,
@@ -345,7 +350,9 @@ fun HomeScreen(
                     isLoadingMore = state.isLoadingMore,
                     loadMoreFailed = state.loadMoreError != null,
                     onRetryLoadMore = viewModel::retryLoadMore,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .onFocusChanged { isGridFocused = it.hasFocus },
                     firstItemFocusRequester = gridFirstFocus,
                     firstItemUpFocusRequester = selectedTabFocus,
                     resetKey = state.selectedTab,

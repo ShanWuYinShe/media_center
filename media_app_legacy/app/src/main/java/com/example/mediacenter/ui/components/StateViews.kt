@@ -11,6 +11,7 @@ import com.example.mediacenter.MainActivity
 import com.example.mediacenter.ui.homeDefaultCategoryTarget
 import com.example.mediacenter.ui.requestHomeFocus
 import com.example.mediacenter.ui.theme.HomeFocusArea
+import com.example.mediacenter.ui.theme.HomeFocusTarget
 import com.example.mediacenter.ui.components.dp
 import com.example.mediacenter.ui.components.label
 import com.example.mediacenter.ui.components.pill
@@ -99,13 +100,20 @@ internal fun MainActivity.errorState(message: String, onRetry: () -> Unit, autoR
                 },
                 onClick = onRetry,
             ).apply {
+                tag = "error_action"
                 setOnKeyListener { _, keyCode, event ->
                     if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                        homeDefaultCategoryTarget(currentState)?.let { target ->
-                            homeFocusArea = HomeFocusArea.Category
-                            requestHomeFocus(target)
+                        if (currentState.query.isNotBlank()) {
+                            homeFocusArea = HomeFocusArea.Search
+                            requestHomeFocus(HomeFocusTarget.Search)
                             true
-                        } ?: false
+                        } else {
+                            homeDefaultCategoryTarget(currentState)?.let { target ->
+                                homeFocusArea = HomeFocusArea.Category
+                                requestHomeFocus(target)
+                                true
+                            } ?: false
+                        }
                     } else false
                 }
             }
