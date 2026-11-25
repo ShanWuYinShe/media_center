@@ -365,7 +365,9 @@ internal fun MainActivity.showSystemInfoDialog() {
             val close = pill("关闭", selected = true, heightDp = 48, horizontalPaddingDp = 28) { dismiss() }
             close.setOnKeyListener(scrollKeyListener)
             actions.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)))
-            card.addView(actions, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(16)))
+            // 操作按钮增至 5 个(含网络测速/检查更新),在 1080p TV 对话框宽度下易发生右侧裁切;
+            // 放入横向滚动条保证 D-pad 左右平滑滚动浏览且焦点放大不被裁切。
+            card.addView(horizontalFocusStrip(actions, padH = 4, padV = 0), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(16)))
             setContentView(card)
             window?.setBackgroundDrawableResource(android.R.color.transparent)
             applySafeDialogLayout(0.62f, 0.72f)

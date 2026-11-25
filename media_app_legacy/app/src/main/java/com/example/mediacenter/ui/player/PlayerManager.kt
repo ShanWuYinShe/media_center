@@ -25,6 +25,7 @@ internal fun MainActivity.releasePlayer() {
         currentPlayerOptionId = null
         playerSurface = null
         playerScreen = null
+        hidePlayerControlsAction = null
         orientationIndicator = null
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }

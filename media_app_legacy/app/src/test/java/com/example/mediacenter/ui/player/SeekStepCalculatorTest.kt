@@ -115,4 +115,35 @@ class SeekStepCalculatorTest {
         val text = SeekStepCalculator.formatTarget(65_000L, 125_000L)
         assertEquals("1:05 / 2:05", text)
     }
+
+    @Test
+    fun `consecutive seek accumulates from prevTargetPositionMs even when player currentPosMs lags`() {
+        val r1 = SeekStepCalculator.calculateStep(
+            forward = true,
+            nowMs = 1000L,
+            currentPosMs = 10_000L,
+            durationMs = 120_000L,
+            lastSeekTimeMs = 0L,
+            lastSeekDirection = 0,
+            prevConsecutiveCount = 0,
+            prevAccumulatedDeltaMs = 0L,
+            prevTargetPositionMs = 10_000L,
+        )
+        assertEquals(20_000L, r1.targetPositionMs)
+
+        val r2 = SeekStepCalculator.calculateStep(
+            forward = true,
+            nowMs = 1200L,
+            currentPosMs = 10_000L, // lagged
+            durationMs = 120_000L,
+            lastSeekTimeMs = 1000L,
+            lastSeekDirection = 1,
+            prevConsecutiveCount = r1.consecutiveCount,
+            prevAccumulatedDeltaMs = r1.accumulatedDeltaMs,
+            prevTargetPositionMs = r1.targetPositionMs,
+        )
+        assertEquals(2, r2.consecutiveCount)
+        assertEquals(20_000L, r2.accumulatedDeltaMs)
+        assertEquals(30_000L, r2.targetPositionMs)
+    }
 }

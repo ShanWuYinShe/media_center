@@ -6,6 +6,8 @@ import com.example.mediacenter.util.BackgroundWork
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.Dns
 import okhttp3.Request
@@ -58,6 +60,8 @@ internal object PreferredIpStore {
 
     @Volatile private var refreshStarted = false
 
+    private val refreshMutex = Mutex()
+
     /**
      * 候选池拉取入口。由 Application 注入(生产实现走 MediaApi 的 /preferred-ips)，
      * 本类不直接依赖仓库单例，便于单测注入。
@@ -107,7 +111,11 @@ internal object PreferredIpStore {
             return
         }
         loadCached()
-        BackgroundWork.scope.launch { refresh() }
+        BackgroundWork.scope.launch {
+            refreshMutex.withLock {
+                refresh()
+            }
+        }
     }
 
     /** 读上次测速结果;过期也先用(总比没有强)，后台会刷新。 */
@@ -259,7 +267,9 @@ internal object PreferredIpStore {
      * 手动触发测速与优选更新并返回最新状态文本。
      */
     suspend fun retest(): String = withContext(Dispatchers.IO) {
-        refresh()
+        refreshMutex.withLock {
+            refresh()
+        }
         statusText()
     }
 

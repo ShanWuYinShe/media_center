@@ -30,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
@@ -238,12 +239,23 @@ fun SettingsScreen(onBack: () -> Unit) {
         )
     }
 
+    val backFocus = remember { FocusRequester() }
+    val firstActionFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        runCatching { backFocus.requestFocus() }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenHorizontalPadding, vertical = ScreenVerticalPadding),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TvBackButton(onClick = onBack)
+            TvBackButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .focusRequester(backFocus)
+                    .focusProperties { down = firstActionFocus },
+            )
             Text(
                 text = "设置",
                 color = TextPrimary,
@@ -283,6 +295,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                 ActionRow(
                     label = if (testingSpeed) "正在测速优选…" else "网络测速与节点优选",
                     enabled = !testingSpeed,
+                    focusRequester = firstActionFocus,
+                    upFocusRequester = backFocus,
                     onClick = {
                         testingSpeed = true
                         scope.launch {
@@ -449,7 +463,13 @@ private fun InfoRow(label: String, value: String) {
 }
 
 @Composable
-private fun ActionRow(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+private fun ActionRow(
+    label: String,
+    enabled: Boolean = true,
+    focusRequester: FocusRequester? = null,
+    upFocusRequester: FocusRequester? = null,
+    onClick: () -> Unit,
+) {
     Button(
         shape = tvPillButtonShape(),
         border = tvPillButtonBorder(),
@@ -459,7 +479,9 @@ private fun ActionRow(label: String, enabled: Boolean = true, onClick: () -> Uni
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = ScreenHorizontalPadding, vertical = 2.dp)
-            .requiredHeight(52.dp),
+            .requiredHeight(52.dp)
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .then(if (upFocusRequester != null) Modifier.focusProperties { up = upFocusRequester } else Modifier),
         colors = ButtonDefaults.colors(
             // 透明底 + 行内分隔:设置项像"列表",焦点态仍用统一 Apple Blue
             containerColor = CardGray.copy(alpha = 0.6f),

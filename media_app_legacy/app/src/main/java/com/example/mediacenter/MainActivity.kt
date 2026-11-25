@@ -86,6 +86,9 @@ class MainActivity : ComponentActivity() {
     internal var playerVideoRotationUserSet: Boolean = false
     internal var playerSurface: PlayerViewHolder? = null
     internal var playerScreen: FrameLayout? = null
+    // 播放页控制层收起回调:按 BACK 先隐藏信息层再退出(TV 规范)。
+    // 返回 true 表示成功隐藏并消费按键;false 表示控制层未显示/无此动作。
+    internal var hidePlayerControlsAction: (() -> Boolean)? = null
     internal var orientationIndicator: TextView? = null
     internal var homeFocusArea: HomeFocusArea = HomeFocusArea.Category
     internal var rememberedCategoryId: String? = null
@@ -166,7 +169,22 @@ class MainActivity : ComponentActivity() {
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
                     when {
-                        currentState.playing != null -> viewModel.back()
+                        currentState.playing != null -> {
+                            val errorShowing = playerErrorOverlay?.visibility == View.VISIBLE ||
+                                playerRetryOverlay?.visibility == View.VISIBLE
+                            val decision = TvNavigationPolicy.evaluatePlayerBack(
+                                controlsVisible = hidePlayerControlsAction != null,
+                                isErrorShowing = errorShowing,
+                            )
+                            if (decision == TvNavigationPolicy.PlayerBackDecision.HIDE_CONTROLS_OVERLAY &&
+                                hidePlayerControlsAction?.invoke() == true
+                            ) {
+                                // 控制条已收起，消费本次返回键，不中断播放
+                            } else {
+                                hidePlayerControlsAction = null
+                                viewModel.back()
+                            }
+                        }
                         currentState.selected != null -> {
                             homeFocusArea = HomeFocusArea.Video
                             // 不再钉死到第一个视频：置空 pendingHomeFocus，让
@@ -189,13 +207,26 @@ class MainActivity : ComponentActivity() {
                         }
                         else -> {
                             val now = System.currentTimeMillis()
-                            if (now - lastBackPressTime < 2000L) {
-                                isEnabled = false
-                                onBackPressedDispatcher.onBackPressed()
-                                isEnabled = true
-                            } else {
-                                lastBackPressTime = now
-                                Toast.makeText(this@MainActivity, "再按一次退出应用", Toast.LENGTH_SHORT).show()
+                            val (result, updatedBackPressTime) = TvNavigationPolicy.evaluateHomeBack(
+                                hasContentOrTopBarFocus = false,
+                                nowMs = now,
+                                lastBackPressMs = lastBackPressTime,
+                            )
+                            when (result) {
+                                TvNavigationPolicy.HomeBackResult.REFOCUS_CATEGORY_TAB -> {
+                                    pendingHomeFocus = homeDefaultCategoryTarget(currentState)
+                                    homeFocusArea = HomeFocusArea.Category
+                                    invalidateUi()
+                                }
+                                TvNavigationPolicy.HomeBackResult.SHOW_EXIT_TOAST -> {
+                                    lastBackPressTime = updatedBackPressTime
+                                    Toast.makeText(this@MainActivity, "再按一次退出应用", Toast.LENGTH_SHORT).show()
+                                }
+                                TvNavigationPolicy.HomeBackResult.FINISH_ACTIVITY -> {
+                                    isEnabled = false
+                                    onBackPressedDispatcher.onBackPressed()
+                                    isEnabled = true
+                                }
                             }
                         }
                     }

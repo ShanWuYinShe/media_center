@@ -14,7 +14,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.unit.dp
 import com.example.mediacenter.ui.theme.ErrorRed
 
@@ -25,6 +27,8 @@ fun ErrorView(
     onRetry: (() -> Unit)? = null,
     autoFocusRetry: Boolean = false,
     retryFocusRequester: FocusRequester? = null,
+    upFocusRequester: FocusRequester? = null,
+    onRetryFocusChanged: ((Boolean) -> Unit)? = null,
 ) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
@@ -52,7 +56,22 @@ fun ErrorView(
                 TvActionButton(
                     label = "重试",
                     onClick = onRetry,
-                    modifier = Modifier.focusRequester(resolvedFocus),
+                    modifier = Modifier
+                        .focusRequester(resolvedFocus)
+                        .then(
+                            if (upFocusRequester != null) {
+                                Modifier.focusProperties { up = upFocusRequester }
+                            } else {
+                                Modifier
+                            },
+                        )
+                        .then(
+                            if (onRetryFocusChanged != null) {
+                                Modifier.onFocusChanged { onRetryFocusChanged(it.isFocused) }
+                            } else {
+                                Modifier
+                            },
+                        ),
                 )
             }
         }

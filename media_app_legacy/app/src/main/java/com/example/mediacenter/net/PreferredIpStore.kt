@@ -7,6 +7,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.Dns
 
@@ -45,6 +47,8 @@ internal object PreferredIpStore {
 
     @Volatile private var refreshStarted = false
 
+    private val refreshMutex = Mutex()
+
     /** 候选池拉取入口，由 Application 注入(生产实现走 MediaApi)。 */
     @Volatile private var poolFetcher: (suspend () -> List<String>?)? = null
 
@@ -79,7 +83,11 @@ internal object PreferredIpStore {
             return
         }
         loadCached()
-        scope.launch { refresh() }
+        scope.launch {
+            refreshMutex.withLock {
+                refresh()
+            }
+        }
     }
 
     private fun loadCached() {
@@ -205,7 +213,9 @@ internal object PreferredIpStore {
 
     /** 手动触发测速与优选更新并返回最新状态文本。 */
     suspend fun retest(): String = withContext(Dispatchers.IO) {
-        refresh()
+        refreshMutex.withLock {
+            refresh()
+        }
         statusText()
     }
 
