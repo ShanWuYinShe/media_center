@@ -108,6 +108,14 @@ jobs:
           ANDROID_HOME: /usr/local/lib/android/sdk
         run: ./gradlew :app:assembleDebug :app:assembleRelease --no-daemon
 
+      # legacy 单测此前从未进 CI:导航策略/断点/优选 IP/安装失败文案等纯 JVM 用例
+      # 只能靠本地手动跑,更新流程这类 legacy 改动没有门禁。补上后与 normal 对等。
+      - name: unit tests (legacy)
+        working-directory: media_app_legacy
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+
       # CI 构建的 release APK 仅用于 TV 真机 UI 走查：未注入 APP_API_TOKEN
       # （YouTube 实时通道不可用），签名也是每次构建随机生成的 debug 密钥。
       - name: Collect CI APKs for TV walkthrough
