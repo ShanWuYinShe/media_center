@@ -23,7 +23,7 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradle
 
 - **生成/更新**：从 CI 下载 `r8-mapping-<run_id>` 产物（`gh run download <run_id> -n r8-mapping-<run_id>`），执行 `python3 scripts/gen-baseline-profile.py <mapping.txt> media_app/app/src/main/baseline-prof.txt`。规则选择启动路径的包前缀，统一 `HSPL`，并加关键类预分配规则。
 - **通配符不生效**：AGP 9.2.1 的 app 模块实测不展开 HRF 通配符，必须显式展开（生成器负责）。
-- **验证**：`unzip -l <apk> | grep baseline.prof` 体积应随之变化；模拟器/真机执行 `adb shell cmd package dump-profiles --dump-classes-and-methods com.example.mediacenter` 后确认安装后的 profile 含新规则。
+- **验证**：`unzip -l <apk> | grep baseline.prof` 体积应随之变化；在真机执行 `adb -s <serial> shell cmd package dump-profiles --dump-classes-and-methods com.example.mediacenter` 后确认安装后的 profile 含新规则（无合格真机才用模拟器；设备选择判据见 skill `media-app-release`「设备选择」）。
 
 ## 版本号与发版、部署 APK
 

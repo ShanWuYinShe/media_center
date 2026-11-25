@@ -39,9 +39,35 @@ APK 有 **normal + legacy 两个变体**：normal 源码即本目录；legacy �
 - **自动化（推荐）**：仓库变量 `ENABLE_AUTO_DEPLOY=true` 且配置 deploy secrets 时，发版 workflow 自动把 APK 与两份 manifest 写入该目录（normal 与 legacy 各自保留最近 5 个版本化 APK；manifest 热加载，无需重启）；手动上传仅作兜底。
 - **一键脚本**：`scripts/release-apk.sh` 完成构建 + 命名 + manifest 生成（+ 可选 scp 上传）；GitHub Actions workflow 以 `--out` 调用同一脚本。脚本头部注释是 manifest 字段与完整流程的唯一维护处，本文件不重复。
 
-## 发布后模拟器走查（发版门禁的最后一步）
+## 发布后端上走查（TV 真机优先，无 TV 真机才用模拟器）
 
-发版（tag → CI → 自动部署）完成后、通知用户升级前，在模拟器装**正式签名 APK**走一遍核心链路。v1.19.0/v1.19.1 两次走查各发现一个真 bug（空查询卡骨架、热词擦边），证明这一步不可省。
+发版（tag → CI → 自动部署）完成后、通知用户升级前，在 **TV 设备**上装**正式签名 APK**走一遍核心链路；有合格 TV 真机必须用真机，没有才退模拟器。v1.19.0/v1.19.1 两次走查各发现一个真 bug（空查询卡骨架、热词擦边），证明这一步不可省。
+
+### 设备选择（TV 真机优先）
+
+设备选择总则（四项合格条件、选中后固定 `-s <serial>`、记录设备信息、无合格设备时用模拟器并记录原因）见用户级 skill `android-emulator-debug`；本节只给 TV 客户端的判据与命令。
+
+先枚举，只有状态为 `device` 的才可用（`unauthorized`/`offline` 不算）：
+
+```bash
+adb devices -l
+```
+
+再逐个核验形态与版本，都满足才算「合格 TV 真机」：
+
+```bash
+SERIAL=<serial>          # adb devices -l 第一列；TV 常走网络调试，形态为 <ip>:<port>
+adb -s "$SERIAL" shell pm list features | grep -iE 'television|leanback'   # 形态主判据：TV 有 leanback/television 特性，手机无输出
+adb -s "$SERIAL" shell getprop ro.build.characteristics           # 辅助：TV 含 tv（手机为 default）
+adb -s "$SERIAL" shell getprop ro.build.version.sdk               # 需 ≥ 变体 minSdk：normal / legacy 各自现查
+```
+
+minSdk 以 `media_app/app/build.gradle.kts`、`media_app_legacy/app/build.gradle.kts` 现查为准。形态主判据是 `pm list features` 的 television/leanback 特性，`ro.build.characteristics` 作辅助核对；两者都不命中的设备不能替代 TV 走查。
+
+- **优先真机**：有合格 TV 真机就必须用真机，不要再起模拟器。
+- **普通手机真机不能替代 TV 走查**：焦点/D-pad 导航、遥控器交互、Leanback 布局与遥控可操作性必须在 TV 设备上验证（`adb shell input keyevent` 只能发按键事件，验证不了遥控体验与 TV 形态）；手机真机只能覆盖与形态无关的项（APK 安装/启动、网络与解析链路、OTA 安装器流程），能否替代按当次走查项逐条判断，拿不准按「需 TV」处理。
+- **记录**：走查记录与 PR 证据写明设备型号 + 系统版本 + serial（模拟器写 AVD 名，取 `emulator -list-avds`）。
+- **真机数据安全**：OTA 自更新、卸载重装、换签名都会清应用数据，动用户日常机前先确认；只做只读核验时不安装/不卸载。
 
 ### 取 APK 与核对（防装错变体）
 
@@ -56,17 +82,27 @@ BT=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
 
 变体判别：normal 的 launchable-activity 是 `ComposeActivity`，legacy 是 `MainActivity`——装错变体会"安装成功但走查的代码对不上"。
 
-### 模拟器与安装
+### 安装（真机直接装；无 TV 真机才起模拟器）
+
+选中设备后所有命令固定 `-s "$SERIAL"`：
 
 ```bash
-"$ANDROID_HOME/emulator/emulator" -avd <AVD> -no-window -no-audio -no-boot-anim -no-snapshot-save &   # AVD 用 emulator -list-avds 现查
-adb wait-for-device   # 不等于系统可用
-SERIAL=$(adb devices | awk 'NR>1 && $2=="device"{print $1; exit}')   # 目标用 adb devices 现查
-adb -s "$SERIAL" shell getprop sys.boot_completed   # 轮询到 1
+SERIAL=<serial>          # TV 真机：adb devices -l 现查；模拟器：emulator-<端口>
 adb -s "$SERIAL" install -r -t /tmp/app.apk
 adb -s "$SERIAL" shell dumpsys package com.example.mediacenter | grep versionName
 adb -s "$SERIAL" shell am start -W -n com.example.mediacenter/.ComposeActivity   # legacy 用 .MainActivity
 ```
+
+无合格 TV 真机时才起模拟器（fallback；AVD 名用 `emulator -list-avds` 现查，不要写死）：
+
+```bash
+"$ANDROID_HOME/emulator/emulator" -avd <AVD> -no-window -no-audio -no-boot-anim -no-snapshot-save &
+adb wait-for-device   # 不等于系统可用
+SERIAL=$(adb devices | awk 'NR>1 && $2=="device"{print $1; exit}')   # 目标用 adb devices 现查
+adb -s "$SERIAL" shell getprop sys.boot_completed   # 轮询到 1
+```
+
+模拟器只作为 fallback：其渲染、性能、输入设备与真机不同，**模拟器专属限制不得当作真机结论，真机结论也不得套用模拟器坐标/性能**；走查记录写明「无 TV 真机的原因 + AVD 名」。
 
 ### 走查检查单（发现过真 bug 的项标 ★）
 
@@ -80,7 +116,7 @@ adb -s "$SERIAL" shell am start -W -n com.example.mediacenter/.ComposeActivity  
 
 ### OTA 自更新验证（发版后按需）
 
-更新通道（`/api/v1/app/update`）和安装器链路要在模拟器/真机过一遍，只看 manifest 不算验证：
+更新通道（`/api/v1/app/update`）和安装器链路要在设备上过一遍（TV 真机优先，无 TV 真机才用模拟器；真机上换版本前先确认，卸载重装会清应用数据），只看 manifest 不算验证：
 
 1. 装**上一版** release APK（GitHub Release 资产，或 `gh run download <run_id> -n release-apk-<run_id>`），启动后首页应出现「发现新版本」弹窗。
 2. 点「更新」：正常路径是系统安装确认框（PackageInstaller），确认后版本更新、应用数据保留。
@@ -108,4 +144,4 @@ python3 scripts/check-bilibili-catalog.py --output /tmp/catalog-check.json   # �
 
 - 「真的跑起来了」要**截图 + 前台 Activity + 进程 PID 三者交叉**（见 android-emulator-debug skill）。
 - 结果判定优先看 `Perf:` 日志链（resolve → controller connected → prepared → first frame），不是只看 UI。
-- 收尾必须 `adb emu kill` 并确认 `adb devices` 里模拟器消失；删除 /tmp 下的 APK 与截图。
+- 收尾：用过模拟器必须 `adb -s <serial> emu kill` 并在 `adb devices` 里确认该实例消失；真机不执行 `emu kill`，测试 APK 按需卸载（会清应用数据，先确认）；删除 /tmp 下的 APK 与截图。
