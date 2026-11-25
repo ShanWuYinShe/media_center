@@ -20,7 +20,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.mediacenter.ui.theme.CardGray
@@ -43,6 +45,8 @@ fun EmptyStateView(
     onAction: (() -> Unit)? = null,
     autoFocusAction: Boolean = false,
     actionFocusRequester: FocusRequester? = null,
+    upFocusRequester: FocusRequester? = null,
+    onActionFocusChanged: ((Boolean) -> Unit)? = null,
 ) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -84,7 +88,22 @@ fun EmptyStateView(
                 TvActionButton(
                     label = actionLabel,
                     onClick = onAction,
-                    modifier = Modifier.focusRequester(resolvedFocus),
+                    modifier = Modifier
+                        .focusRequester(resolvedFocus)
+                        .then(
+                            if (upFocusRequester != null) {
+                                Modifier.focusProperties { up = upFocusRequester }
+                            } else {
+                                Modifier
+                            },
+                        )
+                        .then(
+                            if (onActionFocusChanged != null) {
+                                Modifier.onFocusChanged { onActionFocusChanged(it.isFocused) }
+                            } else {
+                                Modifier
+                            },
+                        ),
                 )
             }
         }

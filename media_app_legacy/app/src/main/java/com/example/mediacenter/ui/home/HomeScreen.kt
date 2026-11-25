@@ -136,21 +136,36 @@ internal fun MainActivity.renderHome(state: MediaUiState) {
             state.error != null && state.items.isEmpty() -> body.addView(errorState(state.error, viewModel::retry, state.autoRetrying), frameMatch())
             displayItems.isEmpty() -> {
                 val firstNormal = state.categories.firstOrNull()
+                val isYouTube = state.currentProvider == "youtube"
                 val emptyMsg = when {
                     state.query.isNotBlank() -> "没有找到相关内容"
                     isContinue -> "还没有观看记录"
                     else -> "当前分类暂无内容"
                 }
-                val emptyDetail = if (isContinue) "看过的视频会自动出现在这里，方便接着看" else null
-                val emptyAction = if (isContinue && firstNormal != null) {
-                    "浏览推荐" to {
+                val emptyDetail = when {
+                    isContinue -> "看过的视频会自动出现在这里，方便接着看"
+                    isYouTube -> "可以按搜索键直接搜索 YouTube 内容"
+                    state.query.isNotBlank() -> "换个关键词试试"
+                    else -> "服务端还没有已上线的视频"
+                }
+                val emptyAction = when {
+                    isContinue && firstNormal != null -> "浏览推荐" to {
                         cancelPendingCategorySelect()
                         rememberedCategoryId = firstNormal.id
                         homeFocusArea = HomeFocusArea.Category
                         pendingHomeFocus = HomeFocusTarget.Category(firstNormal.id)
                         viewModel.selectCategory(firstNormal)
                     }
-                } else null
+                    isYouTube || state.query.isNotBlank() -> "去搜索" to {
+                        cancelPendingCategorySelect()
+                        homeFocusArea = HomeFocusArea.Search
+                        searchVisible = true
+                        invalidateUi()
+                    }
+                    else -> "刷新" to {
+                        viewModel.retry()
+                    }
+                }
                 body.addView(
                     emptyState(
                         emptyMsg,

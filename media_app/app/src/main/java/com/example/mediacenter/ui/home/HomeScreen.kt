@@ -35,6 +35,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mediacenter.data.VideoSummary
+import com.example.mediacenter.ui.TvNavigationPolicy
 import com.example.mediacenter.ui.components.EmptyStateView
 import com.example.mediacenter.ui.components.ErrorView
 import com.example.mediacenter.ui.components.PagedVideoGrid
@@ -125,18 +126,29 @@ fun HomeScreen(
     val context = LocalContext.current
     var lastBackPressTime by remember { mutableLongStateOf(0L) }
     var isTopBarFocused by remember { mutableStateOf(false) }
+    var isActionFocused by remember { mutableStateOf(false) }
     BackHandler {
         val now = System.currentTimeMillis()
-        if (lastFocusedVideoId != null || isTopBarFocused) {
-            // 在卡片网格或顶栏浏览时按返回键:平滑将焦点带回当前选中的分类标签，避免误触直接退回桌面
-            lastFocusedVideoId = null
-            isTopBarFocused = false
-            runCatching { selectedTabFocus.requestFocus() }
-        } else if (now - lastBackPressTime < 2000L) {
-            (context as? Activity)?.finish()
-        } else {
-            lastBackPressTime = now
-            Toast.makeText(context, "再按一次退出应用", Toast.LENGTH_SHORT).show()
+        val hasContentOrTopBarFocus = lastFocusedVideoId != null || isTopBarFocused || isActionFocused
+        val (result, updatedBackPressTime) = TvNavigationPolicy.evaluateHomeBack(
+            hasContentOrTopBarFocus = hasContentOrTopBarFocus,
+            nowMs = now,
+            lastBackPressMs = lastBackPressTime,
+        )
+        when (result) {
+            TvNavigationPolicy.HomeBackResult.REFOCUS_CATEGORY_TAB -> {
+                lastFocusedVideoId = null
+                isTopBarFocused = false
+                isActionFocused = false
+                runCatching { selectedTabFocus.requestFocus() }
+            }
+            TvNavigationPolicy.HomeBackResult.SHOW_EXIT_TOAST -> {
+                lastBackPressTime = updatedBackPressTime
+                Toast.makeText(context, "再按一次退出应用", Toast.LENGTH_SHORT).show()
+            }
+            TvNavigationPolicy.HomeBackResult.FINISH_ACTIVITY -> {
+                (context as? Activity)?.finish()
+            }
         }
     }
     val categoriesReady = state.categories.isNotEmpty()
@@ -259,6 +271,8 @@ fun HomeScreen(
                     onRetry = viewModel::retry,
                     autoFocusRetry = true,
                     retryFocusRequester = emptyActionFocus,
+                    upFocusRequester = selectedTabFocus,
+                    onRetryFocusChanged = { isActionFocused = it },
                     modifier = Modifier.fillMaxSize(),
                 )
                 showingContinue -> {
@@ -273,6 +287,8 @@ fun HomeScreen(
                                 null
                             },
                             actionFocusRequester = emptyActionFocus,
+                            upFocusRequester = selectedTabFocus,
+                            onActionFocusChanged = { isActionFocused = it },
                             modifier = Modifier.fillMaxSize(),
                         )
                     } else {
@@ -318,6 +334,8 @@ fun HomeScreen(
                     actionLabel = if (state.currentProvider == "youtube") "去搜索" else "刷新",
                     onAction = if (state.currentProvider == "youtube") onSearchClick else viewModel::retry,
                     actionFocusRequester = emptyActionFocus,
+                    upFocusRequester = selectedTabFocus,
+                    onActionFocusChanged = { isActionFocused = it },
                     modifier = Modifier.fillMaxSize(),
                 )
                 else -> PagedVideoGrid(

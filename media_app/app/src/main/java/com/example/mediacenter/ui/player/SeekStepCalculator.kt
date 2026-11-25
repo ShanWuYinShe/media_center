@@ -25,6 +25,7 @@ object SeekStepCalculator {
         lastSeekDirection: Int,
         prevConsecutiveCount: Int,
         prevAccumulatedDeltaMs: Long,
+        prevTargetPositionMs: Long = currentPosMs,
     ): SeekStepResult {
         val direction = if (forward) 1 else -1
         val isConsecutive = direction == lastSeekDirection && (nowMs - lastSeekTimeMs) < CONTINUOUS_SEEK_WINDOW_MS
@@ -40,9 +41,10 @@ object SeekStepCalculator {
         val delta = if (forward) stepMs else -stepMs
         val newAccumulated = baseAccumulated + delta
 
-        val safePos = currentPosMs.coerceAtLeast(0L)
         val safeDuration = durationMs.coerceAtLeast(0L)
-        val targetPos = (safePos + delta).coerceIn(0L, if (safeDuration > 0L) safeDuration else Long.MAX_VALUE)
+        // 连按 seek 时以先前的目标位置为锚点累加，避免播放器 IPC/缓冲中 currentPosition 尚未刷新导致目标位置反复被拉回或步长吃字
+        val basePos = if (isConsecutive) prevTargetPositionMs.coerceAtLeast(0L) else currentPosMs.coerceAtLeast(0L)
+        val targetPos = (basePos + delta).coerceIn(0L, if (safeDuration > 0L) safeDuration else Long.MAX_VALUE)
 
         return SeekStepResult(
             consecutiveCount = newCount,

@@ -90,7 +90,15 @@ internal fun MainActivity.errorState(message: String, onRetry: () -> Unit, autoR
             }
             card.addView(retrying, LinearLayout.LayoutParams(wrap(), dp(50)).withTopMargin(dp(24)))
         } else {
-            val retry = primaryPill("重试", heightDp = 50, horizontalPaddingDp = 40, onClick = onRetry).apply {
+            val retry = primaryPill(
+                "重试",
+                heightDp = 50,
+                horizontalPaddingDp = 40,
+                onFocusChange = { focused ->
+                    if (focused) homeFocusArea = HomeFocusArea.Video
+                },
+                onClick = onRetry,
+            ).apply {
                 setOnKeyListener { _, keyCode, event ->
                     if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
                         homeDefaultCategoryTarget(currentState)?.let { target ->
@@ -146,7 +154,16 @@ internal fun MainActivity.emptyState(
         // 空态恢复动作(如"清除筛选")：给用户一个可聚焦的直接出口，
         // 不用靠猜"按上键回到筛选栏"。
         if (action != null) {
-            val actionPill = pill(action.first, selected = false, heightDp = 48, horizontalPaddingDp = 24, onClick = action.second).apply {
+            val actionPill = pill(
+                action.first,
+                selected = false,
+                heightDp = 48,
+                horizontalPaddingDp = 24,
+                onFocusChange = { focused ->
+                    if (focused) homeFocusArea = HomeFocusArea.Video
+                },
+                onClick = action.second,
+            ).apply {
                 tag = "empty_action"
                 setOnKeyListener { _, keyCode, event ->
                     if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP) {

@@ -86,11 +86,13 @@ internal fun ControlsOverlay(
     modifier: Modifier = Modifier,
 ) {
     val pages = playbackResult.pages
+    val hasEpisodes = pages.totalPages > 1
     val episodeLabel = playbackEpisodeLabel(playbackResult, collection)
     val qualityLabel = playbackResult.options.firstOrNull()?.label
         ?.takeIf { it.isNotBlank() }
         ?: "默认"
-    val hasOptions = pages.totalPages > 1 || playbackResult.availableQualities.size > 1
+    val hasOptions = hasEpisodes || playbackResult.availableQualities.size > 1
+    val optionsLabel = if (hasEpisodes) "选集 · $qualityLabel" else "清晰度 · $qualityLabel"
 
     Box(modifier = modifier.background(Color.Black.copy(alpha = 0.18f))) {
         Row(
@@ -154,7 +156,7 @@ internal fun ControlsOverlay(
             }
             if (hasOptions) {
                 TvChip(
-                    label = "选集 · $qualityLabel",
+                    label = optionsLabel,
                     onClick = onOptionsClick,
                     modifier = Modifier.focusProperties { canFocus = false },
                 )
@@ -202,7 +204,14 @@ internal fun ControlsOverlay(
                     append("长按 ← → 连续快退/快进")
                     // 遥控器上 MENU 键与长按 OK 都能打开选集/清晰度弹窗,
                     // 提示里两个入口都写出来,避免用户不知道 MENU 可用。
-                    if (hasOptions) append(" · MENU/长按 OK 选集/清晰度")
+                    if (hasOptions) {
+                        val optionsHint = when {
+                            hasEpisodes && playbackResult.availableQualities.size > 1 -> "选集/清晰度"
+                            hasEpisodes -> "选集"
+                            else -> "清晰度"
+                        }
+                        append(" · MENU/长按 OK $optionsHint")
+                    }
                 },
                 color = TextSecondary,
                 fontSize = 13.sp,
@@ -325,7 +334,7 @@ internal fun PlaybackOptionsDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text("选集与清晰度", color = TextPrimary)
+            Text(if (hasEpisodes) "选集与清晰度" else "清晰度", color = TextPrimary)
         },
         text = {
             Column(verticalArrangement = LayoutArrangement.spacedBy(14.dp)) {

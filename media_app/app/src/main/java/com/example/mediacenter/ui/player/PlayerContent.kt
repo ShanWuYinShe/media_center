@@ -53,6 +53,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
+import com.example.mediacenter.ui.TvNavigationPolicy
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -129,7 +130,14 @@ internal fun PlayerContent(
     // BackHandler 优先,故此处注册即获得优先级。
     // 错误层(playerError 全屏 / overlayError 盖层)替换了控制条渲染,此时
     // 收起控制条无任何视觉反馈:禁用本 handler,BACK 直接走兜底退出。
-    BackHandler(enabled = showControls && playerError == null && overlayError == null) { showControls = false }
+    BackHandler(enabled = (showControls || seekHudVisible) && playerError == null && overlayError == null) {
+        showControls = false
+        seekHudVisible = false
+        seekHudJob?.cancel()
+        consecutiveSeekCount = 0
+        seekHudDeltaMs = 0L
+        seekHudTargetMs = 0L
+    }
     var isPlaying by remember { mutableStateOf(false) }
     // 缓冲中提示：卡顿不再表现为“画面冻住不知道在干嘛”
     var isBuffering by remember { mutableStateOf(false) }
@@ -662,6 +670,7 @@ internal fun PlayerContent(
             lastSeekDirection = lastSeekDirection,
             prevConsecutiveCount = consecutiveSeekCount,
             prevAccumulatedDeltaMs = seekHudDeltaMs,
+            prevTargetPositionMs = seekHudTargetMs,
         )
         lastSeekTimeMs = now
         lastSeekDirection = result.direction
@@ -679,6 +688,7 @@ internal fun PlayerContent(
             seekHudVisible = false
             consecutiveSeekCount = 0
             seekHudDeltaMs = 0L
+            seekHudTargetMs = 0L
         }
     }
 
@@ -817,8 +827,17 @@ internal fun PlayerContent(
                     }
                     Key.Escape -> {
                         if (down) {
-                            if (showControls) {
+                            val decision = TvNavigationPolicy.evaluatePlayerBack(
+                                controlsVisible = showControls || seekHudVisible,
+                                isErrorShowing = overlayError != null || playerError != null,
+                            )
+                            if (decision == TvNavigationPolicy.PlayerBackDecision.HIDE_CONTROLS_OVERLAY) {
                                 showControls = false
+                                seekHudVisible = false
+                                seekHudJob?.cancel()
+                                consecutiveSeekCount = 0
+                                seekHudDeltaMs = 0L
+                                seekHudTargetMs = 0L
                             } else {
                                 onBack()
                             }

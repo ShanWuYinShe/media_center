@@ -36,6 +36,7 @@ import com.example.mediacenter.data.VideoSummary
 import com.example.mediacenter.data.WatchEntry
 import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.ui.MediaUiState
+import com.example.mediacenter.ui.TvNavigationPolicy
 import com.example.mediacenter.ui.setContent
 import com.example.mediacenter.ui.showAllPagesDialog
 import com.example.mediacenter.ui.showOptionListDialog
@@ -324,12 +325,33 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
         var lastSeekDirection = 0
         var consecutiveSeekCount = 0
         var seekHudDeltaMs = 0L
+        var seekHudTargetMs = 0L
         val hideSeekHud = Runnable {
             seekHudWrap.animate().alpha(0f).setDuration(250).withEndAction {
                 seekHudWrap.visibility = View.GONE
                 consecutiveSeekCount = 0
                 seekHudDeltaMs = 0L
+                seekHudTargetMs = 0L
             }.start()
+        }
+
+        hidePlayerControlsAction = {
+            val hudShowing = seekHudWrap.visibility == View.VISIBLE || seekHudWrap.alpha > 0f
+            if (controlsVisible() || hudShowing) {
+                overlay.removeCallbacks(hideOverlay)
+                overlay.animate().cancel()
+                overlay.animate().alpha(0f).setDuration(250).start()
+                seekHudWrap.removeCallbacks(hideSeekHud)
+                seekHudWrap.animate().cancel()
+                seekHudWrap.visibility = View.GONE
+                seekHudWrap.alpha = 0f
+                consecutiveSeekCount = 0
+                seekHudDeltaMs = 0L
+                seekHudTargetMs = 0L
+                true
+            } else {
+                false
+            }
         }
 
         fun performSeek(forward: Boolean) {
@@ -345,11 +367,13 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
                 lastSeekDirection = lastSeekDirection,
                 prevConsecutiveCount = consecutiveSeekCount,
                 prevAccumulatedDeltaMs = seekHudDeltaMs,
+                prevTargetPositionMs = seekHudTargetMs,
             )
             lastSeekTimeMs = now
             lastSeekDirection = result.direction
             consecutiveSeekCount = result.consecutiveCount
             seekHudDeltaMs = result.accumulatedDeltaMs
+            seekHudTargetMs = result.targetPositionMs
 
             nextPlayer.seekTo(result.targetPositionMs)
             showOverlay()
@@ -470,6 +494,39 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
                             showOverlay()
                         }
                         true
+                    }
+                    KeyEvent.KEYCODE_ESCAPE -> {
+                        if (event.repeatCount == 0) {
+                            val errorShowing = playerErrorOverlay?.visibility == View.VISIBLE ||
+                                playerRetryOverlay?.visibility == View.VISIBLE
+                            val decision = TvNavigationPolicy.evaluatePlayerBack(
+                                controlsVisible = controlsVisible(),
+                                isErrorShowing = errorShowing,
+                            )
+                            if (decision == TvNavigationPolicy.PlayerBackDecision.HIDE_CONTROLS_OVERLAY) {
+                                hidePlayerControlsAction?.invoke()
+                            } else {
+                                hidePlayerControlsAction = null
+                                viewModel.back()
+                            }
+                        }
+                        true
+                    }
+                    KeyEvent.KEYCODE_BACK -> {
+                        if (event.repeatCount == 0) {
+                            val errorShowing = playerErrorOverlay?.visibility == View.VISIBLE ||
+                                playerRetryOverlay?.visibility == View.VISIBLE
+                            val decision = TvNavigationPolicy.evaluatePlayerBack(
+                                controlsVisible = controlsVisible(),
+                                isErrorShowing = errorShowing,
+                            )
+                            if (decision == TvNavigationPolicy.PlayerBackDecision.HIDE_CONTROLS_OVERLAY) {
+                                if (hidePlayerControlsAction?.invoke() == true) {
+                                    return@setOnKeyListener true
+                                }
+                            }
+                        }
+                        false
                     }
                     else -> false
                 }
