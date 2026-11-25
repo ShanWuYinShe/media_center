@@ -90,7 +90,17 @@ internal fun MainActivity.errorState(message: String, onRetry: () -> Unit, autoR
             }
             card.addView(retrying, LinearLayout.LayoutParams(wrap(), dp(50)).withTopMargin(dp(24)))
         } else {
-            val retry = primaryPill("重试", heightDp = 50, horizontalPaddingDp = 40, onClick = onRetry)
+            val retry = primaryPill("重试", heightDp = 50, horizontalPaddingDp = 40, onClick = onRetry).apply {
+                setOnKeyListener { _, keyCode, event ->
+                    if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                        homeDefaultCategoryTarget(currentState)?.let { target ->
+                            homeFocusArea = HomeFocusArea.Category
+                            requestHomeFocus(target)
+                            true
+                        } ?: false
+                    } else false
+                }
+            }
             card.addView(retry, LinearLayout.LayoutParams(wrap(), dp(50)).withTopMargin(dp(24)))
             retry.post { retry.requestFocus() }
         }

@@ -200,6 +200,7 @@ internal fun MainActivity.showSystemInfoDialog() {
             row("屏幕密度", "${dm.densityDpi}dpi (×${dm.density})")
             row("App 版本", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
             row("服务端地址", serverHost)
+            val prefIpRow = row("网络加速", com.example.mediacenter.net.PreferredIpStore.statusText())
             // 连接模式:HTTPS 握手失败自动降级明文 HTTP 后显示,便于排查 TLS 兼容性。
             row("连接模式", if (viewModel.httpFallbackActive) "明文 HTTP(已降级)" else "HTTPS", highlight = viewModel.httpFallbackActive)
             // TLS 引擎与校验降级计数:Conscrypt 主路径 / 平台回退,以及证书校验
@@ -305,6 +306,30 @@ internal fun MainActivity.showSystemInfoDialog() {
             }
             clearBtn.setOnKeyListener(scrollKeyListener)
             actions.addView(clearBtn, LinearLayout.LayoutParams(wrap(), dp(48)).withEndMargin(dp(12)))
+
+            var speedTestBtn: TextView = TextView(activity)
+            speedTestBtn = pill(
+                text = "网络测速",
+                selected = false,
+                heightDp = 48,
+                horizontalPaddingDp = 22,
+                onClick = {
+                    val btn = speedTestBtn
+                    if (btn.isEnabled) {
+                        btn.isEnabled = false
+                        btn.text = "正在测速…"
+                        cacheScope.launch {
+                            val newStatus = com.example.mediacenter.net.PreferredIpStore.retest()
+                            btn.isEnabled = true
+                            btn.text = "网络测速"
+                            prefIpRow.text = newStatus
+                            Toast.makeText(this@showSystemInfoDialog, "测速完成", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+            )
+            speedTestBtn.setOnKeyListener(scrollKeyListener)
+            actions.addView(speedTestBtn, LinearLayout.LayoutParams(wrap(), dp(48)).withEndMargin(dp(12)))
 
             val clearHistoryBtn = pill(
                 text = "清空历史",

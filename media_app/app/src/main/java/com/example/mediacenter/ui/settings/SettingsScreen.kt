@@ -105,6 +105,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     // 优选 IP 的排障入口:国内连 Cloudflare 走系统 DNS 时命中坏节点会表现为
     // "一直转圈",这里直接显示当前生效的首选节点与最近测速时间。
     var preferredIpStatus by remember { mutableStateOf("未启用") }
+    var testingSpeed by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         preferredIpStatus = com.example.mediacenter.net.PreferredIpStore.statusText()
     }
@@ -276,6 +277,21 @@ fun SettingsScreen(onBack: () -> Unit) {
                 InfoRow("服务端", BuildConfig.MEDIA_SERVER_URL)
                 InfoRow("服务端版本", serverVersion)
                 InfoRow("网络加速", preferredIpStatus)
+            }
+            item {
+                SectionTitle("网络加速")
+                ActionRow(
+                    label = if (testingSpeed) "正在测速优选…" else "网络测速与节点优选",
+                    enabled = !testingSpeed,
+                    onClick = {
+                        testingSpeed = true
+                        scope.launch {
+                            preferredIpStatus = com.example.mediacenter.net.PreferredIpStore.retest()
+                            feedback = "测速完成"
+                            testingSpeed = false
+                        }
+                    },
+                )
             }
             item {
                 SectionTitle("版本更新")

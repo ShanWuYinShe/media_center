@@ -181,7 +181,8 @@ class MainActivity : ComponentActivity() {
                             invalidateUi()
                         }
                         currentState.query.isNotBlank() -> exitSearchMode()
-                        homeFocusArea == HomeFocusArea.Video -> {
+                        homeFocusArea == HomeFocusArea.Video ||
+                        homeFocusArea == HomeFocusArea.Search -> {
                             pendingHomeFocus = homeDefaultCategoryTarget(currentState)
                             homeFocusArea = HomeFocusArea.Category
                             invalidateUi()

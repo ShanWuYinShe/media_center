@@ -651,37 +651,31 @@ internal fun PlayerContent(
 
     fun performSeek(forward: Boolean) {
         val now = System.currentTimeMillis()
-        val direction = if (forward) 1 else -1
-        if (direction == lastSeekDirection && now - lastSeekTimeMs < 800L) {
-            consecutiveSeekCount++
-        } else {
-            consecutiveSeekCount = 1
-            lastSeekDirection = direction
-            seekHudDeltaMs = 0L
-        }
-        lastSeekTimeMs = now
-
-        // 自适应步长：连按 1-2 次 10s，3-5 次 20s，6 次以上 30s
-        val baseStepMs = when {
-            consecutiveSeekCount <= 2 -> 10_000L
-            consecutiveSeekCount <= 5 -> 20_000L
-            else -> 30_000L
-        }
-        val delta = if (forward) baseStepMs else -baseStepMs
-        seekHudDeltaMs += delta
-
         val currentPos = controller.currentPosition.coerceAtLeast(0L)
         val duration = controller.duration.coerceAtLeast(0L)
-        val target = (currentPos + delta).coerceIn(0L, if (duration > 0) duration else Long.MAX_VALUE)
-        controller.seekTo(target)
-        seekHudTargetMs = target
+        val result = SeekStepCalculator.calculateStep(
+            forward = forward,
+            nowMs = now,
+            currentPosMs = currentPos,
+            durationMs = duration,
+            lastSeekTimeMs = lastSeekTimeMs,
+            lastSeekDirection = lastSeekDirection,
+            prevConsecutiveCount = consecutiveSeekCount,
+            prevAccumulatedDeltaMs = seekHudDeltaMs,
+        )
+        lastSeekTimeMs = now
+        lastSeekDirection = result.direction
+        consecutiveSeekCount = result.consecutiveCount
+        seekHudDeltaMs = result.accumulatedDeltaMs
+        seekHudTargetMs = result.targetPositionMs
         seekHudVisible = true
 
+        controller.seekTo(result.targetPositionMs)
         revealControls()
 
         seekHudJob?.cancel()
         seekHudJob = scope.launch {
-            delay(1000L)
+            delay(SeekStepCalculator.SEEK_HUD_TIMEOUT_MS)
             seekHudVisible = false
             consecutiveSeekCount = 0
             seekHudDeltaMs = 0L
@@ -1022,6 +1016,46 @@ private fun PlaybackStateGlyph(
 }
 
 @Composable
+private fun SeekDirectionGlyph(
+    isForward: Boolean,
+    modifier: Modifier = Modifier,
+    color: Color = Color.White,
+) {
+    androidx.compose.foundation.Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val path1 = androidx.compose.ui.graphics.Path().apply {
+            if (isForward) {
+                moveTo(0f, 0f)
+                lineTo(w * 0.46f, h * 0.5f)
+                lineTo(0f, h)
+                close()
+            } else {
+                moveTo(w * 0.46f, 0f)
+                lineTo(0f, h * 0.5f)
+                lineTo(w * 0.46f, h)
+                close()
+            }
+        }
+        val path2 = androidx.compose.ui.graphics.Path().apply {
+            if (isForward) {
+                moveTo(w * 0.48f, 0f)
+                lineTo(w * 0.94f, h * 0.5f)
+                lineTo(w * 0.48f, h)
+                close()
+            } else {
+                moveTo(w * 0.94f, 0f)
+                lineTo(w * 0.48f, h * 0.5f)
+                lineTo(w * 0.94f, h)
+                close()
+            }
+        }
+        drawPath(path1, color)
+        drawPath(path2, color)
+    }
+}
+
+@Composable
 private fun SeekHud(
     deltaMs: Long,
     targetPositionMs: Long,
@@ -1029,13 +1063,8 @@ private fun SeekHud(
     modifier: Modifier = Modifier,
 ) {
     val isForward = deltaMs >= 0
-    val deltaSec = (kotlin.math.abs(deltaMs) / 1000).coerceAtLeast(1)
-    val deltaText = if (isForward) "+${deltaSec}秒" else "-${deltaSec}秒"
-    val targetText = if (durationMs > 0) {
-        "${formatDuration(targetPositionMs)} / ${formatDuration(durationMs)}"
-    } else {
-        formatDuration(targetPositionMs)
-    }
+    val deltaText = SeekStepCalculator.formatDelta(deltaMs)
+    val targetText = SeekStepCalculator.formatTarget(targetPositionMs, durationMs)
 
     Box(
         modifier = modifier
@@ -1049,15 +1078,24 @@ private fun SeekHud(
     ) {
         androidx.compose.foundation.layout.Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
         ) {
-            Text(
-                text = if (isForward) "⏩  $deltaText" else "⏪  $deltaText",
-                color = Color.White,
-                fontSize = 26.sp,
-                lineHeight = 32.sp,
-                fontWeight = FontWeight.Bold,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
+            ) {
+                SeekDirectionGlyph(
+                    isForward = isForward,
+                    modifier = Modifier.size(width = 24.dp, height = 18.dp),
+                )
+                Text(
+                    text = deltaText,
+                    color = Color.White,
+                    fontSize = 26.sp,
+                    lineHeight = 32.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
             Text(
                 text = targetText,
                 color = com.example.mediacenter.ui.theme.TextSecondary,
