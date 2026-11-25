@@ -26,6 +26,7 @@ import com.example.mediacenter.log.AppLog
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.MediaViewModel
 import com.example.mediacenter.ui.MediaViewModelFactory
+import com.example.mediacenter.ui.TvNavigationPolicy
 import com.example.mediacenter.ui.config.MaxPlaybackRetries
 import com.example.mediacenter.ui.theme.DetailFocusTarget
 import com.example.mediacenter.ui.theme.HomeFocusArea
@@ -199,16 +200,14 @@ class MainActivity : ComponentActivity() {
                             invalidateUi()
                         }
                         currentState.query.isNotBlank() -> exitSearchMode()
-                        homeFocusArea == HomeFocusArea.Video ||
-                        homeFocusArea == HomeFocusArea.Search -> {
-                            pendingHomeFocus = homeDefaultCategoryTarget(currentState)
-                            homeFocusArea = HomeFocusArea.Category
-                            invalidateUi()
-                        }
                         else -> {
                             val now = System.currentTimeMillis()
+                            // 焦点还在内容卡/空态按钮/顶栏时先回当前分类标签;
+                            // 已在分类栏才进入"再按一次退出"的双击时序。
+                            val hasContentOrTopBarFocus = homeFocusArea == HomeFocusArea.Video ||
+                                homeFocusArea == HomeFocusArea.Search
                             val (result, updatedBackPressTime) = TvNavigationPolicy.evaluateHomeBack(
-                                hasContentOrTopBarFocus = false,
+                                hasContentOrTopBarFocus = hasContentOrTopBarFocus,
                                 nowMs = now,
                                 lastBackPressMs = lastBackPressTime,
                             )

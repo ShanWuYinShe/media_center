@@ -35,6 +35,7 @@ import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.ui.components.dp
 import com.example.mediacenter.ui.components.elevationCompat
 import com.example.mediacenter.ui.components.frameMatch
+import com.example.mediacenter.ui.components.horizontalFocusStrip
 import com.example.mediacenter.ui.components.label
 import com.example.mediacenter.ui.components.letterSpacingCompat
 import com.example.mediacenter.ui.components.match
@@ -367,7 +368,9 @@ internal fun MainActivity.showSystemInfoDialog() {
             actions.addView(close, LinearLayout.LayoutParams(wrap(), dp(48)))
             // 操作按钮增至 5 个(含网络测速/检查更新),在 1080p TV 对话框宽度下易发生右侧裁切;
             // 放入横向滚动条保证 D-pad 左右平滑滚动浏览且焦点放大不被裁切。
-            card.addView(horizontalFocusStrip(actions, padH = 4, padV = 0), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(16)))
+            // padV 留 4dp:焦点态 1.05~1.08 倍放大的描边需要溢出空间,否则上下边会被
+            // HorizontalScrollView 的视口裁掉(与其它 horizontalFocusStrip 用法一致)。
+            card.addView(horizontalFocusStrip(actions, padH = 4, padV = 4), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(16)))
             setContentView(card)
             window?.setBackgroundDrawableResource(android.R.color.transparent)
             applySafeDialogLayout(0.62f, 0.72f)

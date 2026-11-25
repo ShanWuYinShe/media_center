@@ -122,6 +122,13 @@ internal fun PlayerContent(
     var showControls by remember { mutableStateOf(true) }
     var showOptions by remember { mutableStateOf(false) }
     var playerError by remember { mutableStateOf<String?>(null) }
+    // 快进快退 HUD 状态:声明在 BackHandler 之前,BACK 收起信息层时一并清理,
+    // 否则 Seek HUD 会在控制层收起后继续残留到超时。
+    var seekHudVisible by remember { mutableStateOf(false) }
+    var seekHudDeltaMs by remember { mutableLongStateOf(0L) }
+    var seekHudTargetMs by remember { mutableLongStateOf(0L) }
+    var consecutiveSeekCount by remember { mutableIntStateOf(0) }
+    var seekHudJob by remember { mutableStateOf<Job?>(null) }
     // 最近一次 Up/Down 切集时间：遥控器长按方向键会连发 KeyDown，
     // 不做节流会在几百毫秒内连跳好几集（老人误按率更高）。
     var lastEpisodeSwitchMs by remember { mutableLongStateOf(0L) }
@@ -638,13 +645,8 @@ internal fun PlayerContent(
     var okHeld by remember { mutableStateOf(false) }
     var okLongConsumed by remember { mutableStateOf(false) }
     var okLongJob by remember { mutableStateOf<Job?>(null) }
-    var seekHudVisible by remember { mutableStateOf(false) }
-    var seekHudDeltaMs by remember { mutableLongStateOf(0L) }
-    var seekHudTargetMs by remember { mutableLongStateOf(0L) }
     var lastSeekTimeMs by remember { mutableLongStateOf(0L) }
-    var consecutiveSeekCount by remember { mutableIntStateOf(0) }
     var lastSeekDirection by remember { mutableIntStateOf(0) }
-    var seekHudJob by remember { mutableStateOf<Job?>(null) }
 
     fun revealControls() {
         showControls = true
