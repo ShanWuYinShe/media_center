@@ -32,7 +32,7 @@ App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部�
   - `Media Server (Go)`：gofmt、go vet、go build、`go test -race -count=1 ./...`。
   - `VOD Extractor (Python)`：`py_compile`、ruff 0.16.8、unittest。
   - `Media App (Android)`：normal 与 legacy 均编译 `assembleDebug` + `assembleRelease`（R8/资源压缩问题在 PR 阶段暴露）、`testDebugUnitTest`（normal）、`lintDebug`（normal）；release APK 作为 CI artifact 保留 7 天，供 TV 真机走查（未注入令牌、临时 debug 签名，不可发版）。
-- CI 覆盖不到、必须本地/真机验证的：Android TV 真机/模拟器安装与 UI 走查（APK 部署与 TV UI/UX 约定见 `media_app/AGENTS.md` 与 skill `media-app-release`/`media-app-tv-ui`）；youtube 播放解析的真实链路依赖服务器 cookies/PO Token，CI 只跑单测，改动该链路时需在服务器侧实测（见 `vod_extractor/AGENTS.md`）。
+- CI 覆盖不到、必须本地/真机验证的：Android TV 安装与 UI 走查（**TV 真机优先**，无合格 TV 真机才用模拟器：设备选择判据见 skill `android-emulator-debug` 与 `media-app-release`「设备选择」；APK 部署与 TV UI/UX 约定见 `media_app/AGENTS.md` 与 skill `media-app-release`/`media-app-tv-ui`）；youtube 播放解析的真实链路依赖服务器 cookies/PO Token，CI 只跑单测，改动该链路时需在服务器侧实测（见 `vod_extractor/AGENTS.md`）。
 - 镜像构建：本仓 CI 无镜像构建 job；`deploy/` 生产镜像由部署服务器 `make build` 构建（交付链路，不是开发机本地验证），本地不做 `docker build`。
 - 发版/发布门禁：media_app APK 发版由 GitHub Actions 在 tag 上构建发布（见下节）；服务端部署按 `deploy/README.md`。
 
