@@ -423,6 +423,29 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
                     return@setOnKeyListener true
                 }
                 if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                // BACK 必须交给 Activity 的 OnBackPressedDispatcher(系统返回机制)处理,
+                // 且要在下面"自动亮出信息层"之前返回:否则隐藏状态下先 showOverlay(),
+                // 回到 Activity 时控制层已被置为可见,永远只会"先显示再收起",退不出播放。
+                if (keyCode == KeyEvent.KEYCODE_BACK) return@setOnKeyListener false
+                // ESCAPE 不是系统返回键,在视图层按与 BACK 相同的契约处理:
+                // 控制层可见时先收起,已收起时直接退出播放。
+                if (keyCode == KeyEvent.KEYCODE_ESCAPE) {
+                    if (event.repeatCount == 0) {
+                        val errorShowing = playerErrorOverlay?.visibility == View.VISIBLE ||
+                            playerRetryOverlay?.visibility == View.VISIBLE
+                        val decision = TvNavigationPolicy.evaluatePlayerBack(
+                            controlsVisible = controlsVisible(),
+                            isErrorShowing = errorShowing,
+                        )
+                        if (decision == TvNavigationPolicy.PlayerBackDecision.HIDE_CONTROLS_OVERLAY) {
+                            hidePlayerControlsAction?.invoke()
+                        } else {
+                            hidePlayerControlsAction = null
+                            viewModel.back()
+                        }
+                    }
+                    return@setOnKeyListener true
+                }
                 // 控制层隐藏时方向键也直接生效：先亮出信息层，再继续走下面的
                 // seek/切集分支，不需要“第一下只唤出、第二下才操作”。
                 if (!controlsVisible()) showOverlay()
@@ -494,39 +517,6 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
                             showOverlay()
                         }
                         true
-                    }
-                    KeyEvent.KEYCODE_ESCAPE -> {
-                        if (event.repeatCount == 0) {
-                            val errorShowing = playerErrorOverlay?.visibility == View.VISIBLE ||
-                                playerRetryOverlay?.visibility == View.VISIBLE
-                            val decision = TvNavigationPolicy.evaluatePlayerBack(
-                                controlsVisible = controlsVisible(),
-                                isErrorShowing = errorShowing,
-                            )
-                            if (decision == TvNavigationPolicy.PlayerBackDecision.HIDE_CONTROLS_OVERLAY) {
-                                hidePlayerControlsAction?.invoke()
-                            } else {
-                                hidePlayerControlsAction = null
-                                viewModel.back()
-                            }
-                        }
-                        true
-                    }
-                    KeyEvent.KEYCODE_BACK -> {
-                        if (event.repeatCount == 0) {
-                            val errorShowing = playerErrorOverlay?.visibility == View.VISIBLE ||
-                                playerRetryOverlay?.visibility == View.VISIBLE
-                            val decision = TvNavigationPolicy.evaluatePlayerBack(
-                                controlsVisible = controlsVisible(),
-                                isErrorShowing = errorShowing,
-                            )
-                            if (decision == TvNavigationPolicy.PlayerBackDecision.HIDE_CONTROLS_OVERLAY) {
-                                if (hidePlayerControlsAction?.invoke() == true) {
-                                    return@setOnKeyListener true
-                                }
-                            }
-                        }
-                        false
                     }
                     else -> false
                 }

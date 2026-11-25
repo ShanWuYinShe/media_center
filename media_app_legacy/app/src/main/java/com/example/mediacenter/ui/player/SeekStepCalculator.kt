@@ -31,6 +31,11 @@ internal object SeekStepCalculator {
     ): SeekStepResult {
         val direction = if (forward) 1 else -1
         val isConsecutive = direction == lastSeekDirection && (nowMs - lastSeekTimeMs) < CONTINUOUS_SEEK_WINDOW_MS
+        // 位置锚点与步长档位分开判断:方向反转时档位重新从 1 起算,但只要还在
+        // 连续按键窗口内,就必须从上次目标位置继续——播放器 currentPosition 可能
+        // 还没追上上一次 seek,用它当锚点会让目标位置被拉回(例如 +20s 后按左
+        // 会跳回起点而不是回到 +10s)。
+        val hasRecentSeek = prevConsecutiveCount > 0 && (nowMs - lastSeekTimeMs) < CONTINUOUS_SEEK_WINDOW_MS
         val newCount = if (isConsecutive) prevConsecutiveCount + 1 else 1
         val baseAccumulated = if (isConsecutive) prevAccumulatedDeltaMs else 0L
 
@@ -45,7 +50,7 @@ internal object SeekStepCalculator {
 
         val safeDuration = durationMs.coerceAtLeast(0L)
         // 连按 seek 时以先前的目标位置为锚点累加，避免播放器缓冲中 currentPosition 尚未刷新导致目标位置反复被拉回或步长吃字
-        val basePos = if (isConsecutive) prevTargetPositionMs.coerceAtLeast(0L) else currentPosMs.coerceAtLeast(0L)
+        val basePos = if (hasRecentSeek) prevTargetPositionMs.coerceAtLeast(0L) else currentPosMs.coerceAtLeast(0L)
         val targetPos = (basePos + delta).coerceIn(0L, if (safeDuration > 0L) safeDuration else Long.MAX_VALUE)
 
         return SeekStepResult(
