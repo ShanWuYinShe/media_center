@@ -18,6 +18,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.google.android.exoplayer2.ExoPlayer
 import androidx.recyclerview.widget.RecyclerView
+import com.example.mediacenter.data.AppUpdateInfo
 import com.example.mediacenter.data.MediaApi
 import com.example.mediacenter.data.MediaRepository
 import com.example.mediacenter.player.CappedLoadErrorHandlingPolicy
@@ -31,8 +32,9 @@ import com.example.mediacenter.ui.config.MaxPlaybackRetries
 import com.example.mediacenter.ui.theme.DetailFocusTarget
 import com.example.mediacenter.ui.theme.HomeFocusArea
 import com.example.mediacenter.ui.theme.HomeFocusTarget
-import com.example.mediacenter.update.AppUpdateResult
 import com.example.mediacenter.update.AppUpdateManager
+import com.example.mediacenter.update.UpdateCheckResult
+import com.example.mediacenter.update.UpdateDownloadResult
 import java.io.File
 import java.util.WeakHashMap
 import kotlinx.coroutines.launch
@@ -50,6 +52,9 @@ import com.example.mediacenter.ui.player.renderPlayer
 import com.example.mediacenter.ui.showUpdateFailureDialog
 import com.example.mediacenter.ui.showUpdateMessage
 import com.example.mediacenter.ui.promptInstallUpdate
+import com.example.mediacenter.ui.showUpdateAvailableDialog
+import com.example.mediacenter.ui.showUpdateDownloadDialog
+import com.example.mediacenter.ui.UpdateDownloadDialog
 import com.example.mediacenter.ui.handleInstallLaunch
 import com.example.mediacenter.ui.player.releasePlayer
 import com.example.mediacenter.ui.player.resetPlayerOrientationToDefault
@@ -122,14 +127,19 @@ class MainActivity : ComponentActivity() {
     internal var pendingUpdateApk: File? = null
     // 更新已下载完但用户正在播放/看详情:先记下,回到首页再弹安装提示。
     // 旧实现不分页面直接弹框,会盖在播放画面上并抢走遥控器焦点。
-    internal var pendingUpdatePrompt: AppUpdateResult.ReadyToInstall? = null
+    internal var pendingUpdatePrompt: UpdateDownloadResult.Ready? = null
     // 更新检查/下载是否已启动(首页就绪后只启动一次)。
     private var updateCheckStarted = false
     // 检查/下载是否正在进行:自动检查与手动检查(系统诊断弹窗)可能交叉触发,
     // 并发会重复下载同一 APK 并叠出多个结果弹窗,必须互斥。
     private var updateCheckInProgress = false
+    // 下载是否正在进行:检查与下载拆分后单独守卫,避免「更新」被连点重复下载。
+    private var updateDownloadInProgress = false
+    // 下载进度弹窗:后台下载/完成/失败/Activity 销毁时关闭,避免窗口泄漏。
+    internal var updateDownloadDialog: UpdateDownloadDialog? = null
     // 页面忙碌时被推迟的更新失败提示(回到首页再弹,避免抢播放/详情焦点)。
-    private var pendingUpdateFailure: String? = null
+    // 带上与该失败阶段匹配的重试动作:检查失败重查、下载失败重下同一版本。
+    private var pendingUpdateFailure: PendingUpdateFailure? = null
     // 被推迟的无损提示(如手动检查的「已是最新版本」)。
     private var pendingUpdateMessage: String? = null
     // “播放已稳定”计时器:STATE_READY 后延迟触发;只有同一地址连续顺畅播放超过窗口
@@ -315,6 +325,9 @@ class MainActivity : ComponentActivity() {
                 networkCallback = null
             }
         }
+        // 下载进度弹窗挂在 Activity 窗口上:随 Activity 销毁关闭,避免 WindowLeaked。
+        updateDownloadDialog?.dismiss()
+        updateDownloadDialog = null
         releasePlayer()
         super.onDestroy()
     }
@@ -382,9 +395,9 @@ class MainActivity : ComponentActivity() {
                     pendingUpdatePrompt = null
                     root.post { if (!isFinishing) promptInstallUpdate(pending) }
                 }
-                pendingUpdateFailure?.let { message ->
+                pendingUpdateFailure?.let { pending ->
                     pendingUpdateFailure = null
-                    root.post { if (!isFinishing) showUpdateFailureDialog(message) }
+                    root.post { if (!isFinishing) showUpdateFailureDialog(pending.message, pending.retry) }
                 }
                 pendingUpdateMessage?.let { message ->
                     pendingUpdateMessage = null
@@ -422,8 +435,11 @@ class MainActivity : ComponentActivity() {
      * (自动检查「发现新版本」照常弹安装框,「已是最新」保持静默不打扰用户)。
      */
     private fun maybeStartUpdateCheck(force: Boolean = false, manual: Boolean = false) {
-        // 并发守卫:自动检查可能还在下载时用户又手动检查,重复进入会重复下载
-        // 同一 APK 并叠出多个结果弹窗。
+        // 并发守卫:自动检查与手动检查可能交叉触发,重复进入会叠出多个结果弹窗。
+        if (updateDownloadInProgress) {
+            if (manual) Toast.makeText(this, "正在下载更新…", Toast.LENGTH_SHORT).show()
+            return
+        }
         if (updateCheckInProgress) {
             if (manual) Toast.makeText(this, "正在检查更新…", Toast.LENGTH_SHORT).show()
             return
@@ -438,26 +454,64 @@ class MainActivity : ComponentActivity() {
         if (manual) Toast.makeText(this, "正在检查更新…", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
             val result = try {
-                appUpdateManager.checkAndDownload()
+                // 只检查:下载改为用户确认后进行,对齐 normal 的"先询问再下载"。
+                appUpdateManager.check()
             } finally {
                 updateCheckInProgress = false
             }
             when (result) {
                 // 自动检查已是最新保持静默;手动检查必须明确告知。
-                AppUpdateResult.NoUpdate -> if (manual) showUpdateInfo("已是最新版本")
-                // 检查/下载失败统一弹「更新失败 + 原因 + 重试」,不再只能「知道了」。
-                is AppUpdateResult.Failed -> showUpdateFailure(result.message)
-                is AppUpdateResult.ReadyToInstall -> presentUpdatePrompt(result)
+                UpdateCheckResult.NoUpdate -> if (manual) showUpdateInfo("已是最新版本")
+                // 检查失败统一弹「更新失败 + 原因 + 重试」,不再只能「知道了」。
+                is UpdateCheckResult.Failed -> showUpdateFailure(result.message) { retryUpdateCheck() }
+                // 发现新版本先询问(体积 + 说明),用户点「更新」才下载。
+                is UpdateCheckResult.Available -> showUpdateAvailableDialog(result.info) {
+                    beginUpdateDownload(result.info)
+                }
             }
         }
     }
 
-    /** 更新失败提示:弹窗带「重试」;播放/详情/搜索中先记下,回首页再弹(避免抢焦点)。 */
-    private fun showUpdateFailure(message: String) {
+    /**
+     * 用户确认「更新」后开始下载:进度弹窗 + 100ms 节流的主线程百分比刷新。
+     * 选「后台下载」只关弹窗,协程继续;完成后仍走 presentUpdatePrompt 的延迟
+     * 逻辑(播放/详情中先记住、回首页再提示安装),失败带阶段匹配的重试。
+     */
+    private fun beginUpdateDownload(info: AppUpdateInfo) {
+        if (updateDownloadInProgress) return
+        updateDownloadInProgress = true
+        val progressDialog = showUpdateDownloadDialog(info) {
+            // 后台下载:仅关闭弹窗,下载继续;完成/失败时会再提示。
+            updateDownloadDialog = null
+        }
+        updateDownloadDialog = progressDialog
+        lifecycleScope.launch {
+            val result = try {
+                appUpdateManager.download(info) { progress -> progressDialog.update(progress) }
+            } finally {
+                updateDownloadInProgress = false
+                updateDownloadDialog = null
+                progressDialog.dismiss()
+            }
+            when (result) {
+                is UpdateDownloadResult.Ready -> presentUpdatePrompt(result)
+                is UpdateDownloadResult.Failed -> showUpdateFailure(result.message) {
+                    // 下载失败重试同一版本,不让用户从"检查"重新点一遍。
+                    beginUpdateDownload(info)
+                }
+            }
+        }
+    }
+
+    /**
+     * 更新失败提示:弹窗带与失败阶段匹配的「重试」;播放/详情/搜索中先记下
+     * (连同重试动作),回首页再弹,避免抢播放/详情焦点。
+     */
+    private fun showUpdateFailure(message: String, retry: () -> Unit) {
         if (currentState.playing != null || currentState.selected != null || searchVisible) {
-            pendingUpdateFailure = message
+            pendingUpdateFailure = PendingUpdateFailure(message, retry)
         } else {
-            showUpdateFailureDialog(message)
+            showUpdateFailureDialog(message, retry)
         }
     }
 
@@ -474,7 +528,7 @@ class MainActivity : ComponentActivity() {
      * 弹出更新安装框前的页面判断:播放/详情/搜索层可见时先记下来,回首页再提示。
      * 更新包已下载完,推迟只影响"何时提示",不影响安装流程。
      */
-    private fun presentUpdatePrompt(result: AppUpdateResult.ReadyToInstall) {
+    private fun presentUpdatePrompt(result: UpdateDownloadResult.Ready) {
         if (currentState.playing != null || currentState.selected != null || searchVisible) {
             pendingUpdatePrompt = result
             AppLog.i("Update", "install prompt deferred: content screen visible")
@@ -543,3 +597,6 @@ class MainActivity : ComponentActivity() {
             return if (derived.isFinite() && derived > 0f) derived else metrics.density
         }
 }
+
+/** 被推迟的更新失败提示:message 给用户看,retry 与该失败阶段匹配(检查/下载/安装)。 */
+private data class PendingUpdateFailure(val message: String, val retry: () -> Unit)

@@ -24,6 +24,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -55,75 +56,146 @@ class AppUpdateManager(
     // 回退只尝试一次:失败结果会再次进 receiver,避免无限递归。
     private var fallbackAttempted = false
     private val installAction = "${context.packageName}.INSTALL_RESULT"
-    suspend fun checkAndDownload(): AppUpdateResult {
-        // 检查阶段自动重试:老 TV 盒子上 TLS/网络抖动常见,单次失败直接弹
-        // "检查更新失败"没有意义。最多 CHECK_MAX_ATTEMPTS 次,退避见
-        // CHECK_RETRY_BACKOFF_MS;仍失败时用确定性分类给出根因文案。
+    /**
+     * 检查阶段:只发一次版本查询,不下载。自动重试只覆盖检查——老 TV 盒子上
+     * TLS/网络抖动常见,单次失败直接弹"检查更新失败"没有意义。最多
+     * CHECK_MAX_ATTEMPTS 次,退避见 CHECK_RETRY_BACKOFF_MS;仍失败时用确定性
+     * 分类给出根因文案。检查与下载分离后,用户点「更新」之前不消耗流量。
+     */
+    suspend fun check(): UpdateCheckResult {
         var lastError: Throwable? = null
         for (attempt in 0 until CHECK_MAX_ATTEMPTS) {
             try {
                 val update = api.appUpdate(BuildConfig.VERSION_CODE)
-                if (update == null) return AppUpdateResult.NoUpdate
-                if (update.versionCode <= BuildConfig.VERSION_CODE) return AppUpdateResult.NoUpdate
-                AppLog.i("Update", "new version ${update.versionName} (${update.versionCode}) found")
-                val apk = try {
-                    downloadAndVerify(update)
-                } catch (error: Throwable) {
-                    lastError = error
-                    if (attempt < CHECK_MAX_ATTEMPTS - 1) {
-                        AppLog.w("Update", "download failed, retry ${attempt + 1}/$CHECK_MAX_ATTEMPTS: ${error.message}", error)
-                        delay(CHECK_RETRY_BACKOFF_MS[attempt])
-                        continue
-                    }
-                    AppLog.w("Update", "download failed: ${error.message}", error)
-                    return AppUpdateResult.Failed("下载更新失败：${friendlyNetworkMessage(error)}")
+                if (update == null || update.versionCode <= BuildConfig.VERSION_CODE) {
+                    return UpdateCheckResult.NoUpdate
                 }
-                return AppUpdateResult.ReadyToInstall(update, apk)
+                AppLog.i("Update", "new version ${update.versionName} (${update.versionCode}) found")
+                return UpdateCheckResult.Available(update)
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Throwable) {
                 lastError = error
                 if (attempt < CHECK_MAX_ATTEMPTS - 1) {
                     AppLog.w("Update", "check failed, retry ${attempt + 1}/$CHECK_MAX_ATTEMPTS: ${error.message}", error)
                     delay(CHECK_RETRY_BACKOFF_MS[attempt])
-                    continue
                 }
             }
         }
         AppLog.w("Update", "check failed after $CHECK_MAX_ATTEMPTS attempts", lastError)
-        return AppUpdateResult.Failed("检查更新失败：${friendlyNetworkMessage(lastError)}")
+        return UpdateCheckResult.Failed("检查更新失败：${friendlyNetworkMessage(lastError)}")
     }
 
-    private suspend fun downloadAndVerify(update: AppUpdateInfo): File = withContext(Dispatchers.IO) {
+    /**
+     * 下载并校验更新包,onProgress 回调 0f..1f(100ms 节流、已切回主线程)。
+     * 弱网电视上整包重下代价高,保留与旧实现一致的多次尝试与退避;
+     * 每次失败都会清理半成品,重试从 0 重新开始。
+     */
+    suspend fun download(
+        update: AppUpdateInfo,
+        onProgress: (Float) -> Unit = {},
+    ): UpdateDownloadResult {
+        onProgress(0f)
+        var lastError: Throwable? = null
+        for (attempt in 0 until DOWNLOAD_MAX_ATTEMPTS) {
+            try {
+                val apk = downloadAndVerify(update) { progress ->
+                    // 下载在 IO 线程:进度回调统一投递到主线程,调用方无需自己切。
+                    mainHandler.post { onProgress(progress) }
+                }
+                onProgress(1f)
+                return UpdateDownloadResult.Ready(update, apk)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                lastError = error
+                if (attempt < DOWNLOAD_MAX_ATTEMPTS - 1) {
+                    AppLog.w(
+                        "Update",
+                        "download failed, retry ${attempt + 1}/$DOWNLOAD_MAX_ATTEMPTS: ${error.message}",
+                        error,
+                    )
+                    onProgress(0f)
+                    delay(DOWNLOAD_RETRY_BACKOFF_MS[attempt])
+                }
+            }
+        }
+        AppLog.w("Update", "download failed after $DOWNLOAD_MAX_ATTEMPTS attempts", lastError)
+        return UpdateDownloadResult.Failed("下载更新失败：${friendlyNetworkMessage(lastError)}")
+    }
+
+    private suspend fun downloadAndVerify(
+        update: AppUpdateInfo,
+        onProgress: (Float) -> Unit,
+    ): File = withContext(Dispatchers.IO) {
         val dir = File(context.cacheDir, "app-updates").apply { mkdirs() }
         val target = File(dir, "media-center-${update.versionCode}.apk")
+        // 已下载且校验一致的缓存直接复用:失败重试/重复检查不重复拉整包。
         if (target.isFile &&
+            update.sizeBytes > 0 &&
             target.length() == update.sizeBytes &&
             target.sha256().equals(update.sha256, ignoreCase = true)
         ) {
             return@withContext target
         }
 
-        val request = Request.Builder()
-            .url(update.apkUrl)
-            .get()
-            .build()
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw IllegalStateException("download returned ${response.code()}")
+        // 写 .part 临时文件,校验通过后原子改名:进程被杀/网络中断不会留下
+        // 名字可信的半成品 APK 被下次误当成"已下载"。
+        val part = File(dir, "${target.name}.part")
+        runCatching { if (part.isFile) part.delete() }
+        try {
+            val request = Request.Builder()
+                .url(update.apkUrl)
+                .get()
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    throw IllegalStateException("download returned ${response.code()}")
+                }
+                val body = response.body() ?: throw IllegalStateException("empty apk response")
+                // 服务端未给 Content-Length 时退回 manifest 体积,保证进度可算。
+                val totalBytes = body.contentLength().takeIf { it > 0 } ?: update.sizeBytes
+                var copied = 0L
+                var lastReportMs = 0L
+                FileOutputStream(part).use { out ->
+                    body.byteStream().use { input ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            out.write(buffer, 0, read)
+                            copied += read
+                            if (totalBytes > 0) {
+                                val nowMs = System.currentTimeMillis()
+                                if (nowMs - lastReportMs >= PROGRESS_THROTTLE_MS) {
+                                    lastReportMs = nowMs
+                                    onProgress((copied.toFloat() / totalBytes).coerceIn(0f, 1f))
+                                }
+                            }
+                        }
+                    }
+                }
             }
-            val body = response.body() ?: throw IllegalStateException("empty apk response")
-            FileOutputStream(target).use { out ->
-                body.byteStream().use { input -> input.copyTo(out) }
+            // sizeBytes<=0(手写/旧版 manifest)时跳过尺寸比对,完整性只由 sha256 判定。
+            if (update.sizeBytes > 0 && part.length() != update.sizeBytes) {
+                throw IllegalStateException("apk size mismatch")
             }
+            if (!part.sha256().equals(update.sha256, ignoreCase = true)) {
+                throw IllegalStateException("apk checksum mismatch")
+            }
+            // rename 前清掉可能存在的旧目标(尺寸/校验不符的历史缓存),避免
+            // 个别文件系统上 rename 到已存在文件失败。
+            runCatching { if (target.isFile) target.delete() }
+            if (!part.renameTo(target)) {
+                throw IllegalStateException("apk rename failed")
+            }
+            target
+        } catch (error: Throwable) {
+            // 半成品与历史缓存一并清理,重试从干净状态开始。
+            runCatching { if (part.isFile) part.delete() }
+            runCatching { if (target.isFile) target.delete() }
+            throw error
         }
-        if (target.length() != update.sizeBytes) {
-            target.delete()
-            throw IllegalStateException("apk size mismatch")
-        }
-        if (!target.sha256().equals(update.sha256, ignoreCase = true)) {
-            target.delete()
-            throw IllegalStateException("apk checksum mismatch")
-        }
-        target
     }
 
     fun canInstallPackages(): Boolean {
@@ -384,17 +456,27 @@ class AppUpdateManager(
     }
 }
 
-sealed class AppUpdateResult {
-    object NoUpdate : AppUpdateResult()
-    data class ReadyToInstall(val update: AppUpdateInfo, val apk: File) : AppUpdateResult()
-    data class Failed(val message: String) : AppUpdateResult()
+/** 检查阶段结果:只代表"有没有新版本",不含下载动作。 */
+sealed class UpdateCheckResult {
+    object NoUpdate : UpdateCheckResult()
+    data class Available(val info: AppUpdateInfo) : UpdateCheckResult()
+    data class Failed(val message: String) : UpdateCheckResult()
+}
+
+/** 下载阶段结果:Ready 携带已校验的 APK,交给安装提示弹窗。 */
+sealed class UpdateDownloadResult {
+    data class Ready(val update: AppUpdateInfo, val apk: File) : UpdateDownloadResult()
+    data class Failed(val message: String) : UpdateDownloadResult()
 }
 
 private const val CHECK_MAX_ATTEMPTS = 3
+private const val DOWNLOAD_MAX_ATTEMPTS = 3
+private const val PROGRESS_THROTTLE_MS = 100L
 // 安装结果广播的兜底注销时限:正常安装(用户确认)秒级回传;超时即视为
 // 结果不再回来(用户取消/系统吞掉),注销 receiver 防止挂到进程结束。
 private const val INSTALL_RESULT_TIMEOUT_MINUTES = 10L
 private val CHECK_RETRY_BACKOFF_MS = longArrayOf(2_000L, 4_000L)
+private val DOWNLOAD_RETRY_BACKOFF_MS = longArrayOf(2_000L, 4_000L)
 
 sealed class InstallLaunchResult {
     object Started : InstallLaunchResult()

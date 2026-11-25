@@ -12,6 +12,7 @@ import android.graphics.Color
 import android.view.Gravity
 import android.view.View
 import android.view.Window
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.graphics.ColorUtils
@@ -50,8 +51,10 @@ import com.example.mediacenter.ui.components.withEndMargin
 import com.example.mediacenter.ui.components.withTopMargin
 import com.example.mediacenter.ui.theme.Colors
 import com.example.mediacenter.ui.theme.HomeFocusArea
-import com.example.mediacenter.update.AppUpdateResult
+import com.example.mediacenter.data.AppUpdateInfo
 import com.example.mediacenter.update.InstallLaunchResult
+import com.example.mediacenter.update.UpdateDownloadProgress
+import com.example.mediacenter.update.UpdateDownloadResult
 
 // ── 弹窗 overscan 安全区 ──
 // 老 TV/盒子会裁掉画面边缘(overscan)。应用内页面已统一预留 56/40dp 安全区,
@@ -592,25 +595,204 @@ internal fun MainActivity.showProviderDialog(
     )
 }
 
-internal fun MainActivity.promptInstallUpdate(result: AppUpdateResult.ReadyToInstall) {
+/**
+ * 「发现新版本」弹窗:检查到新版本后先询问,用户点「更新」才开始下载。
+ * 旧实现检测到新版本直接静默下载整包——弱网电视上长时间无反馈,也无法拒绝。
+ * 体积与更新说明在下载前即可见;「稍后」只关弹窗,不下载也不再自动打扰。
+ */
+internal fun MainActivity.showUpdateAvailableDialog(
+    info: AppUpdateInfo,
+    onUpdate: () -> Unit,
+) {
+    val activity = this
+    Dialog(activity).apply {
+        requestWindowFeature(Window.FEATURE_NO_TITLE)
+        setCanceledOnTouchOutside(false)
+        val card = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(28), dp(24), dp(28), dp(24))
+            background = rounded(Colors.SURFACE_ELEVATED, 24, 1, Colors.GlassBorder)
+        }
+        card.addView(
+            label("发现新版本 ${info.versionName}", 22f, Colors.TEXT_PRIMARY, bold = true, maxLines = 2),
+            linearMatch(),
+        )
+        val sizeText = if (info.sizeBytes > 0) {
+            "安装包大小 ${UpdateDownloadProgress.formatMegabytes(info.sizeBytes)}。"
+        } else {
+            "新版本已准备好，安装后即可使用最新功能。"
+        }
+        card.addView(
+            label(sizeText, 18f, Colors.TEXT_PRIMARY, maxLines = 2),
+            LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(10)),
+        )
+        val notes = info.releaseNotes?.takeIf { it.isNotBlank() } ?: "本次更新包含体验优化与问题修复。"
+        card.addView(
+            // 上游 releaseNotes 上限 200 字符(见 release-app.yml):5 行只够
+            // ≈110 字,再多会被省略;放宽到 8 行,弹窗高度 wrap 不会裁按钮。
+            label(notes, 16f, Colors.TEXT_SECONDARY, maxLines = 8).apply {
+                setLineSpacing(dp(4).toFloat(), 1f)
+            },
+            LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(12)),
+        )
+        val actions = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            clipChildren = false
+            clipToPadding = false
+        }
+        val update = primaryPill("更新", heightDp = 48, horizontalPaddingDp = 28) {
+            dismiss()
+            onUpdate()
+        }
+        val later = pill("稍后", selected = false, heightDp = 48, horizontalPaddingDp = 24) {
+            dismiss()
+        }
+        actions.addView(update, LinearLayout.LayoutParams(wrap(), dp(48)).withEndMargin(dp(12)))
+        actions.addView(later, LinearLayout.LayoutParams(wrap(), dp(48)))
+        card.addView(actions, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(18)))
+        setContentView(card)
+        window?.setBackgroundDrawableResource(android.R.color.transparent)
+        applySafeDialogLayout(0.48f)
+        update.post { update.requestFocus() }
+    }.show()
+}
+
+/**
+ * 下载进度弹窗控制器:「后台下载」或 BACK 只关闭弹窗,下载继续并在完成后照常
+ * 提示安装。进度条用原生 View 拼(不依赖 API 21 的 tint),与全 App 视觉一致。
+ */
+internal class UpdateDownloadDialog(
+    private val dialog: Dialog,
+    private val track: FrameLayout,
+    private val fill: View,
+    private val summary: TextView,
+    private val totalBytes: Long,
+) {
+    private var fraction = 0f
+
+    /** 进度回调统一在主线程:弹窗被用户后台化后不再刷 UI。 */
+    fun update(progress: Float) {
+        fraction = progress.coerceIn(0f, 1f)
+        summary.text = UpdateDownloadProgress.summary(fraction, totalBytes)
+        applyFillWidth()
+    }
+
+    fun dismiss() {
+        runCatching { dialog.dismiss() }
+    }
+
+    private fun applyFillWidth() {
+        val width = track.width
+        if (width <= 0) {
+            // 首次回调可能早于弹窗完成测量;等一次布局后再补,避免进度条停在 0。
+            if (dialog.isShowing) track.post { applyFillWidth() }
+            return
+        }
+        fill.layoutParams = FrameLayout.LayoutParams((width * fraction).toInt().coerceIn(0, width), match())
+    }
+}
+
+internal fun MainActivity.showUpdateDownloadDialog(
+    info: AppUpdateInfo,
+    onBackground: () -> Unit,
+): UpdateDownloadDialog {
+    val activity = this
+    val totalBytes = info.sizeBytes
+    val dialog = Dialog(activity)
+    dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+    dialog.setCanceledOnTouchOutside(false)
+    val card = LinearLayout(activity).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(28), dp(24), dp(28), dp(24))
+        background = rounded(Colors.SURFACE_ELEVATED, 24, 1, Colors.GlassBorder)
+    }
+    card.addView(
+        label("正在下载更新 ${info.versionName}…", 22f, Colors.TEXT_PRIMARY, bold = true, maxLines = 2),
+        linearMatch(),
+    )
+    val summary = label(
+        UpdateDownloadProgress.summary(0f, totalBytes),
+        18f,
+        Colors.TEXT_PRIMARY,
+        maxLines = 1,
+    )
+    card.addView(summary, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(14)))
+
+    val track = FrameLayout(activity).apply {
+        background = rounded(Color.argb(60, 255, 255, 255), 3)
+    }
+    val fill = View(activity).apply {
+        background = rounded(Colors.APPLE_BLUE, 3)
+    }
+    track.addView(fill, FrameLayout.LayoutParams(0, match(), Gravity.START))
+    card.addView(track, LinearLayout.LayoutParams(match(), dp(6)).withTopMargin(dp(10)))
+
+    card.addView(
+        label("下载完成后会提示安装，可先返回首页继续浏览。", 15f, Colors.TEXT_TERTIARY, maxLines = 2),
+        LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(10)),
+    )
+
+    val actions = LinearLayout(activity).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        clipChildren = false
+        clipToPadding = false
+    }
+    val background = pill("后台下载", selected = true, heightDp = 48, horizontalPaddingDp = 24) {
+        dialog.dismiss()
+        onBackground()
+    }
+    actions.addView(background, LinearLayout.LayoutParams(wrap(), dp(48)))
+    card.addView(actions, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(18)))
+
+    dialog.setContentView(card)
+    dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+    dialog.applySafeDialogLayout(0.46f)
+    // BACK/ESC 等同「后台下载」:下载中不能让用户误以为已经取消。
+    dialog.setOnKeyListener { _, keyCode, event ->
+        if (event.action == KeyEvent.ACTION_DOWN &&
+            (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE)
+        ) {
+            dialog.dismiss()
+            onBackground()
+            true
+        } else {
+            false
+        }
+    }
+    dialog.setOnShowListener { background.requestFocus() }
+    val controller = UpdateDownloadDialog(dialog, track, fill, summary, totalBytes)
+    dialog.show()
+    return controller
+}
+
+/**
+ * 「更新已就绪」弹窗:下载与校验完成后确认安装。保持原有"非首页先记住、回首页
+ * 再提示"的延迟逻辑(见 MainActivity.presentUpdatePrompt),避免盖在播放画面上抢焦点。
+ */
+internal fun MainActivity.promptInstallUpdate(result: UpdateDownloadResult.Ready) {
         val activity = this
         pendingUpdateApk = result.apk
         Dialog(activity).apply {
             requestWindowFeature(Window.FEATURE_NO_TITLE)
+            setCanceledOnTouchOutside(false)
             val card = LinearLayout(activity).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(28), dp(24), dp(28), dp(24))
                 background = rounded(Colors.SURFACE_ELEVATED, 24, 1, Colors.GlassBorder)
             }
             card.addView(
-                label("发现新版本 ${result.update.versionName}", 22f, Colors.TEXT_PRIMARY, bold = true, maxLines = 2),
+                label("更新已就绪 ${result.update.versionName}", 22f, Colors.TEXT_PRIMARY, bold = true, maxLines = 2),
                 linearMatch(),
             )
-            val notes = result.update.releaseNotes?.takeIf { it.isNotBlank() } ?: "已下载更新包，安装后可继续使用最新版本。"
+            val sizeText = if (result.update.sizeBytes > 0) {
+                "安装包大小 ${UpdateDownloadProgress.formatMegabytes(result.update.sizeBytes)}，安装后即可使用新版本。"
+            } else {
+                "安装包已下载完成，安装后即可使用新版本。"
+            }
             card.addView(
-                // 上游 releaseNotes 上限 200 字符(见 release-app.yml):5 行只够
-                // ≈110 字,再多会被省略;放宽到 10 行,弹窗高度 wrap 不会裁按钮。
-                label(notes, 16f, Colors.TEXT_SECONDARY, maxLines = 10).apply {
+                label(sizeText, 16f, Colors.TEXT_SECONDARY, maxLines = 3).apply {
                     setLineSpacing(dp(4).toFloat(), 1f)
                 },
                 LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(12)),
@@ -621,7 +803,7 @@ internal fun MainActivity.promptInstallUpdate(result: AppUpdateResult.ReadyToIns
                 clipChildren = false
                 clipToPadding = false
             }
-            val install = primaryPill("安装更新", heightDp = 48, horizontalPaddingDp = 28) {
+            val install = primaryPill("立即安装", heightDp = 48, horizontalPaddingDp = 28) {
                 dismiss()
                 // 安装包含 APK 磁盘复制（PackageInstaller session 写入），
                 // 放到 IO 线程执行，避免主线程卡顿。
@@ -679,10 +861,14 @@ internal fun MainActivity.showUpdateMessage(message: String) {
     }
 
 /**
- * 更新失败弹窗:下载/安装任一阶段失败时给具体原因 + 「重试」/「知道了」。
+ * 更新失败弹窗:检查/下载/安装任一阶段失败时给具体原因 + 「重试」/「知道了」。
  * 旧实现安装阶段失败只写日志、界面无反馈,用户以为"点了没反应",与 normal 端修复对齐。
+ * onRetry 按失败阶段传入:检查失败重查、下载失败重下同一版本,不必让用户从头再点一遍。
  */
-internal fun MainActivity.showUpdateFailureDialog(message: String) {
+internal fun MainActivity.showUpdateFailureDialog(
+    message: String,
+    onRetry: () -> Unit = { retryUpdateCheck() },
+) {
         val activity = this
         Dialog(activity).apply {
             requestWindowFeature(Window.FEATURE_NO_TITLE)
@@ -700,7 +886,7 @@ internal fun MainActivity.showUpdateFailureDialog(message: String) {
             }
             val retry = primaryPill("重试", heightDp = 44, horizontalPaddingDp = 24) {
                 dismiss()
-                retryUpdateCheck()
+                onRetry()
             }
             val close = pill("知道了", selected = false, heightDp = 44, horizontalPaddingDp = 24) { dismiss() }
             actions.addView(retry, LinearLayout.LayoutParams(wrap(), dp(44)).withEndMargin(dp(12)))
