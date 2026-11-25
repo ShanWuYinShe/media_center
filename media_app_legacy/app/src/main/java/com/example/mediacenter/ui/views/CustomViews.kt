@@ -395,3 +395,52 @@ class PlayPauseGlyphView(context: Context) : View(context) {
         }
     }
 }
+
+/** 快进/快退方向双箭头矢量图标。 */
+class SeekDirectionGlyphView(context: Context) : View(context) {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Colors.TEXT_PRIMARY
+    }
+    private val path1 = Path()
+    private val path2 = Path()
+    private var forward: Boolean = true
+
+    fun setForward(value: Boolean) {
+        if (forward == value) return
+        forward = value
+        invalidate()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        if (w <= 0f || h <= 0f) return
+        path1.reset()
+        path2.reset()
+        if (forward) {
+            path1.moveTo(0f, 0f)
+            path1.lineTo(w * 0.46f, h * 0.5f)
+            path1.lineTo(0f, h)
+            path1.close()
+
+            path2.moveTo(w * 0.48f, 0f)
+            path2.lineTo(w * 0.94f, h * 0.5f)
+            path2.lineTo(w * 0.48f, h)
+            path2.close()
+        } else {
+            path1.moveTo(w * 0.46f, 0f)
+            path1.lineTo(0f, h * 0.5f)
+            path1.lineTo(w * 0.46f, h)
+            path1.close()
+
+            path2.moveTo(w * 0.94f, 0f)
+            path2.lineTo(w * 0.48f, h * 0.5f)
+            path2.lineTo(w * 0.94f, h)
+            path2.close()
+        }
+        canvas.drawPath(path1, paint)
+        canvas.drawPath(path2, paint)
+    }
+}

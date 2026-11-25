@@ -1,0 +1,68 @@
+package com.example.mediacenter.ui.player
+
+data class SeekStepResult(
+    val consecutiveCount: Int,
+    val direction: Int, // 1: 快进, -1: 快退
+    val stepMs: Long,
+    val accumulatedDeltaMs: Long,
+    val targetPositionMs: Long,
+)
+
+object SeekStepCalculator {
+    const val CONTINUOUS_SEEK_WINDOW_MS = 800L
+    const val SEEK_HUD_TIMEOUT_MS = 1000L
+
+    /**
+     * 计算连续按键下的快进/快退步长与目标位置。
+     * 步长策略：连按 1-2 次 10s，3-5 次 20s，6 次及以上 30s。
+     */
+    fun calculateStep(
+        forward: Boolean,
+        nowMs: Long,
+        currentPosMs: Long,
+        durationMs: Long,
+        lastSeekTimeMs: Long,
+        lastSeekDirection: Int,
+        prevConsecutiveCount: Int,
+        prevAccumulatedDeltaMs: Long,
+    ): SeekStepResult {
+        val direction = if (forward) 1 else -1
+        val isConsecutive = direction == lastSeekDirection && (nowMs - lastSeekTimeMs) < CONTINUOUS_SEEK_WINDOW_MS
+        val newCount = if (isConsecutive) prevConsecutiveCount + 1 else 1
+        val baseAccumulated = if (isConsecutive) prevAccumulatedDeltaMs else 0L
+
+        val stepSeconds = when {
+            newCount <= 2 -> 10L
+            newCount <= 5 -> 20L
+            else -> 30L
+        }
+        val stepMs = stepSeconds * 1000L
+        val delta = if (forward) stepMs else -stepMs
+        val newAccumulated = baseAccumulated + delta
+
+        val safePos = currentPosMs.coerceAtLeast(0L)
+        val safeDuration = durationMs.coerceAtLeast(0L)
+        val targetPos = (safePos + delta).coerceIn(0L, if (safeDuration > 0L) safeDuration else Long.MAX_VALUE)
+
+        return SeekStepResult(
+            consecutiveCount = newCount,
+            direction = direction,
+            stepMs = stepMs,
+            accumulatedDeltaMs = newAccumulated,
+            targetPositionMs = targetPos,
+        )
+    }
+
+    fun formatDelta(accumulatedDeltaMs: Long): String {
+        val sec = (kotlin.math.abs(accumulatedDeltaMs) / 1000L).coerceAtLeast(1L)
+        return if (accumulatedDeltaMs >= 0) "+${sec}秒" else "-${sec}秒"
+    }
+
+    fun formatTarget(targetPositionMs: Long, durationMs: Long): String {
+        return if (durationMs > 0L) {
+            "${com.example.mediacenter.util.formatDuration(targetPositionMs)} / ${com.example.mediacenter.util.formatDuration(durationMs)}"
+        } else {
+            com.example.mediacenter.util.formatDuration(targetPositionMs)
+        }
+    }
+}

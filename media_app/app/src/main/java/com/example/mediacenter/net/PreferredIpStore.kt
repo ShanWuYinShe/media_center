@@ -255,6 +255,14 @@ internal object PreferredIpStore {
         }
     }
 
+    /**
+     * 手动触发测速与优选更新并返回最新状态文本。
+     */
+    suspend fun retest(): String = withContext(Dispatchers.IO) {
+        refresh()
+        statusText()
+    }
+
     /** 仅测试用:重置进程内状态。 */
     @androidx.annotation.VisibleForTesting
     internal fun resetForTest() {

@@ -37,6 +37,7 @@ import com.example.mediacenter.data.WatchEntry
 import com.example.mediacenter.data.WatchHistory
 import com.example.mediacenter.ui.MediaUiState
 import com.example.mediacenter.ui.setContent
+import com.example.mediacenter.ui.showAllPagesDialog
 import com.example.mediacenter.ui.showOptionListDialog
 import com.example.mediacenter.ui.components.dp
 import com.example.mediacenter.ui.components.elevationCompat
@@ -294,6 +295,76 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
             }
         }
 
+        // 快进快退 HUD 悬浮指示
+        val seekGlyph = com.example.mediacenter.ui.views.SeekDirectionGlyphView(this)
+        val seekDeltaLabel = label("+10秒", 24f, Color.WHITE, bold = true, maxLines = 1)
+        val seekTopRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(seekGlyph, LinearLayout.LayoutParams(dp(24), dp(18)))
+            addView(seekDeltaLabel, LinearLayout.LayoutParams(wrap(), wrap()).withStartMargin(dp(10)))
+        }
+        val seekTargetLabel = label("0:00 / 0:00", 15f, Colors.TEXT_SECONDARY, bold = false, maxLines = 1)
+        val seekHudContent = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(28), dp(14), dp(28), dp(14))
+            background = rounded(Color.argb(192, 0, 0, 0), 12)
+            addView(seekTopRow, LinearLayout.LayoutParams(wrap(), wrap()))
+            addView(seekTargetLabel, LinearLayout.LayoutParams(wrap(), wrap()).withTopMargin(dp(6)))
+        }
+        val seekHudWrap = FrameLayout(this).apply {
+            alpha = 0f
+            visibility = View.GONE
+            isFocusable = false
+            addView(seekHudContent, FrameLayout.LayoutParams(wrap(), wrap(), Gravity.CENTER))
+        }
+
+        var lastSeekTimeMs = 0L
+        var lastSeekDirection = 0
+        var consecutiveSeekCount = 0
+        var seekHudDeltaMs = 0L
+        val hideSeekHud = Runnable {
+            seekHudWrap.animate().alpha(0f).setDuration(250).withEndAction {
+                seekHudWrap.visibility = View.GONE
+                consecutiveSeekCount = 0
+                seekHudDeltaMs = 0L
+            }.start()
+        }
+
+        fun performSeek(forward: Boolean) {
+            val now = System.currentTimeMillis()
+            val currentPos = nextPlayer.currentPosition.coerceAtLeast(0L)
+            val duration = nextPlayer.duration.coerceAtLeast(0L)
+            val result = SeekStepCalculator.calculateStep(
+                forward = forward,
+                nowMs = now,
+                currentPosMs = currentPos,
+                durationMs = duration,
+                lastSeekTimeMs = lastSeekTimeMs,
+                lastSeekDirection = lastSeekDirection,
+                prevConsecutiveCount = consecutiveSeekCount,
+                prevAccumulatedDeltaMs = seekHudDeltaMs,
+            )
+            lastSeekTimeMs = now
+            lastSeekDirection = result.direction
+            consecutiveSeekCount = result.consecutiveCount
+            seekHudDeltaMs = result.accumulatedDeltaMs
+
+            nextPlayer.seekTo(result.targetPositionMs)
+            showOverlay()
+
+            seekGlyph.setForward(forward)
+            seekDeltaLabel.text = SeekStepCalculator.formatDelta(result.accumulatedDeltaMs)
+            seekTargetLabel.text = SeekStepCalculator.formatTarget(result.targetPositionMs, duration)
+
+            seekHudWrap.removeCallbacks(hideSeekHud)
+            seekHudWrap.animate().cancel()
+            seekHudWrap.visibility = View.VISIBLE
+            seekHudWrap.alpha = 1f
+            seekHudWrap.postDelayed(hideSeekHud, SeekStepCalculator.SEEK_HUD_TIMEOUT_MS)
+        }
+
         // OK 键:短按播放/暂停,长按(约 0.5 秒)打开播放设置 —— 方向键已被
         // 快退/快进、上下集占满；MENU 键在部分 Android TV 上会被系统拦截去开
         // 通知/设置，长按 OK 是所有遥控器都具备的可靠入口。
@@ -359,13 +430,11 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
                         true
                     }
                     KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> {
-                        nextPlayer.seekBack()
-                        showOverlay()
+                        performSeek(forward = false)
                         true
                     }
                     KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                        nextPlayer.seekForward()
-                        showOverlay()
+                        performSeek(forward = true)
                         true
                     }
                     // MEDIA_PREVIOUS/NEXT:专用键,直通。
@@ -444,6 +513,7 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
             addView(centerGlyph, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.CENTER))
         }
         screen.addView(centerGlyphWrap, FrameLayout.LayoutParams(dp(96), dp(96), Gravity.CENTER))
+        screen.addView(seekHudWrap, FrameLayout.LayoutParams(wrap(), wrap(), Gravity.CENTER))
         fun updateCenterGlyph() {
             val playing = nextPlayer.playWhenReady &&
                 nextPlayer.playbackState != Player.STATE_ENDED &&
@@ -544,7 +614,11 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
         }
         titleRow.addView(titleColumn, LinearLayout.LayoutParams(0, wrap(), 1f))
         // 触摸入口：长按 OK 是电视端路径，这个胶囊给鼠标/触摸直接打开同一弹窗。
-        val optionsButton = label("播放设置", 17f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
+        val pages = state.currentPages
+        val hasEpisodes = pages != null && pages.totalPages > 1
+        val qualityLabel = stream.label.takeIf { it.isNotBlank() } ?: "默认"
+        val optionsLabel = if (hasEpisodes) "选集 · $qualityLabel" else "清晰度 · $qualityLabel"
+        val optionsButton = label(optionsLabel, 17f, Colors.TEXT_PRIMARY, bold = true, maxLines = 1).apply {
             gravity = Gravity.CENTER
             setPadding(dp(20), 0, dp(20), 0)
             background = rounded(Colors.GlassFill, 999, 1, Colors.GlassBorder)
@@ -606,7 +680,6 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
         }
         bottom.addView(scrubberRow, LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(24)))
 
-        val pages = state.currentPages
         val hasPages = pages != null && pages.totalPages > 1
         val hasPrevious = if (hasPages) (pages?.currentPage ?: 0) > 0 else false
         val hasNext = if (hasPages) (pages?.currentPage ?: 0) < (pages?.totalPages ?: 0) - 1 else false
@@ -687,21 +760,43 @@ internal fun MainActivity.playerOverlay(stream: PlaybackOption, player: ExoPlaye
     }
 
 
-/** 播放设置：清晰度 + 旋转画面。长按 OK / MENU 或触摸胶囊共用。 */
+/** 选集与播放设置：选集（多P） + 清晰度 + 旋转画面。长按 OK / MENU 或触摸胶囊共用。 */
 internal fun MainActivity.openPlayerOptionsDialog() {
-    val qualities = viewModel.state.value.availableQualities
-    val currentQn = viewModel.state.value.playing?.qn ?: 0
-    val labels = qualities.map { it.label }.toMutableList().apply { add("旋转画面") }
-    val currentIndex = qualities.indexOfFirst { it.qn == currentQn }.takeIf { it >= 0 }
+    val state = viewModel.state.value
+    val pages = state.currentPages
+    val hasEpisodes = pages != null && pages.totalPages > 1
+    val qualities = state.availableQualities
+    val currentQn = state.playing?.qn ?: 0
+
+    val labels = mutableListOf<String>()
+    var episodeIndex = -1
+    if (hasEpisodes) {
+        episodeIndex = labels.size
+        labels.add("选集（当前第 ${pages.currentPage + 1} / ${pages.totalPages} 集）")
+    }
+    val qualityStartIndex = labels.size
+    qualities.forEach { labels.add(it.label) }
+    val rotateIndex = labels.size
+    labels.add("旋转画面")
+
+    val currentQualityOffset = qualities.indexOfFirst { it.qn == currentQn }.takeIf { it >= 0 }
+    val defaultHighlightIndex = if (currentQualityOffset != null) qualityStartIndex + currentQualityOffset else null
+
     showOptionListDialog(
-        title = "播放设置",
+        title = if (hasEpisodes) "选集与播放设置" else "播放设置",
         options = labels,
-        currentIndex = currentIndex,
+        currentIndex = defaultHighlightIndex,
     ) { index ->
-        if (index in qualities.indices) {
-            viewModel.selectPlaybackQuality(qualities[index].qn)
-        } else {
-            togglePlayerOrientation()
+        when {
+            index == episodeIndex -> {
+                pages?.let { showAllPagesDialog(it) }
+            }
+            index in qualityStartIndex until rotateIndex -> {
+                viewModel.selectPlaybackQuality(qualities[index - qualityStartIndex].qn)
+            }
+            index == rotateIndex -> {
+                togglePlayerOrientation()
+            }
         }
     }
 }

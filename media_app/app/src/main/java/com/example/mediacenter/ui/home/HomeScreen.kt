@@ -124,11 +124,13 @@ fun HomeScreen(
     var managingContinueVideo by remember { mutableStateOf<VideoSummary?>(null) }
     val context = LocalContext.current
     var lastBackPressTime by remember { mutableLongStateOf(0L) }
+    var isTopBarFocused by remember { mutableStateOf(false) }
     BackHandler {
         val now = System.currentTimeMillis()
-        if (lastFocusedVideoId != null) {
-            // 在卡片网格浏览时按返回键:平滑将焦点带回当前选中的分类标签，避免误触直接退回桌面
+        if (lastFocusedVideoId != null || isTopBarFocused) {
+            // 在卡片网格或顶栏浏览时按返回键:平滑将焦点带回当前选中的分类标签，避免误触直接退回桌面
             lastFocusedVideoId = null
+            isTopBarFocused = false
             runCatching { selectedTabFocus.requestFocus() }
         } else if (now - lastBackPressTime < 2000L) {
             (context as? Activity)?.finish()
@@ -188,6 +190,7 @@ fun HomeScreen(
         TopBar(
             onSearchClick = onSearchClick,
             onSettingsClick = onSettingsClick,
+            onFocusChanged = { hasFocus -> isTopBarFocused = hasFocus },
             providerLabel = state.providers
                 .firstOrNull { it.id == state.currentProvider }
                 ?.let { it.name ?: it.id }

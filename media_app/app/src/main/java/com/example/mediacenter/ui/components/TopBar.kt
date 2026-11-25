@@ -25,6 +25,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -41,6 +42,7 @@ fun TopBar(
     modifier: Modifier = Modifier,
     providerLabel: String? = null,
     onProviderClick: (() -> Unit)? = null,
+    onFocusChanged: ((Boolean) -> Unit)? = null,
     // 首页首屏焦点落点;为 null 时不指定,沿用系统默认焦点顺序
     searchFocusRequester: FocusRequester? = null,
     // 搜索键按下时优先落到 Hero 主按钮(2D 焦点搜索会优先选中横向更近的"详情")
@@ -50,7 +52,11 @@ fun TopBar(
     settingsFocusRequester: FocusRequester? = null,
 ) {
     Row(
-        modifier = modifier.fillMaxWidth().focusRestorer().padding(horizontal = ScreenHorizontalPadding, vertical = ScreenVerticalPadding),
+        modifier = modifier
+            .fillMaxWidth()
+            .focusRestorer()
+            .padding(horizontal = ScreenHorizontalPadding, vertical = ScreenVerticalPadding)
+            .onFocusChanged { state -> onFocusChanged?.invoke(state.hasFocus) },
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
