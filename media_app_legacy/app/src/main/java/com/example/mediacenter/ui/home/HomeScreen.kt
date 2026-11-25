@@ -472,8 +472,11 @@ internal fun MainActivity.homeTopBar(
                                 requestHomeFocus(HomeFocusTarget.Video(firstVideoId))
                                 true
                             } else {
-                                val emptyAction = window?.decorView?.findViewWithTag<View>("empty_action")
-                                if (emptyAction != null && emptyAction.requestFocus()) {
+                                // 分类为空时可能是空态(empty_action)也可能是加载失败(error_action):
+                                // 两种卡片都必须能一键落焦,否则按 DOWN 无响应。
+                                val actionView = window?.decorView?.findViewWithTag<View>("empty_action")
+                                    ?: window?.decorView?.findViewWithTag<View>("error_action")
+                                if (actionView != null && actionView.requestFocus()) {
                                     true
                                 } else {
                                     false

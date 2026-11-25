@@ -94,6 +94,11 @@ fun TopBar(
                     label = providerLabel,
                     onClick = onProviderClick,
                     maxWidth = 220.dp,
+                    modifier = if (searchDownFocusRequester != null) {
+                        Modifier.focusProperties { down = searchDownFocusRequester }
+                    } else {
+                        Modifier
+                    },
                     trailing = {
                         Spacer(Modifier.width(4.dp))
                         Icon(

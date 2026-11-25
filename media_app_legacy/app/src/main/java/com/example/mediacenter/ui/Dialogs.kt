@@ -266,32 +266,30 @@ internal fun MainActivity.showSystemInfoDialog() {
             }
 
             var clearBtn: TextView = TextView(activity)
+            var clearing = false
             clearBtn = pill(
                 text = "清除媒体缓存",
                 selected = false,
                 heightDp = 48,
                 horizontalPaddingDp = 28,
                 onClick = {
-                    // 逐资源移除是磁盘 IO:置灰按钮防重复点击,放到 IO 线程执行,
-                    // 完成后回主线程给结果反馈(老盒子上 128MB 缓存删除可耗数百 ms)。
+                    // 逐资源移除是磁盘 IO:用标记防重复点击并保持按钮可聚焦,避免置灰丢焦点。
                     val btn = clearBtn
-                    if (!btn.isEnabled) {
-                        // 正在清除中,忽略重复点击。
-                    } else {
-                        btn.isEnabled = false
+                    if (!clearing) {
+                        clearing = true
                         btn.text = "正在清除…"
                         cacheScope.launch {
-                        val removed = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            com.example.mediacenter.player.LegacyPlaybackMediaCache
-                                .clearAll(this@showSystemInfoDialog)
-                        }
-                        btn.isEnabled = true
-                        btn.text = when {
-                            removed < 0 -> "清除失败，请重试"
-                            removed == 0 -> "缓存已是空的"
-                            else -> "已清除 $removed 项"
-                        }
-                        if (removed > 0) cacheSizeValue.text = "0MB"
+                            val removed = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                com.example.mediacenter.player.LegacyPlaybackMediaCache
+                                    .clearAll(this@showSystemInfoDialog)
+                            }
+                            clearing = false
+                            btn.text = when {
+                                removed < 0 -> "清除失败，请重试"
+                                removed == 0 -> "缓存已是空的"
+                                else -> "已清除 $removed 项"
+                            }
+                            if (removed > 0) cacheSizeValue.text = "0MB"
                         }
                     }
                 },
@@ -309,6 +307,7 @@ internal fun MainActivity.showSystemInfoDialog() {
             actions.addView(clearBtn, LinearLayout.LayoutParams(wrap(), dp(48)).withEndMargin(dp(12)))
 
             var speedTestBtn: TextView = TextView(activity)
+            var speedTesting = false
             speedTestBtn = pill(
                 text = "网络测速",
                 selected = false,
@@ -316,12 +315,12 @@ internal fun MainActivity.showSystemInfoDialog() {
                 horizontalPaddingDp = 22,
                 onClick = {
                     val btn = speedTestBtn
-                    if (btn.isEnabled) {
-                        btn.isEnabled = false
+                    if (!speedTesting) {
+                        speedTesting = true
                         btn.text = "正在测速…"
                         cacheScope.launch {
                             val newStatus = com.example.mediacenter.net.PreferredIpStore.retest()
-                            btn.isEnabled = true
+                            speedTesting = false
                             btn.text = "网络测速"
                             prefIpRow.text = newStatus
                             Toast.makeText(this@showSystemInfoDialog, "测速完成", Toast.LENGTH_SHORT).show()
@@ -370,7 +369,7 @@ internal fun MainActivity.showSystemInfoDialog() {
             // 放入横向滚动条保证 D-pad 左右平滑滚动浏览且焦点放大不被裁切。
             // padV 留 4dp:焦点态 1.05~1.08 倍放大的描边需要溢出空间,否则上下边会被
             // HorizontalScrollView 的视口裁掉(与其它 horizontalFocusStrip 用法一致)。
-            card.addView(horizontalFocusStrip(actions, padH = 4, padV = 4), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(16)))
+            card.addView(horizontalFocusStrip(actions, padH = 6, padV = 4), LinearLayout.LayoutParams(match(), wrap()).withTopMargin(dp(16)))
             setContentView(card)
             window?.setBackgroundDrawableResource(android.R.color.transparent)
             applySafeDialogLayout(0.62f, 0.72f)

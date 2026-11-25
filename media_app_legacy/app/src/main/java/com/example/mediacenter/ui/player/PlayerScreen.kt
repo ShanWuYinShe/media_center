@@ -246,7 +246,10 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
         val nextPlayer = player!!
 
         val overlay = playerOverlay(stream, nextPlayer, state)
+        var overlayTargetVisible = false
+        var seekHudTargetVisible = false
         val hideOverlay = Runnable {
+            overlayTargetVisible = false
             overlay.animate().alpha(0f).setDuration(400).start()
         }
         fun shouldAutoHideOverlay(): Boolean {
@@ -263,18 +266,20 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
         fun syncOverlayVisibilityForPlaybackState() {
             overlay.removeCallbacks(hideOverlay)
             if (shouldAutoHideOverlay()) {
-                if (overlay.alpha > 0f) overlay.postDelayed(hideOverlay, 4_000)
+                if (overlayTargetVisible || overlay.alpha > 0f) overlay.postDelayed(hideOverlay, 4_000)
             } else {
                 overlay.animate().cancel()
                 overlay.alpha = 1f
+                overlayTargetVisible = true
             }
         }
         fun showOverlay() {
             overlay.animate().cancel()
             overlay.alpha = 1f
+            overlayTargetVisible = true
             updateOverlayAutoHide()
         }
-        fun controlsVisible(): Boolean = overlay.alpha > 0.5f
+        fun controlsVisible(): Boolean = overlayTargetVisible
         fun playFromCurrentPosition() {
             if (nextPlayer.playbackState == Player.STATE_ENDED) {
                 nextPlayer.seekTo(0)
@@ -327,6 +332,7 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
         var seekHudDeltaMs = 0L
         var seekHudTargetMs = 0L
         val hideSeekHud = Runnable {
+            seekHudTargetVisible = false
             seekHudWrap.animate().alpha(0f).setDuration(250).withEndAction {
                 seekHudWrap.visibility = View.GONE
                 consecutiveSeekCount = 0
@@ -336,8 +342,12 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
         }
 
         hidePlayerControlsAction = {
-            val hudShowing = seekHudWrap.visibility == View.VISIBLE || seekHudWrap.alpha > 0f
+            // 以"目标可见态"判定而不是动画中的 alpha:渐隐 250~400ms 内 alpha 仍可能 >0,
+            // 用视觉值会把"已经决定收起"的状态误判成仍可见,导致要按两次返回才退得出去。
+            val hudShowing = seekHudTargetVisible
             if (controlsVisible() || hudShowing) {
+                overlayTargetVisible = false
+                seekHudTargetVisible = false
                 overlay.removeCallbacks(hideOverlay)
                 overlay.animate().cancel()
                 overlay.animate().alpha(0f).setDuration(250).start()
@@ -382,6 +392,7 @@ internal fun MainActivity.renderPlayer(state: MediaUiState) {
             seekDeltaLabel.text = SeekStepCalculator.formatDelta(result.accumulatedDeltaMs)
             seekTargetLabel.text = SeekStepCalculator.formatTarget(result.targetPositionMs, duration)
 
+            seekHudTargetVisible = true
             seekHudWrap.removeCallbacks(hideSeekHud)
             seekHudWrap.animate().cancel()
             seekHudWrap.visibility = View.VISIBLE
