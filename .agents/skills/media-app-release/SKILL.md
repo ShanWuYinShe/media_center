@@ -65,8 +65,8 @@ adb -s "$SERIAL" shell getprop ro.build.version.sdk               # 需 ≥ 变�
 minSdk 以 `media_app/app/build.gradle.kts`、`media_app_legacy/app/build.gradle.kts` 现查为准。形态主判据是 `pm list features` 的 television/leanback 特性，`ro.build.characteristics` 作辅助核对；两者都不命中的设备不能替代 TV 走查。
 
 - **优先真机**：有合格 TV 真机就必须用真机，不要再起模拟器。
-- **普通手机真机不能替代 TV 走查**：焦点/D-pad 导航、遥控器交互、Leanback 布局与遥控可操作性必须在 TV 设备上验证（`adb shell input keyevent` 只能发按键事件，验证不了遥控体验与 TV 形态）；手机真机只能覆盖与形态无关的项（APK 安装/启动、网络与解析链路、OTA 安装器流程），能否替代按当次走查项逐条判断，拿不准按「需 TV」处理。
-- **记录**：走查记录与 PR 证据写明设备型号 + 系统版本 + serial（模拟器写 AVD 名，取 `emulator -list-avds`）。
+- **普通手机真机不能替代 TV 形态项**：焦点/D-pad 导航、遥控器交互、Leanback 布局与遥控可操作性必须在 TV 设备上验证（`adb shell input keyevent` 只能发按键事件，验证不了遥控体验与 TV 形态）；手机真机只能覆盖与形态无关的项（APK 安装/启动、网络与解析链路、OTA 安装器流程），能否替代按当次走查项逐条判断，拿不准按「需 TV」处理。
+- **记录**：走查记录与 PR 证据写明设备型号 + 系统版本 + serial（模拟器写 AVD 名，取 `"$ANDROID_HOME/emulator/emulator" -list-avds`）。
 - **真机数据安全**：OTA 自更新、卸载重装、换签名都会清应用数据，动用户日常机前先确认；只做只读核验时不安装/不卸载。
 
 ### 取 APK 与核对（防装错变体）
@@ -93,12 +93,17 @@ adb -s "$SERIAL" shell dumpsys package com.example.mediacenter | grep versionNam
 adb -s "$SERIAL" shell am start -W -n com.example.mediacenter/.ComposeActivity   # legacy 用 .MainActivity
 ```
 
-无合格 TV 真机时才起模拟器（fallback；AVD 名用 `emulator -list-avds` 现查，不要写死）：
+无合格 TV 真机时才起模拟器（fallback；AVD 名用 `"$ANDROID_HOME/emulator/emulator" -list-avds` 现查，不要写死）：
 
 ```bash
 "$ANDROID_HOME/emulator/emulator" -avd <AVD> -no-window -no-audio -no-boot-anim -no-snapshot-save &
-adb wait-for-device   # 不等于系统可用
-SERIAL=$(adb devices | awk 'NR>1 && $2=="device"{print $1; exit}')   # 目标用 adb devices 现查
+# 只认 emulator-*：无 TV 真机时手机仍可能连着，不能按「第一个 device」取
+SERIAL=
+until [ -n "$SERIAL" ]; do
+  SERIAL=$(adb devices | awk 'NR>1 && $2=="device" && $1 ~ /^emulator-/{print $1; exit}')
+  [ -n "$SERIAL" ] || sleep 1
+done
+adb -s "$SERIAL" wait-for-device   # 只表示 adbd 就绪，不等于系统可用
 adb -s "$SERIAL" shell getprop sys.boot_completed   # 轮询到 1
 ```
 
@@ -116,7 +121,7 @@ adb -s "$SERIAL" shell getprop sys.boot_completed   # 轮询到 1
 
 ### OTA 自更新验证（发版后按需）
 
-更新通道（`/api/v1/app/update`）和安装器链路要在设备上过一遍（TV 真机优先，无 TV 真机才用模拟器；真机上换版本前先确认，卸载重装会清应用数据），只看 manifest 不算验证：
+更新通道（`/api/v1/app/update`）和安装器链路要在设备上过一遍（OTA 属形态无关项，手机真机也可覆盖；无合格真机才用模拟器；真机上换版本前先确认，卸载重装会清应用数据），只看 manifest 不算验证：
 
 1. 装**上一版** release APK（GitHub Release 资产，或 `gh run download <run_id> -n release-apk-<run_id>`），启动后首页应出现「发现新版本」弹窗。
 2. 点「更新」：正常路径是系统安装确认框（PackageInstaller），确认后版本更新、应用数据保留。
