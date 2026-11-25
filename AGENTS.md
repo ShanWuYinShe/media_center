@@ -28,7 +28,7 @@ App 只配置 `MEDIA_SERVER_URL` 一个服务端地址，不关心服务端部�
   - Python：`python3 -m py_compile vod_extractor/server.py`（秒级）；本机未装 ruff 时交 CI（ruff 版本以 workflow 为准，现取：`grep -rn 'ruff' .github/workflows/`）。
   - Android：日常不跑 Gradle（`assembleDebug`/`assembleRelease`、单测、lint 均由 CI 执行）；APK 发版由 CI 在 tag 上构建（见「APK 发版（GitHub Actions）」）。
   - **不跑**：`go test ./...`（全量/含 `-race`）、Gradle 构建与单测、`docker build`。
-- CI 覆盖（`.github/workflows/ci.yml`，`push: main` + `pull_request: main`；job 列表与数量以该文件为准，数量用 `yq '.jobs | keys | length' .github/workflows/ci.yml` 现取）：
+- CI 覆盖（`.github/workflows/ci.yml`，`push: main` + `pull_request: main` + `workflow_dispatch`（GitHub 丢失 push 事件时用 `gh workflow run ci.yml --ref main` 补跑）；job 列表与数量以该文件为准，数量用 `yq '.jobs | keys | length' .github/workflows/ci.yml` 现取）：
   - `Media Server (Go)`：gofmt、go vet、go build、`go test -race -count=1 ./...`。
   - `VOD Extractor (Python)`：`py_compile`、ruff 0.16.8、unittest。
   - `Media App (Android)`：normal 与 legacy 均编译 `assembleDebug` + `assembleRelease`（R8/资源压缩问题在 PR 阶段暴露）、`testDebugUnitTest`（normal）、`lintDebug`（normal）；release APK 作为 CI artifact 保留 7 天，供 TV 真机走查（未注入令牌、临时 debug 签名，不可发版）。

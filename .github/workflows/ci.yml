@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # 手动补跑：GitHub 偶发丢失 push/merge 事件时，main HEAD 可能没有对应的
+  # CI run；用 `gh workflow run ci.yml --ref main` 补出与 PR 同等的门禁结论，
+  # 而不是只能靠"与 PR head 同 tree"间接证明。检查内容与 push/PR 触发完全一致。
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
